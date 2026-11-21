@@ -1,0 +1,58 @@
+[workspace]
+resolver = "3"
+members = ["crates/tqs", "crates/engine", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+tqs = { path = "crates/tqs" }
+engine = { path = "crates/engine" }
+anyhow = "1"
+arrow = { version = "60", default-features = false, features = ["prettyprint", "ipc"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd", "async", "object_store"] }
+duckdb = { version = "=1.20001.0", features = ["bundled", "parquet", "json", "vtab-arrow", "appender-arrow"] }
+object_store = { version = "0.14", features = ["aws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs", "io-util"] }
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_norway = "0.9"
+ulid = "1"
+rand = "0.9"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+futures = "0.3"
+regex = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+axum = "0.8"
+prost = "0.14"
+snap = "1"
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "metrics", "logs", "trace", "with-serde"] }
+ureq = { version = "3", default-features = false, features = ["json"] }
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "warn"
+
+[profile.release]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# DuckDB core must be a release build in every profile: its DEBUG build counts allocations
+# and aborts when the (release-built) ducklake/httpfs extensions free memory (found by the PoC).
+[profile.dev.package.libduckdb-sys]
+debug = false
+opt-level = 3

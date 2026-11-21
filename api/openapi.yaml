@@ -1,0 +1,488 @@
+openapi: 3.1.0
+# Source of truth for the HTTP API.
+#
+# crates/server/build.rs generates from this file:
+#   - the axum router: one route per operation, wired to `handlers::<operationId>`
+#     (a missing handler is a compile error, an unlisted route cannot exist);
+#   - Rust types for every schema in components.schemas (typify);
+#   - the auth table: `x-scope` (public | ingest | query | admin) is the bearer-token scope
+#     an operation requires when auth is enabled;
+#   - the MCP tool list: every operation with `x-mcp-tool` becomes a tool whose input
+#     schema is the operation's request body schema.
+# The served copy is available at GET /openapi.yaml.
+info:
+  title: tiny-eye
+  version: 0.1.0
+  description: |
+    Blob-first observability engine: metrics, logs and traces stored as Parquet in object
+    storage, tracked by DuckLake, queried with TQS 3 (a closed JSON query schema).
+  license: { name: Apache-2.0 }
+
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      x-scope: public
+      summary: Liveness probe
+      responses:
+        "200": { description: alive, content: { text/plain: { schema: { type: string } } } }
+
+  /metrics:
+    get:
+      operationId: self_metrics
+      x-scope: public
+      summary: Engine self-metrics in Prometheus text format (SPEC §13)
+      responses:
+        "200": { description: metrics, content: { text/plain: { schema: { type: string } } } }
+
+  /openapi.yaml:
+    get:
+      operationId: openapi_spec
+      x-scope: public
+      summary: This document
+      responses:
+        "200": { description: the spec, content: { application/yaml: { schema: { type: string } } } }
+
+  /api/v1/query:
+    post:
+      operationId: run_query
+      x-scope: query
+      summary: Run a TQS 3 document
+      x-mcp-tool:
+        name: run_tqs
+        description: |
+          Run a TQS 3 query (metrics timeseries/table, spans/logs aggregates, trace search,
+          trace waterfall, log search, log patterns). Invalid documents return every problem
+          with a code and JSON path so all can be fixed in one round trip.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TqsDocument" } } }
+      responses:
+        "200": { description: result, content: { application/json: { schema: { $ref: "#/components/schemas/QueryResponse" } } } }
+        "400": { description: invalid document, content: { application/json: { schema: { $ref: "#/components/schemas/ProblemResponse" } } } }
+
+  /api/v1/validate:
+    post:
+      operationId: validate_query
+      x-scope: query
+      summary: Validate a TQS 3 document without running it
+      x-mcp-tool:
+        name: validate_tqs
+        description: Validate a TQS 3 document; returns every problem with code, JSON path and message.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TqsDocument" } } }
+      responses:
+        "200": { description: verdict, content: { application/json: { schema: { $ref: "#/components/schemas/ProblemResponse" } } } }
+
+  /api/v1/catalog:
+    get:
+      operationId: discover_catalog
+      x-scope: query
+      summary: Bounded discovery of metric names, label keys, services and span names
+      x-mcp-tool:
+        name: discover_telemetry_catalog
+        description: List metric names (with label keys), services and span names seen in the last 24 h. Bounded.
+      responses:
+        "200": { description: catalog, content: { application/json: { schema: { $ref: "#/components/schemas/CatalogResponse" } } } }
+
+  /api/v1/dashboards:
+    get:
+      operationId: list_dashboards
+      x-scope: query
+      summary: Dashboards loaded from the dashboards directory (YAML in git)
+      responses:
+        "200":
+          description: dashboards
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/DashboardSummary" } } } }
+
+  /api/v1/dashboards/{id}:
+    get:
+      operationId: get_dashboard
+      x-scope: query
+      summary: One dashboard with its panels' TQS documents
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/Dashboard" } } } }
+        "404": { description: unknown dashboard }
+
+  /api/v1/write:
+    post:
+      operationId: prom_remote_write
+      x-scope: ingest
+      summary: Prometheus remote-write 1.0 (snappy-compressed protobuf WriteRequest)
+      requestBody:
+        required: true
+        content: { application/x-protobuf: { schema: { type: string, format: binary } } }
+      responses:
+        "204": { description: accepted and durable }
+        "400": { description: undecodable payload }
+        "429": { description: arena full; retry later }
+
+  /v1/metrics:
+    post:
+      operationId: otlp_metrics
+      x-scope: ingest
+      summary: OTLP/HTTP metrics (protobuf or JSON)
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf: { schema: { type: string, format: binary } }
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { description: accepted and durable }
+        "400": { description: undecodable payload }
+        "429": { description: arena full; retry later }
+
+  /v1/traces:
+    post:
+      operationId: otlp_traces
+      x-scope: ingest
+      summary: OTLP/HTTP traces (protobuf or JSON)
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf: { schema: { type: string, format: binary } }
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { description: accepted and durable }
+        "400": { description: undecodable payload }
+        "429": { description: arena full; retry later }
+
+  /v1/logs:
+    post:
+      operationId: otlp_logs
+      x-scope: ingest
+      summary: OTLP/HTTP logs (protobuf or JSON)
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf: { schema: { type: string, format: binary } }
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { description: accepted and durable }
+        "400": { description: undecodable payload }
+        "429": { description: arena full; retry later }
+
+  /loki/api/v1/push:
+    post:
+      operationId: loki_push
+      x-scope: ingest
+      summary: Loki push API (JSON body)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/LokiPush" } } }
+      responses:
+        "204": { description: accepted and durable }
+        "400": { description: undecodable payload }
+        "429": { description: arena full; retry later }
+
+components:
+  schemas:
+    # ---------------------------------------------------------------- responses
+    QueryResponse:
+      type: object
+      additionalProperties: false
+      required: [tqs, id, snapshot_id, freshness_s, partial_regions, series, rows, rows_total, truncated, elapsed_ms]
+      properties:
+        tqs: { type: string, const: "3" }
+        id: { type: string }
+        snapshot_id: { type: integer, format: int64, description: DuckLake snapshot the query read }
+        freshness_s: { type: number, format: double, description: Seconds since the newest row the query could see was ingested (0 when the hot tail is included) }
+        partial_regions: { type: array, items: { type: string } }
+        series:
+          type: array
+          description: timeseries / table kinds
+          items: { $ref: "#/components/schemas/Series" }
+        rows:
+          type: array
+          description: list kinds (trace_search, trace, log_search, log_patterns); each row maps column -> text
+          items: { type: object, additionalProperties: { type: string } }
+        rows_total: { type: integer, format: int64 }
+        truncated: { type: boolean }
+        elapsed_ms: { type: number, format: double }
+
+    Series:
+      type: object
+      additionalProperties: false
+      required: [output, key, labels, points]
+      properties:
+        output: { type: string, description: query or formula name }
+        key: { type: string, description: "grouped labels as k=v, sorted, comma-joined; empty for a single series" }
+        labels: { type: object, additionalProperties: { type: string } }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/Point" }
+
+    Point:
+      description: "[epoch_ms, value]"
+      type: array
+      prefixItems: [{ type: integer, format: int64 }, { type: number, format: double }]
+      items: { type: number }
+      minItems: 2
+      maxItems: 2
+
+    ProblemResponse:
+      type: object
+      additionalProperties: false
+      required: [valid, problems]
+      properties:
+        valid: { type: boolean }
+        problems: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [code, path, message]
+      properties:
+        code: { type: string, description: "problem code (SPEC §8.12), e.g. schema, window, formula_ref" }
+        path: { type: string, description: JSON path of the offending value }
+        message: { type: string }
+
+    CatalogResponse:
+      type: object
+      additionalProperties: false
+      required: [metrics, services, truncated]
+      properties:
+        metrics: { type: array, items: { $ref: "#/components/schemas/CatalogMetric" } }
+        services: { type: array, items: { $ref: "#/components/schemas/CatalogService" } }
+        truncated: { type: boolean }
+
+    CatalogMetric:
+      type: object
+      additionalProperties: false
+      required: [name, series, label_keys]
+      properties:
+        name: { type: string }
+        series: { type: integer, format: int64 }
+        label_keys: { type: array, items: { type: string } }
+
+    CatalogService:
+      type: object
+      additionalProperties: false
+      required: [name, span_names, log_lines]
+      properties:
+        name: { type: string }
+        span_names: { type: array, items: { type: string } }
+        log_lines: { type: integer, format: int64 }
+
+    DashboardSummary:
+      type: object
+      additionalProperties: false
+      required: [id, title, panels]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        panels: { type: integer, format: int64 }
+
+    Dashboard:
+      type: object
+      additionalProperties: false
+      required: [id, title, panels]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        vars:
+          type: object
+          additionalProperties: { type: string }
+        panels:
+          type: array
+          items: { $ref: "#/components/schemas/Panel" }
+
+    Panel:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        display: { type: string, enum: [timeseries, stat, table, bar, traces, logs] }
+        unit: { type: string }
+        query: { $ref: "#/components/schemas/TqsDocument" }
+
+    LokiPush:
+      x-codegen: false   # decoded by receivers::loki_push
+      type: object
+      required: [streams]
+      properties:
+        streams:
+          type: array
+          items:
+            type: object
+            required: [stream, values]
+            properties:
+              stream: { type: object, additionalProperties: { type: string } }
+              values:
+                type: array
+                description: "[timestamp_ns as string, line] or [timestamp_ns, line, structured metadata object]"
+                items: { type: array, minItems: 2, maxItems: 3 }
+
+    # ---------------------------------------------------------------- TQS 3 (SPEC §8)
+    # The closed query schema. The engine's validator (crates/tqs) enforces the same shape and
+    # the cross-field rules; tests/openapi.rs checks every example in api/examples against
+    # this schema and the Rust model, so the two cannot drift silently.
+    TqsDocument:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [tqs, id, kind]
+      properties:
+        tqs: { type: string, const: "3" }
+        id: { type: string, pattern: "^[a-z][a-z0-9_-]{0,31}$" }
+        title: { type: string }
+        kind: { type: string, enum: [timeseries, table, trace_search, trace, log_search, log_patterns] }
+        time: { $ref: "#/components/schemas/TqsTime" }
+        vars: { type: object, additionalProperties: { type: string, maxLength: 256 } }
+        queries: { type: array, minItems: 1, maxItems: 10, items: { $ref: "#/components/schemas/TqsQuery" } }
+        formulas: { type: array, items: { $ref: "#/components/schemas/TqsFormula" } }
+        top: { $ref: "#/components/schemas/TqsTop" }
+        search: { $ref: "#/components/schemas/TqsSearch" }
+        trace_id: { type: string, pattern: "^[0-9a-f]{32}$" }
+        limit: { type: integer, minimum: 1, maximum: 5000 }
+
+    TqsTime:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [from]
+      properties:
+        from: { $ref: "#/components/schemas/TqsTimePoint" }
+        to: { $ref: "#/components/schemas/TqsTimePoint" }
+        step: { $ref: "#/components/schemas/TqsDuration" }
+
+    TqsTimePoint:
+      x-codegen: false
+      description: 'epoch ms, "now", or "-<duration>" relative to now'
+      oneOf:
+        - { type: integer }
+        - { type: string, pattern: "^(now|-[0-9]+(ms|s|m|h|d|w))$" }
+
+    TqsDuration:
+      x-codegen: false
+      type: string
+      description: 'positive duration like "30s", "5m", "7d", or a variable "$name" / "$__range" / "$__interval"'
+      pattern: "^([0-9]+(ms|s|m|h|d|w)|\\$[a-z_][a-z0-9_]*)$"
+
+    TqsQuery:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [name]
+      description: Exactly one of metric, spans, logs.
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9_]{0,31}$" }
+        metric: { type: string }
+        spans: { type: array, items: { $ref: "#/components/schemas/TqsCond" } }
+        logs: { type: array, items: { $ref: "#/components/schemas/TqsCond" } }
+        match: { type: array, items: { $ref: "#/components/schemas/TqsMatcher" } }
+        fn: { $ref: "#/components/schemas/TqsFn" }
+        measure: { $ref: "#/components/schemas/TqsMeasure" }
+        agg: { $ref: "#/components/schemas/TqsAgg" }
+        then: { $ref: "#/components/schemas/TqsAgg" }
+        derive: { type: array, items: { $ref: "#/components/schemas/TqsDerive" } }
+        offset: { $ref: "#/components/schemas/TqsDuration" }
+        having: { $ref: "#/components/schemas/TqsHaving" }
+        fill: { type: string, enum: [none, zero] }
+        hidden: { type: boolean }
+
+    TqsMatcher:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [label, op, value]
+      properties:
+        label: { type: string }
+        op: { type: string, enum: ["=", "!=", "=~", "!~"] }
+        value: { type: string }
+
+    TqsCond:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [field, op, value]
+      properties:
+        field: { type: string, description: "a signal field, attr.<key> or resource.<key>" }
+        op: { type: string, enum: ["=", "!=", ">", ">=", "<", "<=", "=~", "!~", contains, in, exists] }
+        value: { description: string, number, boolean or (for in) an array of up to 100 values }
+
+    TqsFn:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [op]
+      properties:
+        op:
+          type: string
+          enum: [rate, increase, irate, delta, resets, changes, last, avg_over_time, min_over_time, max_over_time,
+                 sum_over_time, count_over_time, last_over_time, histogram_quantile]
+        window: { $ref: "#/components/schemas/TqsDuration" }
+        q: { type: number, minimum: 0, maximum: 1 }
+
+    TqsMeasure:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [op]
+      properties:
+        op: { type: string, enum: [count, rate, quantile, avg, min, max, sum] }
+        field: { type: string, enum: [duration_ms] }
+        q: { type: number, minimum: 0, maximum: 1 }
+
+    TqsAgg:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      properties:
+        op: { type: string, enum: [sum, avg, min, max, count, absent] }
+        by: { type: array, items: { type: string } }
+        without: { type: array, items: { type: string } }
+
+    TqsDerive:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [label, from, regex, replacement]
+      properties:
+        label: { type: string }
+        from: { type: string }
+        regex: { type: string, maxLength: 256 }
+        replacement: { type: string, maxLength: 256 }
+
+    TqsHaving:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [op, value]
+      properties:
+        op: { type: string, enum: ["=", "!=", ">", ">=", "<", "<="] }
+        value: { type: number }
+
+    TqsFormula:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [name, expr]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9_]{0,31}$" }
+        expr: { type: string, maxLength: 512 }
+        join: { type: string, enum: [inner, outer] }
+
+    TqsTop:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      required: [n]
+      properties:
+        n: { type: integer, minimum: 1, maximum: 1000 }
+        query: { type: string }
+        rank: { type: string, enum: [per_step, max, avg, last] }
+        order: { type: string, enum: [asc, desc] }
+
+    TqsSearch:
+      x-codegen: false
+      type: object
+      additionalProperties: false
+      properties:
+        spans: { type: array, items: { $ref: "#/components/schemas/TqsCond" } }
+        trace: { type: array, items: { $ref: "#/components/schemas/TqsCond" } }
+        logs: { type: array, items: { $ref: "#/components/schemas/TqsCond" } }
+        order: { type: string, enum: [duration_desc, start_desc, desc, asc] }

@@ -1,0 +1,83 @@
+# Source of truth for every stored table (SPEC §4.3).
+#
+# crates/engine/build.rs generates from this file:
+#   - the Arrow schema the Parquet writer emits,
+#   - a typed row struct + column builder per table,
+#   - the DuckLake DDL (and the in-memory hot-tail DDL).
+# `ducklake_add_data_files` refuses a schema mismatch only at commit time (E3), so the two
+# must never be written by hand.
+#
+# Column types: utf8 | u8 | u32 | u64 | i64 | f64 | bool | timestamp_ns | date
+#               | trace_id (16 bytes) | map (utf8 -> utf8) | utf8_list
+# Options:      nullable (default false), encoding: delta | byte_stream_split,
+#               bloom: true (split-block bloom filter, FPP 0.01; dictionary off)
+# Table keys:   sort    — row order inside every Parquet file
+#               time    — column that decides the hour partition of a row
+#               bloom   — written per row group so trace lookups skip files (E4)
+
+version: 1
+
+tables:
+  metrics_series:
+    doc: One row per (series, flush); readers deduplicate by series_id.
+    sort: [series_id]
+    time: day_ms
+    columns:
+      - { name: tenant, type: utf8 }
+      - { name: region, type: utf8 }
+      - { name: day_ms, type: i64 }
+      - { name: series_id, type: u64 }
+      - { name: metric_name, type: utf8 }
+      - { name: metric_type, type: u8 }
+      - { name: unit, type: utf8, nullable: true }
+      - { name: labels, type: map }
+
+  metrics_points:
+    doc: Raw samples. positive_delta is filled by the compactor (D2).
+    sort: [series_id, timestamp_ms]
+    time: timestamp_ms
+    columns:
+      - { name: tenant, type: utf8 }
+      - { name: region, type: utf8 }
+      - { name: series_id, type: u64 }
+      - { name: timestamp_ms, type: i64, encoding: delta }
+      - { name: value, type: f64, encoding: byte_stream_split }
+      - { name: is_stale, type: bool }
+      - { name: positive_delta, type: f64, nullable: true }
+
+  spans:
+    sort: [trace_id, start_time_ns]
+    time: start_time_ns
+    columns:
+      - { name: tenant, type: utf8 }
+      - { name: region, type: utf8 }
+      - { name: trace_id, type: trace_id, bloom: true }
+      - { name: span_id, type: u64 }
+      - { name: parent_span_id, type: u64, nullable: true }
+      - { name: start_time_ns, type: timestamp_ns }
+      - { name: duration_ns, type: u64 }
+      - { name: service_name, type: utf8 }
+      - { name: span_name, type: utf8 }
+      - { name: span_kind, type: u8 }
+      - { name: status_code, type: u8 }
+      - { name: status_message, type: utf8, nullable: true }
+      - { name: resource_attrs, type: map }
+      - { name: span_attrs, type: map }
+
+  logs:
+    sort: [service_name, severity_number, timestamp_ns]
+    time: timestamp_ns
+    columns:
+      - { name: tenant, type: utf8 }
+      - { name: region, type: utf8 }
+      - { name: timestamp_ns, type: timestamp_ns }
+      - { name: service_name, type: utf8 }
+      - { name: severity_number, type: u8 }
+      - { name: severity_text, type: utf8 }
+      - { name: pattern_hash, type: u64 }
+      - { name: pattern_version, type: u8 }
+      - { name: body, type: utf8 }
+      - { name: trace_id, type: trace_id, nullable: true }
+      - { name: span_id, type: u64, nullable: true }
+      - { name: resource_attrs, type: map }
+      - { name: log_attrs, type: map }

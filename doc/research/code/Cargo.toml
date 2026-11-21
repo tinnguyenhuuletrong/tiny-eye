@@ -1,0 +1,26 @@
+[package]
+name = "blobobs-poc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Concept PoC: blob-first observability on MinIO + DuckLake, written to prove the design, not to ship"
+
+[dependencies]
+anyhow = "1"
+arrow = { version = "60", default-features = false, features = ["prettyprint"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
+duckdb = { version = "=1.20000.1", features = ["bundled", "parquet", "json", "vtab-arrow", "appender-arrow"] }
+object_store = { version = "0.14", features = ["aws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ulid = "1"
+rand = "0.9"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+futures = "0.3"
+regex = "1"
+ureq = { version = "3", default-features = false }
+
+[profile.release]
+debug = false

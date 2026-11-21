@@ -1,0 +1,7 @@
+/target
+/.tools
+/.state
+/data
+.DS_Store
+*.log
+/.state-server.log

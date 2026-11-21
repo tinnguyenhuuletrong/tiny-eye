@@ -1,0 +1,35 @@
+# The engine watching itself (scrape tiny-eye's /metrics into tiny-eye with any Prometheus agent).
+id: tiny-eye-self
+title: tiny-eye self-monitoring
+vars:
+  job: tiny-eye
+panels:
+  - display: timeseries
+    unit: rows/s
+    query:
+      tqs: "3"
+      id: ingest-rate
+      title: Ingested rows per second by table
+      kind: timeseries
+      time: { from: "-1h", step: "1m" }
+      queries:
+        - name: r
+          metric: tiny_eye_ingested_rows_total
+          match: [{ label: job, op: "=", value: "$job" }]
+          fn: { op: rate, window: 5m }
+          agg: { op: sum, by: [table] }
+  - display: stat
+    unit: bytes
+    query:
+      tqs: "3"
+      id: hot-bytes
+      title: Hot tail size
+      kind: table
+      time: { from: "-5m" }
+      queries:
+        - name: b
+          metric: tiny_eye_hot_bytes
+          match: [{ label: job, op: "=", value: "$job" }]
+          fn: { op: last }
+          agg: { op: sum }
+          fill: zero

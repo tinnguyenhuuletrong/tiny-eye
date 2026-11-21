@@ -1,0 +1,8 @@
+# Local development: everything on disk under ./data, fast flushes so changes show up quickly.
+duckdb:
+  extension_dir: .tools/duckdb_ext
+ingest:
+  flush_interval: 10s
+coordinator:
+  checkpoint_interval: 2s
+  hot_grace: 5s

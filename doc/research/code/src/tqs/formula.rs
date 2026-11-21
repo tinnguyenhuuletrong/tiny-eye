@@ -1,0 +1,214 @@
+//! Formula expressions over named query results: a closed grammar parsed to an AST.
+//!
+//! ```text
+//! expr   = term   { ("+" | "-") term } ;
+//! term   = unary  { ("*" | "/") unary } ;
+//! unary  = "-" unary | atom ;
+//! atom   = number | name | "(" expr ")" | func "(" expr { "," expr } ")" ;
+//! func   = abs | round | least | greatest | clamp | coalesce ;
+//! ```
+//! SQL is emitted from the AST; the expression text never reaches SQL.
+
+pub const MAX_LEN: usize = 512;
+pub const MAX_NODES: usize = 128;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr {
+    Num(f64),
+    Ref(String),
+    Neg(Box<Expr>),
+    Bin(char, Box<Expr>, Box<Expr>),
+    Call(&'static str, Vec<Expr>),
+}
+
+const FUNCS: &[(&str, usize, usize)] = &[("abs", 1, 1), ("round", 1, 1), ("least", 2, 8), ("greatest", 2, 8), ("clamp", 3, 3), ("coalesce", 2, 8)];
+
+#[derive(Debug, Clone, PartialEq)]
+enum Tok {
+    Num(f64),
+    Ident(String),
+    Op(char),
+}
+
+fn lex(s: &str) -> Result<Vec<Tok>, String> {
+    if s.len() > MAX_LEN {
+        return Err(format!("expression longer than {MAX_LEN} characters"));
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let mut out = vec![];
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_whitespace() {
+            i += 1;
+        } else if c.is_ascii_digit() || c == '.' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == 'e' || ((chars[i] == '-' || chars[i] == '+') && chars[i - 1] == 'e')) {
+                i += 1;
+            }
+            let text: String = chars[start..i].iter().collect();
+            let n: f64 = text.parse().map_err(|_| format!("bad number {text:?} at {start}"))?;
+            if !n.is_finite() {
+                return Err(format!("number {text:?} is not finite"));
+            }
+            out.push(Tok::Num(n));
+        } else if c.is_ascii_lowercase() {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_lowercase() || chars[i].is_ascii_digit() || chars[i] == '_') {
+                i += 1;
+            }
+            out.push(Tok::Ident(chars[start..i].iter().collect()));
+        } else if "+-*/(),".contains(c) {
+            out.push(Tok::Op(c));
+            i += 1;
+        } else {
+            return Err(format!("unexpected character {c:?} at {i}"));
+        }
+    }
+    Ok(out)
+}
+
+struct Parser {
+    toks: Vec<Tok>,
+    pos: usize,
+    nodes: usize,
+}
+
+impl Parser {
+    fn peek(&self) -> Option<&Tok> {
+        self.toks.get(self.pos)
+    }
+    fn bump(&mut self) -> Option<Tok> {
+        let t = self.toks.get(self.pos).cloned();
+        self.pos += 1;
+        t
+    }
+    fn node(&mut self, e: Expr) -> Result<Expr, String> {
+        self.nodes += 1;
+        if self.nodes > MAX_NODES {
+            return Err(format!("expression has more than {MAX_NODES} nodes"));
+        }
+        Ok(e)
+    }
+    fn expr(&mut self) -> Result<Expr, String> {
+        let mut l = self.term()?;
+        while let Some(Tok::Op(op @ ('+' | '-'))) = self.peek().cloned() {
+            self.bump();
+            let r = self.term()?;
+            l = self.node(Expr::Bin(op, Box::new(l), Box::new(r)))?;
+        }
+        Ok(l)
+    }
+    fn term(&mut self) -> Result<Expr, String> {
+        let mut l = self.unary()?;
+        while let Some(Tok::Op(op @ ('*' | '/'))) = self.peek().cloned() {
+            self.bump();
+            let r = self.unary()?;
+            l = self.node(Expr::Bin(op, Box::new(l), Box::new(r)))?;
+        }
+        Ok(l)
+    }
+    fn unary(&mut self) -> Result<Expr, String> {
+        if let Some(Tok::Op('-')) = self.peek() {
+            self.bump();
+            let e = self.unary()?;
+            return self.node(Expr::Neg(Box::new(e)));
+        }
+        self.atom()
+    }
+    fn atom(&mut self) -> Result<Expr, String> {
+        match self.bump() {
+            Some(Tok::Num(n)) => self.node(Expr::Num(n)),
+            Some(Tok::Op('(')) => {
+                let e = self.expr()?;
+                match self.bump() {
+                    Some(Tok::Op(')')) => Ok(e),
+                    _ => Err("missing )".into()),
+                }
+            }
+            Some(Tok::Ident(name)) => {
+                if let Some(Tok::Op('(')) = self.peek() {
+                    let Some(&(fname, min, max)) = FUNCS.iter().find(|(f, _, _)| *f == name) else {
+                        return Err(format!("unknown function {name:?}; allowed: abs, round, least, greatest, clamp, coalesce"));
+                    };
+                    self.bump();
+                    let mut args = vec![self.expr()?];
+                    loop {
+                        match self.bump() {
+                            Some(Tok::Op(',')) => args.push(self.expr()?),
+                            Some(Tok::Op(')')) => break,
+                            _ => return Err(format!("{fname}: expected , or )")),
+                        }
+                    }
+                    if args.len() < min || args.len() > max {
+                        return Err(format!("{fname} takes {min}..={max} arguments, got {}", args.len()));
+                    }
+                    self.node(Expr::Call(fname, args))
+                } else {
+                    self.node(Expr::Ref(name))
+                }
+            }
+            other => Err(format!("unexpected {other:?}")),
+        }
+    }
+}
+
+pub fn parse(s: &str) -> Result<Expr, String> {
+    let mut p = Parser { toks: lex(s)?, pos: 0, nodes: 0 };
+    if p.toks.is_empty() {
+        return Err("empty expression".into());
+    }
+    let e = p.expr()?;
+    if p.pos != p.toks.len() {
+        return Err(format!("unexpected {:?} after the expression", p.toks[p.pos]));
+    }
+    if e.refs().is_empty() {
+        return Err("a formula must reference at least one query".into());
+    }
+    Ok(e)
+}
+
+impl Expr {
+    pub fn refs(&self) -> Vec<String> {
+        let mut out = vec![];
+        self.walk(&mut |e| {
+            if let Expr::Ref(r) = e {
+                if !out.contains(r) {
+                    out.push(r.clone());
+                }
+            }
+        });
+        out
+    }
+
+    fn walk(&self, f: &mut impl FnMut(&Expr)) {
+        f(self);
+        match self {
+            Expr::Neg(e) => e.walk(f),
+            Expr::Bin(_, l, r) => {
+                l.walk(f);
+                r.walk(f);
+            }
+            Expr::Call(_, args) => args.iter().for_each(|a| a.walk(f)),
+            _ => {}
+        }
+    }
+
+    /// `col(name)` maps a reference to its SQL column. Division by zero yields NULL
+    /// (no point), not ±Inf/NaN — see the specification's division policy.
+    pub fn to_sql(&self, col: &dyn Fn(&str) -> String) -> String {
+        match self {
+            Expr::Num(n) => format!("({n:?})::DOUBLE"),
+            Expr::Ref(r) => col(r),
+            Expr::Neg(e) => format!("(-{})", e.to_sql(col)),
+            Expr::Bin('/', l, r) if super::mutant("division_ieee") => format!("({} / {})", l.to_sql(col), r.to_sql(col)),
+            Expr::Bin('/', l, r) => {
+                let (l, r) = (l.to_sql(col), r.to_sql(col));
+                format!("(CASE WHEN {r} = 0 THEN NULL ELSE {l} / {r} END)")
+            }
+            Expr::Bin(op, l, r) => format!("({} {op} {})", l.to_sql(col), r.to_sql(col)),
+            Expr::Call("clamp", a) => format!("least(greatest({}, {}), {})", a[0].to_sql(col), a[1].to_sql(col), a[2].to_sql(col)),
+            Expr::Call(f, a) => format!("{f}({})", a.iter().map(|x| x.to_sql(col)).collect::<Vec<_>>().join(", ")),
+        }
+    }
+}

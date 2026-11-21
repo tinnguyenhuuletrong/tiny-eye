@@ -1,0 +1,37 @@
+[package]
+name = "engine"
+description = "Storage and query engine: write path, WAL, flusher, DuckLake catalog, compactor, retention, hot tail, TQS execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tqs.workspace = true
+anyhow.workspace = true
+arrow.workspace = true
+parquet.workspace = true
+duckdb.workspace = true
+object_store.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+ulid.workspace = true
+xxhash-rust.workspace = true
+futures.workspace = true
+regex.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+rand.workspace = true
+
+[build-dependencies]
+serde.workspace = true
+serde_norway.workspace = true
+
+[lints]
+workspace = true

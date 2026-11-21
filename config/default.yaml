@@ -1,0 +1,69 @@
+# tiny-eye configuration: the single source of every default.
+#
+# This file is compiled into the binary as the base layer. A file passed with
+# `--config <path>` is merged over it, then environment variables override single keys:
+#   TINY_EYE__INGEST__FLUSH_INTERVAL=5s   ->  ingest.flush_interval: 5s
+# The effective config is printed at start with secrets redacted (SPEC §13).
+#
+# Sizes: B, KB, MB, GB (powers of 1024). Durations: ms, s, m, h, d, w.
+
+node:
+  id: node-0
+  region: local
+  tenant: default
+
+server:
+  listen: 127.0.0.1:7070
+
+storage:
+  # file:///abs/path or a relative path for local disk; s3://bucket/prefix for S3/MinIO.
+  url: ./data/objects
+  s3:
+    endpoint: ""            # empty = AWS; e.g. http://127.0.0.1:19000 for MinIO
+    region: us-east-1
+    access_key_id: ""       # secret: prefer TINY_EYE__STORAGE__S3__ACCESS_KEY_ID
+    secret_access_key: ""   # secret: prefer TINY_EYE__STORAGE__S3__SECRET_ACCESS_KEY
+    allow_http: false
+
+catalog:
+  # DuckLake metadata. A file path (single node) or "postgres:<libpq conninfo>" (cluster).
+  url: ./data/catalog.ducklake
+
+duckdb:
+  # Extensions shipped next to the binary (D12). Empty = DuckDB's default location
+  # (~/.duckdb/extensions) with auto-install from the extension host.
+  extension_dir: ""
+  threads: 4
+  memory_limit: 4GB
+
+ingest:
+  durability: wal           # wal | memory   (SPEC §5.2; replicated / s3-wal are not built)
+  wal_dir: ./data/wal
+  flush_bytes: 64MB         # flush when the open batch reaches this size...
+  flush_interval: 60s       # ...or this age
+  max_sample_age: 1h        # reject samples older than this
+  max_sample_future: 10m    # reject samples further ahead than this
+  arena_limit: 1GB          # 429 / RESOURCE_EXHAUSTED above this many buffered bytes
+  row_group_rows: 122880
+
+coordinator:
+  checkpoint_interval: 5s
+  hot_grace: 30s            # keep committed rows in RAM this long after the catalog has them
+  compaction_interval: 1m
+  compaction_delay: 10m     # compact an hour this long after it closes
+  retention: 15d
+  retention_interval: 1h
+
+query:
+  timeout: 30s
+  workers: 4                # DuckDB connections serving queries
+
+auth:
+  # Bearer tokens -> scopes (SPEC §11). Empty list = auth disabled (local development).
+  tokens: []
+  #  - { token_env: TINY_EYE_INGEST_TOKEN, scopes: [ingest] }
+  #  - { token_env: TINY_EYE_QUERY_TOKEN, scopes: [query] }
+
+dashboards:
+  # Dashboards live in git as YAML files and are loaded at start (Q12).
+  dir: ./dashboards

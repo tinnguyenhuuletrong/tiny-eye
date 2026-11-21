@@ -1,0 +1,10 @@
+# Local S3 for tests and benchmarks. Ports avoid the defaults so other stacks keep theirs.
+name: tiny-eye
+services:
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: tinyeye
+      MINIO_ROOT_PASSWORD: tinyeye-secret
+    ports: ["127.0.0.1:19000:9000", "127.0.0.1:19001:9001"]

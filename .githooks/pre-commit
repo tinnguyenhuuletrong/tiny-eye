@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fast gate before every commit: formatting and clippy. Tests run in CI / `make check`.
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo fmt --all -- --check || { echo "run: make fmt"; exit 1; }
+cargo clippy --workspace --all-targets --quiet -- -D warnings
