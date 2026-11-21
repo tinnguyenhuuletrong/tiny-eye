@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=../../doc/schema/config.schema.json
+# tiny-eye config for the demo: local disk under ./data/demo, fast flushes, the demo dashboards.
+duckdb:
+  extension_dir: .tools/duckdb_ext
+storage:
+  url: ./data/demo/objects
+catalog:
+  url: ./data/demo/catalog.ducklake
+ingest:
+  wal_dir: ./data/demo/wal
+  flush_interval: 15s
+coordinator:
+  checkpoint_interval: 2s
+  hot_grace: 10s
+dashboards:
+  dir: examples/demo/dashboards

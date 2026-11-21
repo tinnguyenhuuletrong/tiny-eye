@@ -1,0 +1,4 @@
+{ "tqs": "3", "id": "failed-checkouts", "kind": "trace_search", "time": {"from": "-15m"},
+  "search": { "spans": [ {"field": "service_name", "op": "=", "value": "payments"}, {"field": "status_code", "op": "=", "value": 2} ],
+              "order": "duration_desc" },
+  "limit": 10 }

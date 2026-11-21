@@ -1,0 +1,4 @@
+{ "tqs": "3", "id": "payment-timeouts", "kind": "log_search", "time": {"from": "-15m"},
+  "search": { "logs": [ {"field": "service_name", "op": "=", "value": "payments"}, {"field": "body", "op": "contains", "value": "timeout"} ],
+              "order": "desc" },
+  "limit": 20 }

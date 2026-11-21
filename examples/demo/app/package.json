@@ -1,0 +1,21 @@
+{
+  "name": "tiny-eye-demo-shop",
+  "private": true,
+  "type": "module",
+  "description": "Demo shop (shop-api + payments) instrumented with OpenTelemetry, sending traces, metrics and logs to tiny-eye over OTLP/HTTP",
+  "scripts": {
+    "start": "node launch.js"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.10.0",
+    "@opentelemetry/auto-instrumentations-node": "0.83.1",
+    "@opentelemetry/core": "3.1.1",
+    "@opentelemetry/exporter-logs-otlp-proto": "0.301.2",
+    "@opentelemetry/exporter-metrics-otlp-proto": "0.301.2",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.301.2",
+    "@opentelemetry/sdk-logs": "3.1.1",
+    "@opentelemetry/sdk-metrics": "3.1.1",
+    "@opentelemetry/sdk-node": "0.301.2",
+    "express": "4.21.2"
+  }
+}

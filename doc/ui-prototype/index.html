@@ -1,0 +1,998 @@
+<title>tiny-eye Dashboard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: left rail navigation + sticky toolbar + 12-column panel grid; one quiet ink accent, color reserved for data and state. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --line: #e2e5ea;
+  --line-strong: #cfd4dc;
+  --ink: #14171c;
+  --ink-2: #4a515c;
+  --ink-3: #7a828e;
+  --accent: #1d4ed8;
+  --accent-soft: #e6edfd;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-soft: #e3f4e3; --warning-soft: #fdf1d6; --critical-soft: #fae3e3;
+  --font: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1114; --surface: #171a1f; --surface-2: #1f232a; --line: #2a2f37; --line-strong: #3a414c;
+    --ink: #eef0f3; --ink-2: #b4bbc6; --ink-3: #8a929e; --accent: #7aa2ff; --accent-soft: #1d2a47;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+    --good-soft: #15301a; --warning-soft: #3a2f12; --critical-soft: #3a1c1c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1114; --surface: #171a1f; --surface-2: #1f232a; --line: #2a2f37; --line-strong: #3a414c;
+  --ink: #eef0f3; --ink-2: #b4bbc6; --ink-3: #8a929e; --accent: #7aa2ff; --accent-soft: #1d2a47;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+  --good-soft: #15301a; --warning-soft: #3a2f12; --critical-soft: #3a1c1c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--surface); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 12px; letter-spacing: -0.01em; }
+h1, h2, h3, .brand, .stat .value { letter-spacing: -0.02em; }
+
+.app { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.rail { background: var(--surface); border-right: 1px solid var(--line); padding: 18px 12px; display: flex; flex-direction: column; gap: 22px; position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; padding-left: max(12px, env(safe-area-inset-left, 0px)); }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-weight: 700; letter-spacing: -0.01em; font-size: 16px; }
+.brand svg { flex: none; }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-weight: 500; }
+.nav a:hover { background: var(--surface-2); color: var(--ink); }
+.nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+.nav svg { width: 18px; height: 18px; flex: none; }
+.rail-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); padding: 0 10px 6px; font-weight: 600; }
+.dash-list { display: flex; flex-direction: column; gap: 1px; }
+.dash-list button { text-align: left; background: none; border: 0; padding: 6px 10px; border-radius: 6px; color: var(--ink-2); }
+.dash-list button:hover { background: var(--surface-2); }
+.dash-list button.on { color: var(--ink); font-weight: 600; }
+.rail-foot { margin-top: auto; font-size: 12px; color: var(--ink-3); padding: 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
+.rail-foot b { color: var(--ink-2); font-weight: 600; }
+
+main { min-width: 0; display: flex; flex-direction: column; }
+.toolbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding-block: 12px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.toolbar h1 { font-size: 18px; margin: 0; letter-spacing: -0.015em; text-wrap: balance; }
+.crumb { color: var(--ink-3); font-size: 12px; }
+.spacer { flex: 1; }
+.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.seg button { border: 0; background: none; padding: 4px 9px; border-radius: 6px; color: var(--ink-2); font-size: 12.5px; font-weight: 500; }
+.seg button.on { background: var(--ink); color: var(--surface); }
+.select { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font-size: 12.5px; color: var(--ink-2); }
+.select select { border: 0; background: none; font-weight: 600; color: var(--ink); padding: 0; }
+.live { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 8px; }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+.live.off i { background: var(--ink-3); box-shadow: none; }
+.btn { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 8px; padding: 5px 11px; font-weight: 500; font-size: 13px; }
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+.view { padding-block: 20px 40px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; display: flex; flex-direction: column; }
+.panel header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 4px; }
+.panel h2 { font-size: 13.5px; margin: 0; font-weight: 600; }
+.panel .sub { font-size: 12px; color: var(--ink-3); }
+.panel .tools { margin-left: auto; display: flex; gap: 4px; }
+.icon-btn { border: 0; background: none; color: var(--ink-3); border-radius: 6px; padding: 3px 6px; font-family: var(--mono); font-size: 11.5px; }
+.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+.body { padding: 6px 14px 14px; min-width: 0; position: relative; }
+.span3 { grid-column: span 3; } .span4 { grid-column: span 4; } .span6 { grid-column: span 6; } .span8 { grid-column: span 8; } .span12 { grid-column: span 12; }
+
+.stat .value { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 6px; }
+.stat .unit { font-size: 13px; color: var(--ink-3); font-weight: 500; }
+.stat .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.pill.good { background: var(--good-soft); color: var(--ink); }
+.pill.warn { background: var(--warning-soft); color: var(--ink); }
+.pill.crit { background: var(--critical-soft); color: var(--ink); }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; }
+.spark { height: 38px; margin-top: 8px; }
+
+.chart { position: relative; height: 220px; }
+.chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.axis text { fill: var(--ink-3); font-size: 10.5px; font-family: var(--font); }
+.grid-line { stroke: var(--line); stroke-width: 1; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; }
+.legend button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 2px 0; font-size: 12px; color: var(--ink-2); }
+.legend button.off { opacity: 0.4; }
+.legend i { width: 10px; height: 3px; border-radius: 2px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); padding: 8px 10px; font-size: 12px; min-width: 150px; z-index: 5; }
+.tip .t { color: var(--ink-3); margin-bottom: 4px; }
+.tip .row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.tip .row span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.tip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; }
+.bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.bar-cell span.b { height: 6px; border-radius: 3px; background: var(--s1); }
+tbody tr.click { cursor: pointer; }
+tbody tr.click:hover { background: var(--surface-2); }
+.scroll-x { overflow-x: auto; }
+
+.sev { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 4px; }
+.sev::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.sev.ERROR { color: var(--critical); background: var(--critical-soft); }
+.sev.WARN { color: var(--ink); background: var(--warning-soft); }
+.sev.WARN::before { background: var(--warning); }
+.sev.INFO { color: var(--ink-2); background: var(--surface-2); }
+.log-row td { vertical-align: top; }
+.log-row .body-text { font-family: var(--mono); font-size: 12px; word-break: break-word; }
+.mask { color: var(--accent); }
+
+.dur { display: flex; align-items: center; gap: 8px; }
+.dur .track { flex: 1; height: 6px; background: var(--surface-2); border-radius: 3px; min-width: 60px; }
+.dur .fill { height: 100%; border-radius: 3px; background: var(--s1); }
+.err-badge { font-size: 11px; font-weight: 600; color: var(--critical); }
+
+.drawer-bg { position: fixed; inset: 0; background: rgb(10 12 16 / 0.35); z-index: 40; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100%); background: var(--surface); z-index: 41; border-left: 1px solid var(--line); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.drawer header { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.drawer header h3 { margin: 0; font-size: 15px; }
+.drawer .content { overflow: auto; padding: 14px 20px 24px; }
+.wf { display: grid; grid-template-columns: minmax(150px, 38%) 1fr; font-size: 12.5px; }
+.wf .name { padding: 5px 8px 5px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line); }
+.wf .lane { position: relative; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); }
+.wf .span { position: absolute; top: 6px; height: 14px; border-radius: 3px; min-width: 2px; }
+.wf .span em { position: absolute; left: calc(100% + 6px); top: -1px; font-style: normal; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.wf .svc { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.wf .ticks { position: relative; height: 22px; border-left: 1px solid var(--line); }
+.wf .ticks span { position: absolute; font-size: 10.5px; color: var(--ink-3); transform: translateX(-50%); top: 4px; }
+
+pre.code { margin: 0; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; max-height: 420px; }
+.k { color: var(--accent); } .s { color: var(--s3); } .n { color: var(--s2); } .b { color: var(--s7); }
+
+.explore { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
+.builder { display: flex; flex-direction: column; gap: 14px; padding: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > label, .field > .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); font-weight: 600; }
+.input { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 8px; padding: 6px 9px; width: 100%; }
+.metric-list { border: 1px solid var(--line); border-radius: 8px; max-height: 190px; overflow: auto; }
+.metric-list button { display: flex; width: 100%; justify-content: space-between; gap: 8px; text-align: left; border: 0; background: none; padding: 6px 10px; font-family: var(--mono); font-size: 12px; }
+.metric-list button:hover { background: var(--surface-2); }
+.metric-list button.on { background: var(--accent-soft); color: var(--accent); }
+.metric-list small { font-family: var(--font); color: var(--ink-3); font-size: 11px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 999px; padding: 3px 10px; font-size: 12px; font-family: var(--mono); }
+.chip.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.filter-row { display: grid; grid-template-columns: 1fr 52px 1fr 26px; gap: 6px; align-items: center; }
+.filter-row select, .filter-row input { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 6px; padding: 4px 6px; font-size: 12px; min-width: 0; width: 100%; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.toast { position: fixed; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--surface); padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 50; }
+.hint { font-size: 12px; color: var(--ink-3); }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 14px; }
+.tabs button { border: 0; background: none; padding: 9px 10px; font-size: 13px; color: var(--ink-3); border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
+.tabs button.on { color: var(--ink); border-color: var(--ink); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+
+/* Explore: one sentence-like query bar of pills, each opening a popover. */
+.ex-stack { display: flex; flex-direction: column; gap: 14px; }
+.qb { padding: 14px; gap: 12px; }
+.qb-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.qb-word { color: var(--ink-3); font-size: 13px; }
+.pill-btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 8px; padding: 6px 10px; font-size: 13px; max-width: 100%; }
+.pill-btn:hover { border-color: var(--ink-3); }
+.pill-btn[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pill-btn .k { color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; }
+.pill-btn .v { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill-btn .v.m { font-family: var(--mono); font-size: 12.5px; font-weight: 500; }
+.pill-btn .caret { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--ink-3); }
+.pill-btn.ghost { border-style: dashed; color: var(--ink-2); }
+.pill-btn .x { border: 0; background: none; color: var(--ink-3); padding: 0 0 0 2px; font-size: 15px; line-height: 1; }
+.pill-btn .x:hover { color: var(--critical); }
+.qb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.code-edit { display: flex; flex-direction: column; gap: 10px; }
+.code-edit textarea { width: 100%; min-height: 300px; resize: vertical; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; tab-size: 2; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px 14px; }
+.code-edit textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.problems { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.problem { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.problem .code-badge { font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--critical-soft); color: var(--ink); }
+.problem .path { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
+.status-line .dot { width: 8px; height: 8px; border-radius: 50%; }
+.qb-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
+.pop { position: absolute; z-index: 35; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 12px 32px rgb(0 0 0 / 0.14); padding: 12px; width: min(440px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 12px; }
+.pop .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); font-weight: 600; margin-bottom: 6px; display: block; }
+.opt-list { display: flex; flex-direction: column; max-height: 260px; overflow: auto; margin: 0 -4px; }
+.opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; text-align: left; border: 0; background: none; border-radius: 6px; padding: 7px 8px; }
+.opt:hover, .opt.on { background: var(--surface-2); }
+.opt.on .name { color: var(--accent); }
+.opt .name { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.opt .meta { font-size: 11px; color: var(--ink-3); }
+.badge { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); }
+.check { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-family: var(--mono); font-size: 12.5px; border-radius: 6px; }
+.check:hover { background: var(--surface-2); }
+.pop-grid { display: grid; grid-template-columns: 1fr 70px 1fr; gap: 8px; }
+.pop-grid select, .pop-grid input { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 6px; padding: 6px 8px; min-width: 0; width: 100%; font-size: 13px; }
+.pop-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.ex-table table td, .ex-table table th { padding: 7px 14px; }
+.ex-table { border-top: 1px solid var(--line); }
+.ex-table tr.series-row { cursor: pointer; }
+.ex-table tr.series-row:hover { background: var(--surface-2); }
+.ex-table tr.series-row.off td { opacity: 0.4; }
+.ex-table .sw { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 8px; vertical-align: middle; }
+.tqs-box summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; flex-wrap: wrap; }
+.tqs-box summary::-webkit-details-marker { display: none; }
+.tqs-box summary h2 { font-size: 13.5px; margin: 0; }
+.tqs-box .chev { width: 8px; height: 8px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(-45deg); transition: transform .15s; }
+.tqs-box[open] .chev { transform: rotate(45deg); }
+.tqs-box pre.code { max-height: 320px; }
+
+@media (max-width: 1100px) { .span3 { grid-column: span 6; } .span4, .span8 { grid-column: span 12; } .explore { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 820px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); gap: 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .nav { flex-direction: row; flex-wrap: wrap; }
+  .nav a span { display: none; }
+  .rail-label, .dash-list, .rail-foot { display: none; }
+  .span6, .span3 { grid-column: span 12; }
+  .toolbar, .view { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12c2.6-4.4 6.1-6.6 10-6.6s7.4 2.2 10 6.6c-2.6 4.4-6.1 6.6-10 6.6S4.6 16.4 2 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3.2" fill="var(--accent)"/></svg>
+      tiny-eye
+    </div>
+    <nav class="nav" aria-label="Main">
+      <a href="#dashboards" data-view="dashboards"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboards</span></a>
+      <a href="#explore" data-view="explore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19l5-6 4 3 7-9"/><circle cx="20" cy="7" r="1.5"/></svg><span>Explore</span></a>
+      <a href="#traces" data-view="traces"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h10M8 12h12M6 18h7"/></svg><span>Traces</span></a>
+      <a href="#logs" data-view="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5h14M5 10h14M5 15h9M5 20h6"/></svg><span>Logs</span></a>
+    </nav>
+    <div>
+      <div class="rail-label">Dashboards · git</div>
+      <div class="dash-list" id="dashList"></div>
+    </div>
+    <div class="rail-foot"><b>Prototype.</b> Sample data shaped like <span class="mono">examples/demo</span>. Every panel is a TQS document; press <span class="mono">{ }</span> to see it.</div>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <div>
+        <div class="crumb" id="crumb">Dashboards</div>
+        <h1 id="viewTitle">Shop overview</h1>
+      </div>
+      <div class="spacer"></div>
+      <label class="select" id="svcVar">service
+        <select id="svcSel" aria-label="service variable">
+          <option value="all">all</option><option>shop-api</option><option>checkout</option><option>payments</option>
+        </select>
+      </label>
+      <div class="seg" id="rangeSeg" role="group" aria-label="Time range"></div>
+      <button class="live" id="liveBtn" type="button" aria-pressed="true"><i></i><span>Live · hot tail 0 s</span></button>
+    </div>
+
+    <section class="view" id="view-dashboards">
+      <div class="grid" id="dashGrid"></div>
+    </section>
+
+    <section class="view" id="view-explore" hidden>
+      <div class="ex-stack">
+        <div class="panel qb">
+          <div class="qb-head">
+            <div class="seg" id="exMode" role="tablist" aria-label="Query editor"></div>
+            <span class="hint" id="modeHint"></span>
+          </div>
+          <div class="qb-row" id="qbRow"></div>
+          <div class="code-edit" id="codeEdit" hidden>
+            <textarea id="tqsInput" spellcheck="false" autocomplete="off" aria-label="TQS document" aria-describedby="tqsProblems"></textarea>
+            <div class="problems" id="tqsProblems" aria-live="polite"></div>
+          </div>
+          <div class="qb-foot"><span class="hint" id="qbHint"></span><span class="spacer"></span><button class="btn primary" type="button" id="saveExplore">Add to Shop overview</button></div>
+        </div>
+        <div class="panel">
+          <header><h2 id="exTitle">Preview</h2><span class="sub" id="exSub"></span>
+            <div class="tools"><div class="seg" id="exViz" role="group" aria-label="Visualization"></div></div>
+          </header>
+          <div class="body" id="exPreview"></div>
+          <div class="ex-table scroll-x" id="exStats"></div>
+        </div>
+        <details class="panel tqs-box" id="tqsBox">
+          <summary><span class="chev" aria-hidden="true"></span><h2>TQS document</h2><span class="sub">what this view stores in git and sends to <span class="mono">POST /api/v1/query</span></span><span class="spacer"></span><button class="icon-btn" id="copyTqs" type="button">copy</button></summary>
+          <div class="body"><pre class="code" id="exCode"></pre></div>
+        </details>
+      </div>
+    </section>
+
+    <section class="view" id="view-traces" hidden>
+      <div class="grid">
+        <div class="panel span12">
+          <header><h2>Trace search</h2><span class="sub">a trace matches when one of its spans matches every condition</span></header>
+          <div class="body">
+            <div class="filters" style="margin-bottom:12px">
+              <label class="select">service <select id="trSvc"><option value="all">any</option><option>shop-api</option><option>checkout</option><option>payments</option></select></label>
+              <label class="select">duration ≥ <select id="trMin"><option value="0">0 ms</option><option value="200">200 ms</option><option value="500" selected>500 ms</option><option value="1000">1 s</option></select></label>
+              <label class="select"><input type="checkbox" id="trErr"> errors only</label>
+            </div>
+            <div class="scroll-x" id="traceTable"></div>
+          </div>
+        </div>
+        <div class="panel span12">
+          <header><h2>Span duration p95 by service</h2><span class="sub">spans · measure quantile 0.95</span></header>
+          <div class="body"><div class="chart" id="trChart"></div><div class="legend" id="trChartLegend"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-logs" hidden>
+      <div class="grid">
+        <div class="panel span12">
+          <header><h2>Log volume</h2><span class="sub">lines per step by severity</span></header>
+          <div class="body"><div class="chart" style="height:150px" id="logVol"></div><div class="legend" id="logVolLegend"></div></div>
+        </div>
+        <div class="panel span12">
+          <div class="tabs" role="tablist"><button class="on" data-ltab="lines" type="button">Lines</button><button data-ltab="patterns" type="button">Patterns</button></div>
+          <div class="body" style="padding-top:12px">
+            <div class="filters" style="margin-bottom:12px">
+              <input class="input" id="logQ" placeholder="body contains…" style="max-width:280px" value="timeout">
+              <div class="seg" id="sevSeg" role="group" aria-label="Severity"></div>
+            </div>
+            <div class="scroll-x" id="logTable"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="drawerRoot"></div>
+<div id="toastRoot"></div>
+
+<script>
+(() => {
+"use strict";
+// ---------------------------------------------------------------- sample data (seeded, deterministic)
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const RANGES = { "15m": 15, "1h": 60, "6h": 360, "24h": 1440, "7d": 10080 };
+const SERIES_VARS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
+const col = i => `var(${SERIES_VARS[i % 8]})`;
+const state = { range: "1h", svc: "all", live: true, hoverT: null, dash: "shop", panels: null, exViz: "line" };
+const NOW = Date.UTC(2026, 10, 21, 14, 30) ; // a fixed "now" so the sample story stays the same
+const ROUTES = ["/products", "/search", "/cart", "/checkout", "/orders/:id"];
+const SERVICES = ["shop-api", "checkout", "payments"];
+
+function grid() {
+  const mins = RANGES[state.range], n = 120;
+  const step = Math.max(15_000, Math.round(mins * 60_000 / n / 15_000) * 15_000);
+  const out = [];
+  for (let t = NOW - mins * 60_000; t <= NOW; t += step) out.push(t);
+  return { ts: out, step };
+}
+// The story: an incident at /checkout in the last ~12% of any range (latency up, errors up).
+function shape(seed, base, opts = {}) {
+  const { ts } = grid(), r = rng(seed), n = ts.length, noise = opts.noise ?? 0.12;
+  let walk = 0;
+  return ts.map((t, i) => {
+    const day = 1 + 0.12 * Math.sin((t / 3_600_000) * Math.PI / 12 + seed);
+    walk = walk * 0.82 + (r() - 0.5) * noise;              // smooth, correlated noise
+    const inc = opts.incident && i > n * 0.86 ? opts.incident * (0.6 + 0.4 * Math.sin((i - n * 0.86) / 3)) : 0;
+    return Math.max(0, base * day * (1 + walk + 0.03 * Math.sin(i / 4 + seed)) + base * inc);
+  });
+}
+const svcFactor = () => state.svc === "all" ? 1 : ({ "shop-api": 0.55, checkout: 0.3, payments: 0.15 })[state.svc];
+function reqByRoute() {
+  const base = [42, 18, 11, 6.5, 4.2];
+  return ROUTES.map((r, i) => ({ name: r, values: shape(11 + i, base[i] * svcFactor(), { incident: r === "/checkout" ? -0.35 : 0 }) }));
+}
+function latency() {
+  return [["p50", 0.042, 0.4], ["p95", 0.18, 2.4], ["p99", 0.41, 3.2]].map(([q, b, inc], i) => ({ name: q, values: shape(31 + i, b, { incident: inc, noise: 0.18 }) }));
+}
+function errorPct() { return [{ name: "error %", values: shape(51, 0.35, { incident: 6, noise: 0.4 }) }]; }
+function sum(a) { return a.reduce((x, y) => x + y, 0); }
+
+const LOG_TEMPLATES = [
+  ["ERROR", "checkout", "payment provider timeout after <*>ms (attempt <*>)", () => `payment provider timeout after ${2000 + Math.floor(Math.random() * 900)}ms (attempt ${1 + Math.floor(Math.random() * 3)})`],
+  ["ERROR", "payments", "card authorization failed for order <*>: <*>", () => `card authorization failed for order ${10000 + Math.floor(Math.random() * 89999)}: "upstream_timeout"`],
+  ["WARN", "shop-api", "slow query <*> took <*>ms", () => `slow query "select_products" took ${300 + Math.floor(Math.random() * 600)}ms`],
+  ["INFO", "checkout", "order <*> placed total <*>", () => `order ${10000 + Math.floor(Math.random() * 89999)} placed total ${(20 + Math.random() * 300).toFixed(2)}`],
+  ["WARN", "checkout", "retrying payment for order <*> in <*>ms", () => `retrying payment for order ${10000 + Math.floor(Math.random() * 89999)} in ${100 * (1 + Math.floor(Math.random() * 4))}ms`],
+  ["INFO", "shop-api", "GET <*> <*> in <*>ms", () => `GET /products/${Math.floor(Math.random() * 900)} 200 in ${5 + Math.floor(Math.random() * 40)}ms`],
+];
+const logs = (() => { const r = rng(7), out = []; for (let i = 0; i < 160; i++) { const w = r(); const k = w < 0.22 ? 0 : w < 0.34 ? 1 : w < 0.48 ? 2 : w < 0.7 ? 3 : w < 0.8 ? 4 : 5; const [sev, svc, pat, gen] = LOG_TEMPLATES[k]; out.push({ t: NOW - Math.floor(r() * 900_000), sev, svc, pat, body: gen(), trace: hex(r, 32) }); } return out.sort((a, b) => b.t - a.t); })();
+function hex(r, n) { let s = ""; for (let i = 0; i < n; i++) s += Math.floor(r() * 16).toString(16); return s; }
+
+const traces = (() => {
+  const r = rng(99), out = [];
+  for (let i = 0; i < 40; i++) {
+    const err = r() < 0.25, slow = r() < 0.5;
+    const dur = Math.round((slow ? 600 + r() * 2400 : 40 + r() * 400) * (err ? 1.4 : 1));
+    out.push({ id: hex(r, 32), start: NOW - Math.floor(r() * 3_600_000), dur, spans: 6 + Math.floor(r() * 9), err, root: ["POST /checkout", "GET /search", "GET /products", "POST /cart"][Math.floor(r() * 4)], services: err || slow ? ["shop-api", "checkout", "payments"] : ["shop-api"] });
+  }
+  return out.sort((a, b) => b.dur - a.dur);
+})();
+function waterfall(tr) {
+  const r = rng(parseInt(tr.id.slice(0, 7), 16)), D = tr.dur;
+  const s = [{ d: 0, svc: "shop-api", name: tr.root, off: 0, dur: D }];
+  s.push({ d: 1, svc: "shop-api", name: "auth.verify", off: 2, dur: 6 });
+  s.push({ d: 1, svc: "checkout", name: "checkout.place", off: 10, dur: D - 18 });
+  s.push({ d: 2, svc: "checkout", name: "SELECT cart_items", off: 14, dur: 9 + r() * 12 });
+  s.push({ d: 2, svc: "payments", name: "payments.authorize", off: 40, dur: D * 0.72, err: tr.err });
+  s.push({ d: 3, svc: "payments", name: "POST provider/charge", off: 46, dur: D * 0.66, err: tr.err });
+  s.push({ d: 2, svc: "checkout", name: "INSERT orders", off: D * 0.8, dur: 12 + r() * 10 });
+  s.push({ d: 1, svc: "shop-api", name: "render.response", off: D - 7, dur: 5 });
+  return s;
+}
+
+// ---------------------------------------------------------------- formatting
+const fmtTime = (t, withSec) => { const d = new Date(t); const p = n => String(n).padStart(2, "0"); return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}${withSec ? ":" + p(d.getUTCSeconds()) : ""}`; };
+const fmtDayTime = t => { const d = new Date(t); return `${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getUTCDay()]} ${fmtTime(t)}`; };
+function fmtVal(v, unit) {
+  if (v == null || !isFinite(v)) return "–";
+  if (unit === "s") return v < 1 ? `${(v * 1000).toFixed(v < 0.01 ? 1 : 0)} ms` : `${v.toFixed(2)} s`;
+  if (unit === "%") return `${v.toFixed(v < 10 ? 2 : 1)}%`;
+  if (unit === "ms") return v < 1000 ? `${Math.round(v)} ms` : `${(v / 1000).toFixed(2)} s`;
+  if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1)}k`;
+  return v < 10 ? v.toFixed(2) : v.toFixed(1);
+}
+/// Axis labels share one precision, picked from the tick step (0, 5, 10 · 0.25, 0.50 …).
+function fmtTick(v, step, unit) {
+  if (unit === "s") return v === 0 ? "0" : v < 1 ? `${(v * 1000).toFixed(step * 1000 < 1 ? 1 : 0)} ms` : `${v.toFixed(Math.max(0, -Math.floor(Math.log10(step))))} s`;
+  if (unit === "ms") return v >= 1000 ? `${(v / 1000).toFixed(step >= 1000 ? 0 : 1)} s` : `${Math.round(v)} ms`;
+  if (v >= 1000 && step >= 100) return `${+(v / 1000).toFixed(step >= 1000 ? 0 : 1)}k`;
+  const dec = step >= 1 ? 0 : Math.min(3, -Math.floor(Math.log10(step)) + (step * Math.pow(10, -Math.floor(Math.log10(step))) % 1 ? 1 : 0));
+  return v.toFixed(dec) + (unit === "%" ? "%" : "");
+}
+function niceTicks(max, n = 4) {
+  if (max <= 0) return [0, 1];
+  const raw = max / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+  const out = []; for (let v = 0; v <= max + step * 0.001; v += step) out.push(+v.toFixed(10));
+  if (out[out.length - 1] < max) out.push(+(out[out.length - 1] + step).toFixed(10));
+  return out;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+// ---------------------------------------------------------------- charts (SVG, crosshair shared across panels)
+const charts = new Set();
+function lineChart(el, legendEl, series, opts = {}) {
+  const c = { el, legendEl, series, opts, hidden: new Set() };
+  charts.add(c); drawLine(c);
+  if (legendEl) renderLegend(c);
+  return c;
+}
+function renderLegend(c) {
+  if (!c.legendEl) return;
+  if (c.series.length < 2) { c.legendEl.innerHTML = ""; return; }
+  c.legendEl.innerHTML = c.series.map((s, i) => `<button type="button" data-i="${i}" class="${c.hidden.has(i) ? "off" : ""}" aria-pressed="${!c.hidden.has(i)}"><i style="background:${col(s.color ?? i)}"></i>${esc(s.name)}</button>`).join("");
+  c.legendEl.querySelectorAll("button").forEach(b => b.onclick = () => { const i = +b.dataset.i; c.hidden.has(i) ? c.hidden.delete(i) : c.hidden.add(i); renderLegend(c); drawLine(c); });
+}
+function drawLine(c) {
+  const { el, series, opts } = c;
+  const { ts } = grid();
+  const W = Math.max(280, el.clientWidth), H = el.clientHeight || 220;
+  const m = { l: 44, r: 10, t: 8, b: 22 };
+  const vis = series.map((s, i) => ({ ...s, i })).filter(s => !c.hidden.has(s.i));
+  const maxV = Math.max(opts.threshold ?? 0, ...vis.flatMap(s => s.values), 0.0001);
+  const ticks = niceTicks(maxV);
+  const yMax = ticks[ticks.length - 1];
+  const x = i => m.l + (i / (ts.length - 1)) * (W - m.l - m.r);
+  const y = v => H - m.b - (v / yMax) * (H - m.t - m.b);
+  const xt = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(f * (ts.length - 1)));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label || "time series")}">`;
+  svg += `<g class="axis">${ticks.map(v => `<line class="grid-line" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/><text x="${m.l - 6}" y="${y(v) + 3.5}" text-anchor="end">${esc(fmtTick(v, ticks[1] - ticks[0], opts.unit))}</text>`).join("")}`;
+  svg += xt.map(i => `<text x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === ts.length - 1 ? "end" : "middle"}">${fmtTime(ts[i])}</text>`).join("") + `</g>`;
+  if (opts.threshold) svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(opts.threshold)}" y2="${y(opts.threshold)}" stroke="var(--critical)" stroke-dasharray="4 4" stroke-width="1"/><text x="${W - m.r}" y="${y(opts.threshold) - 5}" text-anchor="end" fill="var(--critical)" font-size="10.5">alert ${esc(fmtVal(opts.threshold, opts.unit))}</text>`;
+  if (opts.bars) {
+    const bw = Math.max(1, (W - m.l - m.r) / ts.length - 2);
+    const stack = new Array(ts.length).fill(0);
+    vis.forEach(s => { s.values.forEach((v, i) => { const y0 = y(stack[i]), y1 = y(stack[i] + v); stack[i] += v; if (y0 - y1 > 0.5) svg += `<rect x="${x(i) - bw / 2}" y="${y1}" width="${bw}" height="${Math.max(0, y0 - y1 - 1)}" fill="${col(s.color ?? s.i)}"/>`; }); });
+  } else {
+    vis.forEach(s => {
+      const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+      if (vis.length === 1) svg += `<path d="${d}L${x(ts.length - 1)},${y(0)}L${x(0)},${y(0)}Z" fill="${col(s.color ?? s.i)}" opacity="0.12"/>`;
+      svg += `<path d="${d}" fill="none" stroke="${col(s.color ?? s.i)}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      const last = s.values.length - 1;
+      svg += `<circle cx="${x(last)}" cy="${y(s.values[last])}" r="3.5" fill="${col(s.color ?? s.i)}" stroke="var(--surface)" stroke-width="2"/>`;
+    });
+  }
+  svg += `<g class="xh"></g><rect class="hit" x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/></svg><div class="tip" hidden></div>`;
+  el.innerHTML = svg;
+  c.geom = { x, y, m, W, H, ts, vis };
+  const hit = el.querySelector(".hit");
+  hit.onmousemove = e => { const r = hit.getBoundingClientRect(); const f = (e.clientX - r.left) / r.width; setHover(Math.round(f * (ts.length - 1)), c); };
+  hit.onmouseleave = () => setHover(null, c);
+  if (state.hoverT != null) paintCrosshair(c, null);
+}
+function setHover(idx, src) { state.hoverT = idx; charts.forEach(c => paintCrosshair(c, src)); }
+function paintCrosshair(c, src) {
+  if (!c.geom || !c.el.isConnected) return;
+  const g = c.el.querySelector(".xh"), tip = c.el.querySelector(".tip");
+  if (!g) return;
+  const { x, y, m, H, ts, vis } = c.geom, i = state.hoverT;
+  if (i == null || i < 0 || i >= ts.length) { g.innerHTML = ""; tip.hidden = true; return; }
+  g.innerHTML = `<line x1="${x(i)}" x2="${x(i)}" y1="${m.t}" y2="${H - m.b}" stroke="var(--ink-3)" stroke-width="1"/>` + (c.opts.bars ? "" : vis.map(s => `<circle cx="${x(i)}" cy="${y(s.values[i])}" r="4" fill="${col(s.color ?? s.i)}" stroke="var(--surface)" stroke-width="2"/>`).join(""));
+  if (src !== c) { tip.hidden = true; return; }
+  const rows = vis.map(s => ({ s, v: s.values[i] })).sort((a, b) => b.v - a.v);
+  tip.innerHTML = `<div class="t num">${fmtDayTime(ts[i])} UTC</div>` + rows.map(({ s, v }) => `<div class="row"><span><i style="background:${col(s.color ?? s.i)}"></i>${esc(s.name)}</span><b class="num">${esc(fmtVal(v, c.opts.unit))}</b></div>`).join("");
+  tip.hidden = false;
+  const left = x(i) + 14, w = tip.offsetWidth;
+  tip.style.left = `${left + w > c.geom.W ? x(i) - w - 14 : left}px`; tip.style.top = `10px`;
+}
+function sparkline(el, values, color) {
+  const W = Math.max(120, el.clientWidth), H = el.clientHeight || 38, max = Math.max(...values, 0.0001);
+  const x = i => (i / (values.length - 1)) * (W - 6) + 1, y = v => H - 3 - (v / max) * (H - 8);
+  const d = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="100%" aria-hidden="true"><path d="${d}L${x(values.length - 1)},${H}L${x(0)},${H}Z" fill="${color}" opacity="0.12"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6"/><circle cx="${x(values.length - 1)}" cy="${y(values[values.length - 1])}" r="3" fill="${color}"/></svg>`;
+}
+
+// ---------------------------------------------------------------- TQS documents (what each panel stores)
+function tqsFor(p) {
+  const time = { from: `-${state.range}`, step: state.range === "15m" ? "15s" : undefined };
+  const vars = state.svc === "all" ? undefined : { service: state.svc };
+  const svcMatch = state.svc === "all" ? [] : [{ label: "job", op: "=", value: "$service" }];
+  const doc = { tqs: "3", id: p.id, title: p.title, kind: p.kind || "timeseries", time, vars };
+  Object.assign(doc, p.tqs(svcMatch));
+  return JSON.parse(JSON.stringify(doc));
+}
+function highlight(json) {
+  return esc(JSON.stringify(json, null, 2)).replace(/(&quot;[^&]*?&quot;)(\s*:)?/g, (m, s, colon) => colon ? `<span class="k">${s}</span>${colon}` : `<span class="s">${s}</span>`).replace(/\b(-?\d+(\.\d+)?)\b(?![^<]*>)/g, '<span class="n">$1</span>').replace(/\b(true|false|null)\b/g, '<span class="b">$1</span>');
+}
+
+// ---------------------------------------------------------------- dashboard panels
+const H = "http_server_request_duration_seconds";
+const DEFAULT_PANELS = () => [
+  { id: "rps", title: "Requests", kind: "table", span: 3, type: "stat", unit: "/s", tqs: m => ({ queries: [{ name: "r", metric: `${H}_count`, match: m, fn: { op: "rate", window: "5m" }, agg: { op: "sum" }, fill: "zero" }] }),
+    data: () => { const r = reqByRoute(); return r[0].values.map((_, i) => sum(r.map(s => s.values[i]))); }, color: "var(--s1)" },
+  { id: "errors", title: "Error rate", kind: "table", span: 3, type: "stat", unit: "%", warn: 1, crit: 2, tqs: m => ({ queries: [
+      { name: "e", metric: `${H}_count`, match: [...m, { label: "http_response_status_code", op: "=~", value: "5.." }], fn: { op: "rate", window: "5m" }, agg: { op: "sum" }, fill: "zero" },
+      { name: "a", metric: `${H}_count`, match: m, fn: { op: "rate", window: "5m" }, agg: { op: "sum" } }], formulas: [{ name: "pct", expr: "100 * e / greatest(a, 0.001)" }] }),
+    data: () => errorPct()[0].values, color: "var(--s2)" },
+  { id: "p95", title: "Latency p95", kind: "table", span: 3, type: "stat", unit: "s", warn: 0.5, crit: 1, tqs: m => ({ queries: [{ name: "p", metric: H, match: m, fn: { op: "histogram_quantile", q: 0.95, window: "5m" }, agg: { op: "sum" } }] }),
+    data: () => latency()[1].values, color: "var(--s7)" },
+  { id: "orders", title: "Orders placed", kind: "table", span: 3, type: "stat", unit: "/min", tqs: m => ({ queries: [{ name: "o", metric: "shop_orders_total", match: m, fn: { op: "increase", window: "1m" }, agg: { op: "sum" }, fill: "zero" }] }),
+    data: () => shape(77, 9.5 * svcFactor(), { incident: -0.4 }), color: "var(--s3)" },
+  { id: "rps-route", title: "Requests by route", sub: "rate(5m), sum by route", span: 6, type: "line", unit: "", tqs: m => ({ queries: [{ name: "r", metric: `${H}_count`, match: m, fn: { op: "rate", window: "5m" }, agg: { op: "sum", by: ["http_route"] } }] }),
+    data: () => reqByRoute() },
+  { id: "latency", title: "Latency", sub: "histogram_quantile p50 / p95 / p99", span: 6, type: "line", unit: "s", threshold: 1, tqs: m => ({ queries: [0.5, 0.95, 0.99].map((q, i) => ({ name: ["p50", "p95", "p99"][i], metric: H, match: m, fn: { op: "histogram_quantile", q, window: "5m" }, agg: { op: "sum" } })) }),
+    data: () => latency() },
+  { id: "routes", title: "Top routes", sub: "last 5 min", kind: "table", span: 6, type: "routes", tqs: m => ({ queries: [
+      { name: "rps", metric: `${H}_count`, match: m, fn: { op: "rate", window: "5m" }, agg: { op: "sum", by: ["http_route"] } },
+      { name: "p95", metric: H, match: m, fn: { op: "histogram_quantile", q: 0.95, window: "5m" }, agg: { op: "sum", by: ["http_route"] } }], top: { n: 10, rank: "last" } }) },
+  { id: "err-logs", title: "Recent errors", sub: "severity ≥ WARN", kind: "log_search", span: 6, type: "logs", tqs: m => ({ time: { from: "-15m" }, search: { logs: [{ field: "severity_number", op: ">=", value: 13 }, ...(m.length ? [{ field: "service_name", op: "=", value: "$service" }] : [])], order: "desc" }, limit: 50 }) },
+  { id: "slow", title: "Slowest traces", sub: "click a row for the waterfall", kind: "trace_search", span: 12, type: "traces", tqs: m => ({ search: { spans: m.length ? [{ field: "service_name", op: "=", value: "$service" }] : [], trace: [{ field: "duration_ms", op: ">", value: 500 }], order: "duration_desc" }, limit: 20 }) },
+];
+state.panels = DEFAULT_PANELS();
+const DASHES = [{ id: "shop", title: "Shop overview" }, { id: "self", title: "tiny-eye self-monitoring" }];
+
+function panelShell(p) {
+  const el = document.createElement("div");
+  el.className = `panel span${p.span}${p.type === "stat" ? " stat" : ""}`;
+  el.innerHTML = `<header><h2>${esc(p.title)}</h2>${p.sub ? `<span class="sub">${esc(p.sub)}</span>` : ""}<div class="tools"><button class="icon-btn" type="button" data-tqs title="Show the TQS document">{ }</button>${p.custom ? `<button class="icon-btn" type="button" data-remove title="Remove panel">×</button>` : ""}</div></header><div class="body"></div>`;
+  el.querySelector("[data-tqs]").onclick = () => openDrawer(`${p.title} · TQS`, `<p class="hint" style="margin-top:0">Stored in <span class="mono">dashboards/shop.yaml</span>, validated with <span class="mono">POST /api/v1/validate</span>, run with <span class="mono">POST /api/v1/query</span>.</p><pre class="code">${highlight(tqsFor(p))}</pre>`);
+  const rm = el.querySelector("[data-remove]");
+  if (rm) rm.onclick = () => { state.panels = state.panels.filter(x => x !== p); renderDashboard(); toast(`Removed "${p.title}"`); };
+  return el;
+}
+function renderDashboard() {
+  charts.clear();
+  const g = document.getElementById("dashGrid");
+  g.innerHTML = "";
+  if (state.dash === "self") { renderSelf(g); return; }
+  for (const p of state.panels) {
+    const el = panelShell(p), body = el.querySelector(".body");
+    g.appendChild(el);
+    if (p.type === "stat") {
+      const vals = p.data(), last = vals[vals.length - 1], prev = vals[Math.floor(vals.length * 0.5)];
+      const delta = prev ? (last - prev) / prev * 100 : 0;
+      const level = p.crit && last >= p.crit ? "crit" : p.warn && last >= p.warn ? "warn" : null;
+      const shown = p.unit === "s" ? fmtVal(last, "s").split(" ") : p.unit === "%" ? [last.toFixed(2), "%"] : [fmtVal(last), p.unit];
+      body.innerHTML = `<div class="value num">${esc(shown[0])}<span class="unit">${esc(shown[1] || "")}</span></div>
+        <div class="meta"><span class="num">${delta >= 0 ? "▲" : "▼"} ${Math.abs(delta).toFixed(0)}% vs mid-range</span>${level ? `<span class="pill ${level}"><span class="dot" style="background:var(--${level === "crit" ? "critical" : "warning"})"></span>${level === "crit" ? "Critical" : "Warning"}</span>` : `<span class="pill good"><span class="dot" style="background:var(--good)"></span>OK</span>`}</div>
+        <div class="spark"></div>`;
+      sparkline(body.querySelector(".spark"), vals, p.color);
+    } else if (p.type === "line") {
+      body.innerHTML = `<div class="chart"></div><div class="legend"></div>`;
+      lineChart(body.querySelector(".chart"), body.querySelector(".legend"), p.data(), { unit: p.unit, threshold: p.threshold, label: p.title });
+    } else if (p.type === "routes") {
+      const r = reqByRoute(), lat = latency()[1].values;
+      const rows = r.map((s, i) => ({ route: s.name, rps: s.values[s.values.length - 1], p95: lat[lat.length - 1] * (s.name === "/checkout" ? 1.9 : [0.6, 0.9, 0.7, 1, 0.8][i]), err: s.name === "/checkout" ? 7.8 : [0.1, 0.3, 0.2, 0, 0.4][i] })).sort((a, b) => b.rps - a.rps);
+      const maxR = Math.max(...rows.map(x => x.rps));
+      body.innerHTML = `<div class="scroll-x"><table><thead><tr><th>Route</th><th class="r">Req/s</th><th class="r">p95</th><th class="r">Errors</th></tr></thead><tbody>${rows.map(x => `<tr><td class="mono">${esc(x.route)}</td><td class="r"><div class="bar-cell"><span class="b" style="width:${Math.round(x.rps / maxR * 70)}px"></span><span class="num">${x.rps.toFixed(1)}</span></div></td><td class="r num">${esc(fmtVal(x.p95, "s"))}</td><td class="r">${x.err >= 2 ? `<span class="pill crit num"><span class="dot" style="background:var(--critical)"></span>${x.err.toFixed(1)}%</span>` : `<span class="num">${x.err.toFixed(1)}%</span>`}</td></tr>`).join("")}</tbody></table></div>`;
+    } else if (p.type === "logs") {
+      const rows = logs.filter(l => l.sev !== "INFO" && (state.svc === "all" || l.svc === state.svc)).slice(0, 7);
+      body.innerHTML = logTable(rows, true);
+    } else if (p.type === "traces") {
+      body.innerHTML = `<div class="scroll-x">${traceTable(traces.filter(t => state.svc === "all" || t.services.includes(state.svc)).slice(0, 6))}</div>`;
+      wireTraceRows(body);
+    } else if (p.type === "custom") {
+      body.innerHTML = p.viz === "stat" ? "" : `<div class="chart"></div><div class="legend"></div>`;
+      if (p.viz === "stat") { const v = p.data()[0].values; body.innerHTML = `<div class="value num" style="font-size:28px;font-weight:650">${esc(fmtVal(v[v.length - 1], p.unit))}</div><div class="spark"></div>`; sparkline(body.querySelector(".spark"), v, "var(--s1)"); }
+      else lineChart(body.querySelector(".chart"), body.querySelector(".legend"), p.data(), { unit: p.unit, bars: p.viz === "bars", label: p.title });
+    }
+  }
+}
+function renderSelf(g) {
+  const panels = [
+    { title: "Ingested rows / s by table", s: [["metrics_points", 2900], ["spans", 640], ["logs", 210], ["metrics_series", 12]] },
+    { title: "Hot tail size", unit: "", s: [["bytes (MB)", 38]] },
+  ];
+  panels.forEach((p, k) => {
+    const el = document.createElement("div"); el.className = "panel span6";
+    el.innerHTML = `<header><h2>${esc(p.title)}</h2></header><div class="body"><div class="chart"></div><div class="legend"></div></div>`;
+    g.appendChild(el);
+    lineChart(el.querySelector(".chart"), el.querySelector(".legend"), p.s.map(([n, b], i) => ({ name: n, values: shape(200 + k * 10 + i, b) })), { label: p.title });
+  });
+}
+
+function logTable(rows, compact) {
+  return `<div class="scroll-x"><table><thead><tr><th>Time</th><th>Level</th>${compact ? "" : "<th>Service</th>"}<th>Message</th></tr></thead><tbody>${rows.map(l => `<tr class="log-row"><td class="num mono" style="white-space:nowrap;color:var(--ink-3)">${fmtTime(l.t, true)}</td><td><span class="sev ${l.sev}">${l.sev}</span></td>${compact ? "" : `<td class="mono">${esc(l.svc)}</td>`}<td class="body-text">${compact ? `<span style="color:var(--ink-3)">${esc(l.svc)}</span> ` : ""}${esc(l.body)}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No lines match.</td></tr>`}</tbody></table></div>`;
+}
+function traceTable(rows) {
+  const max = Math.max(...rows.map(t => t.dur), 1);
+  return `<table><thead><tr><th>Trace</th><th>Root span</th><th>Services</th><th class="r">Spans</th><th style="min-width:180px">Duration</th></tr></thead><tbody>${rows.map(t => `<tr class="click" data-trace="${t.id}" tabindex="0"><td class="mono">${t.id.slice(0, 12)}… ${t.err ? `<span class="err-badge">● error</span>` : ""}</td><td>${esc(t.root)}</td><td class="mono" style="color:var(--ink-2)">${esc(t.services.join(", "))}</td><td class="r num">${t.spans}</td><td><div class="dur"><div class="track"><div class="fill" style="width:${(t.dur / max * 100).toFixed(1)}%;background:${t.err ? "var(--critical)" : "var(--s1)"}"></div></div><span class="num" style="width:58px;text-align:right">${esc(fmtVal(t.dur, "ms"))}</span></div></td></tr>`).join("") || `<tr><td colspan="5" class="hint">No traces match.</td></tr>`}</tbody></table>`;
+}
+function wireTraceRows(root) {
+  root.querySelectorAll("[data-trace]").forEach(tr => { const open = () => openWaterfall(traces.find(t => t.id === tr.dataset.trace)); tr.onclick = open; tr.onkeydown = e => { if (e.key === "Enter") open(); }; });
+}
+function openWaterfall(tr) {
+  const spans = waterfall(tr), D = tr.dur, svcCol = s => col(SERVICES.indexOf(s));
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => `<span style="left:${f * 100}%;${f === 0 ? "transform:none" : f === 1 ? "transform:translateX(-100%)" : ""}">${esc(fmtVal(D * f, "ms"))}</span>`).join("");
+  const rows = spans.map(s => `<div class="name" style="padding-left:${s.d * 14}px"><span class="svc" style="background:${svcCol(s.svc)}"></span>${esc(s.name)}</div><div class="lane"><div class="span" style="left:${(s.off / D * 100).toFixed(2)}%;width:${Math.max(0.3, s.dur / D * 100).toFixed(2)}%;background:${s.err ? "var(--critical)" : svcCol(s.svc)}"><em class="num">${esc(fmtVal(s.dur, "ms"))}${s.err ? " · error" : ""}</em></div></div>`).join("");
+  const legend = SERVICES.map((s, i) => `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-size:12px;color:var(--ink-2)"><span class="svc" style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${col(i)}"></span>${s}</span>`).join("");
+  const doc = { tqs: "3", id: "waterfall", kind: "trace", trace_id: tr.id, time: { from: "-1h" } };
+  openDrawer(`Trace ${tr.id.slice(0, 16)}…`, `<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-bottom:14px;font-size:13px"><span><b class="num">${esc(fmtVal(D, "ms"))}</b> total</span><span><b class="num">${spans.length}</b> spans</span><span>${tr.err ? `<span class="pill crit"><span class="dot" style="background:var(--critical)"></span>Error in payments.authorize</span>` : `<span class="pill good"><span class="dot" style="background:var(--good)"></span>No errors</span>`}</span></div>
+    <div style="margin-bottom:10px">${legend}</div>
+    <div class="wf"><div></div><div class="ticks">${ticks}</div>${rows}</div>
+    <p class="hint" style="margin-top:18px">Self time, orphan spans and cross-region spans come from the same query. TQS:</p><pre class="code">${highlight(doc)}</pre>`);
+}
+
+// ---------------------------------------------------------------- explore (manual view builder)
+const CATALOG = [
+  { name: H, type: "histogram", labels: ["job", "http_route", "http_request_method", "http_response_status_code"] },
+  { name: `${H}_count`, type: "counter", labels: ["job", "http_route", "http_request_method", "http_response_status_code"] },
+  { name: "shop_orders_total", type: "counter", labels: ["job", "payment_method"] },
+  { name: "shop_cart_items", type: "gauge", labels: ["job", "instance"] },
+  { name: "process_memory_usage_bytes", type: "gauge", labels: ["job", "instance"] },
+  { name: "payments_authorize_duration_seconds", type: "histogram", labels: ["job", "outcome", "payment_method"] },
+  { name: "db_client_operation_duration_seconds", type: "histogram", labels: ["job", "db_operation_name"] },
+];
+const SERIES_COUNT = { [H]: 26, [`${H}_count`]: 26, shop_orders_total: 6, shop_cart_items: 3, process_memory_usage_bytes: 3, payments_authorize_duration_seconds: 18, db_client_operation_duration_seconds: 9 };
+const VALUES = { job: SERVICES, http_route: ROUTES, http_request_method: ["GET", "POST"], http_response_status_code: ["200", "201", "404", "502"], payment_method: ["card", "paypal"], instance: ["pod-a", "pod-b", "pod-c"], db_operation_name: ["SELECT", "INSERT", "UPDATE"], outcome: ["ok", "declined", "timeout"] };
+const FNS = { counter: [["rate", "per-second rate"], ["increase", "increase over the window"], ["last", "latest value"]], gauge: [["last", "latest value"], ["avg_over_time", "average over the window"], ["max_over_time", "maximum over the window"]], histogram: [["p50", "median"], ["p95", "95th percentile"], ["p99", "99th percentile"]] };
+// Any builder edit makes the builder's query the current one again (drops a TQS-only document).
+const ex = new Proxy({ metric: `${H}_count`, fn: "rate", window: "5m", agg: "sum", by: ["http_route"], filters: [{ label: "job", op: "=", value: "shop-api" }], q: "", hidden: new Set() }, {
+  set(t, k, v) { t[k] = v; if (k !== "q" && k !== "hidden") exExtra = null; return true; },
+});
+const metricOf = () => CATALOG.find(c => c.name === ex.metric);
+const unitOf = m => m.type === "histogram" ? "s" : m.name.endsWith("_bytes") ? "" : "";
+function exDoc() {
+  const m = metricOf(), isHist = m.type === "histogram";
+  const fn = isHist ? { op: "histogram_quantile", q: { p50: 0.5, p95: 0.95, p99: 0.99 }[ex.fn], window: ex.window } : ex.fn === "last" ? { op: "last" } : { op: ex.fn, window: ex.window };
+  const query = { name: "a", metric: isHist ? m.name.replace(/_count$/, "") : m.name };
+  if (ex.filters.length) query.match = ex.filters.map(f => ({ label: f.label, op: f.op, value: f.value }));
+  query.fn = fn;
+  query.agg = ex.by.length ? { op: ex.agg, by: ex.by } : { op: ex.agg };
+  return { tqs: "3", id: "explore", kind: state.exViz === "stat" ? "table" : "timeseries", time: { from: `-${state.range}` }, queries: [query] };
+}
+function cartesian(lists) { return lists.reduce((acc, l) => acc.flatMap(a => l.map(v => [...a, v])), [[]]); }
+function exSeries() {
+  const m = metricOf(), isHist = m.type === "histogram";
+  const base = isHist ? ({ p50: 0.045, p95: 0.21, p99: 0.48 }[ex.fn]) : m.type === "gauge" ? (m.name.includes("bytes") ? 180e6 : 40) : ex.fn === "increase" ? 600 : 9;
+  const allowed = l => (VALUES[l] || ["a", "b"]).filter(v => ex.filters.every(f => f.label !== l || (f.op === "=" ? f.value === v : f.op === "!=" ? f.value !== v : true)));
+  const keys = ex.by.length ? cartesian(ex.by.map(allowed)) : [[]];
+  const seed = [...ex.metric].reduce((a, c) => a + c.charCodeAt(0), 0) + ex.fn.length * 13;
+  return keys.slice(0, 8).map((k, i) => ({
+    name: k.length ? ex.by.map((l, j) => `${l}=${k[j]}`).join(", ") : `${ex.agg}(${ex.fn})`,
+    values: shape(seed + i * 7, base * [1, 0.72, 0.55, 0.41, 0.33, 0.26, 0.2, 0.15][i], { incident: isHist ? 1.3 : 0, noise: 0.1 }),
+  }));
+}
+
+// Popovers: one at a time, anchored under the pill that opened it.
+let openPop = null;
+function closePop() { if (openPop) { openPop.el.remove(); openPop.btn.setAttribute("aria-expanded", "false"); openPop = null; } }
+function popover(btn, build) {
+  const was = openPop?.btn === btn; closePop(); if (was) return;
+  const el = document.createElement("div"); el.className = "pop"; el.setAttribute("role", "dialog");
+  document.body.appendChild(el);
+  const place = () => { const r = btn.getBoundingClientRect(); const w = el.offsetWidth; el.style.top = `${r.bottom + window.scrollY + 6}px`; el.style.left = `${Math.max(16, Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - w - 16))}px`; };
+  build(el, () => { place(); });
+  place(); btn.setAttribute("aria-expanded", "true"); openPop = { el, btn };
+  el.querySelector("input, select, button")?.focus();
+}
+document.addEventListener("mousedown", e => { if (openPop && !openPop.el.contains(e.target) && !openPop.btn.contains(e.target)) closePop(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && openPop) { const b = openPop.btn; closePop(); b.focus(); } });
+
+function pill(key, value, { mono = false, ghost = false, removable = false } = {}) {
+  const b = document.createElement("button"); b.type = "button"; b.className = `pill-btn${ghost ? " ghost" : ""}`; b.setAttribute("aria-haspopup", "dialog"); b.setAttribute("aria-expanded", "false");
+  b.innerHTML = `${key ? `<span class="k">${esc(key)}</span>` : ""}<span class="v${mono ? " m" : ""}">${value}</span>${removable ? `<span class="x" role="button" aria-label="Remove">×</span>` : `<span class="caret"></span>`}`;
+  return b;
+}
+function word(t) { const s = document.createElement("span"); s.className = "qb-word"; s.textContent = t; return s; }
+
+function renderQueryBar() {
+  const m = metricOf(), row = document.getElementById("qbRow"), isHist = m.type === "histogram";
+  if (!FNS[m.type].some(([f]) => f === ex.fn)) ex.fn = FNS[m.type][0][0];
+  ex.by = ex.by.filter(l => m.labels.includes(l));
+  ex.filters = ex.filters.filter(f => m.labels.includes(f.label));
+  row.innerHTML = "";
+  // metric
+  const mp = pill("metric", esc(m.name), { mono: true });
+  mp.onclick = () => popover(mp, (el, reflow) => {
+    const draw = () => {
+      const list = CATALOG.filter(c => c.name.includes(ex.q.trim().toLowerCase()));
+      el.querySelector(".opt-list").innerHTML = list.map(c => `<button type="button" class="opt ${c.name === ex.metric ? "on" : ""}" data-metric="${c.name}"><span class="name">${esc(c.name)}</span><span class="meta"><span class="badge">${c.type}</span> ${SERIES_COUNT[c.name]} series</span></button>`).join("") || `<p class="hint" style="margin:6px 8px">No metric matches “${esc(ex.q)}”.</p>`;
+      el.querySelectorAll("[data-metric]").forEach(x => x.onclick = () => { ex.metric = x.dataset.metric; ex.hidden.clear(); closePop(); renderExplore(); });
+      reflow();
+    };
+    el.innerHTML = `<div><span class="lbl">Metric · ${CATALOG.length} in the last 24 h</span><input class="input" id="mq" placeholder="Filter metrics" value="${esc(ex.q)}" autocomplete="off"></div><div class="opt-list" role="listbox"></div>`;
+    el.querySelector("#mq").oninput = e => { ex.q = e.target.value; draw(); };
+    draw();
+  });
+  row.append(mp);
+  // function + window
+  const fnLabel = FNS[m.type].find(([f]) => f === ex.fn)[0] + (ex.fn === "last" ? "" : ` · ${ex.window}`);
+  const fp = pill(isHist ? "quantile" : "function", esc(fnLabel));
+  fp.onclick = () => popover(fp, el => {
+    el.innerHTML = `<div><span class="lbl">${isHist ? "Quantile" : "Function"}</span><div class="opt-list" style="max-height:none">${FNS[m.type].map(([f, d]) => `<button type="button" class="opt ${f === ex.fn ? "on" : ""}" data-fn="${f}"><span class="name">${f}</span><span class="meta">${d}</span></button>`).join("")}</div></div>
+      <div><span class="lbl">Window</span><div class="seg">${["1m", "2m", "5m", "15m", "1h"].map(w => `<button type="button" class="${w === ex.window ? "on" : ""}" data-win="${w}">${w}</button>`).join("")}</div></div>`;
+    el.querySelectorAll("[data-fn]").forEach(x => x.onclick = () => { ex.fn = x.dataset.fn; closePop(); renderExplore(); });
+    el.querySelectorAll("[data-win]").forEach(x => x.onclick = () => { ex.window = x.dataset.win; closePop(); renderExplore(); });
+  });
+  row.append(fp);
+  // aggregate by
+  const ap = pill("", `${esc(ex.agg)}${ex.by.length ? ` <span class="qb-word">by</span> <span class="m" style="font-family:var(--mono);font-weight:500">${esc(ex.by.join(", "))}</span>` : " <span class=\"qb-word\">of all series</span>"}`);
+  ap.onclick = () => popover(ap, el => {
+    el.innerHTML = `<div><span class="lbl">Aggregate</span><div class="seg">${["sum", "avg", "max", "min", "count"].map(a => `<button type="button" class="${a === ex.agg ? "on" : ""}" data-agg="${a}">${a}</button>`).join("")}</div></div>
+      <div><span class="lbl">Group by</span>${m.labels.map(l => `<label class="check"><input type="checkbox" data-by="${l}" ${ex.by.includes(l) ? "checked" : ""}> ${esc(l)}</label>`).join("")}</div>`;
+    el.querySelectorAll("[data-agg]").forEach(x => x.onclick = () => { ex.agg = x.dataset.agg; renderExplore(); });
+    el.querySelectorAll("[data-by]").forEach(x => x.onchange = () => { const l = x.dataset.by; ex.by = x.checked ? [...ex.by, l] : ex.by.filter(y => y !== l); ex.hidden.clear(); renderExplore(true); });
+  });
+  row.append(word("aggregate"), ap);
+  // filters
+  row.append(word(ex.filters.length ? "where" : ""));
+  ex.filters.forEach((f, i) => {
+    const p = pill("", `<span class="m" style="font-family:var(--mono);font-weight:500">${esc(f.label)} ${esc(f.op)} ${esc(f.value)}</span>`, { removable: true });
+    p.onclick = e => { if (e.target.classList.contains("x")) { ex.filters.splice(i, 1); closePop(); renderExplore(); return; } filterPop(p, i); };
+    row.append(p);
+  });
+  const add = pill("", "+ Filter", { ghost: true });
+  add.onclick = () => filterPop(add, -1);
+  row.append(add);
+  document.getElementById("qbHint").innerHTML = `Labels and values from <span class="mono">GET /api/v1/catalog</span>. Edits re-run the query.`;
+}
+function filterPop(btn, i) {
+  const m = metricOf();
+  const f = i >= 0 ? { ...ex.filters[i] } : { label: m.labels[0], op: "=", value: (VALUES[m.labels[0]] || [""])[0] };
+  popover(btn, el => {
+    const draw = () => {
+      const vals = VALUES[f.label] || [];
+      el.innerHTML = `<div><span class="lbl">${i >= 0 ? "Edit filter" : "Add filter"}</span><div class="pop-grid">
+        <select id="fl" aria-label="Label">${m.labels.map(l => `<option ${l === f.label ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="fo" aria-label="Operator">${["=", "!=", "=~", "!~"].map(o => `<option ${o === f.op ? "selected" : ""}>${o}</option>`).join("")}</select>
+        ${f.op.includes("~") ? `<input id="fv" aria-label="Regular expression" value="${esc(f.value)}" placeholder="regex, fully anchored">` : `<select id="fv" aria-label="Value">${vals.map(v => `<option ${v === f.value ? "selected" : ""}>${v}</option>`).join("")}</select>`}
+      </div></div><div class="pop-actions"><button class="btn" type="button" id="fc">Cancel</button><button class="btn primary" type="button" id="fa">${i >= 0 ? "Apply" : "Add filter"}</button></div>`;
+      el.querySelector("#fl").onchange = e => { f.label = e.target.value; f.value = (VALUES[f.label] || [""])[0]; draw(); };
+      el.querySelector("#fo").onchange = e => { f.op = e.target.value; draw(); };
+      el.querySelector("#fv").onchange = e => { f.value = e.target.value; };
+      el.querySelector("#fc").onclick = closePop;
+      el.querySelector("#fa").onclick = () => { f.value = el.querySelector("#fv").value; if (i >= 0) ex.filters[i] = f; else ex.filters.push(f); closePop(); ex.hidden.clear(); renderExplore(); };
+    };
+    draw();
+  });
+}
+// ---- Builder | TQS: two editors over one query. The builder edits `ex`; the TQS editor parses
+// the document back into `ex` when the builder can show it, and previews it either way.
+state.exMode = "builder";
+let exExtra = null; // a valid document the builder cannot show (formulas, several queries)
+function renderMode() {
+  const code = state.exMode === "code";
+  document.getElementById("exMode").innerHTML = [["builder", "Builder"], ["code", "TQS"]].map(([k, l]) => `<button type="button" role="tab" aria-selected="${state.exMode === k}" class="${state.exMode === k ? "on" : ""}" data-mode="${k}">${l}</button>`).join("");
+  document.getElementById("exMode").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+  document.getElementById("qbRow").hidden = code;
+  document.getElementById("codeEdit").hidden = !code;
+  document.getElementById("tqsBox").hidden = code;
+  document.getElementById("modeHint").innerHTML = code
+    ? `Edit the document directly; it validates as you type and runs when valid (<span class="mono">⌘/Ctrl ↵</span> runs now). In the app this is a code editor with completion from <span class="mono">tqs.schema.json</span>.`
+    : exExtra ? `This query uses ${esc(exExtra)}, which the builder cannot show. <button class="icon-btn" type="button" id="backToCode">Edit as TQS</button>` : `Pick a metric, then refine it. The TQS below updates as you go.`;
+  document.getElementById("backToCode")?.addEventListener("click", () => setMode("code"));
+}
+function setMode(m) {
+  closePop();
+  if (m === "code" && state.exMode !== "code") {
+    document.getElementById("tqsInput").value = JSON.stringify(exExtra ? lastDoc : exDoc(), null, 2);
+    checkTqs(false);
+  }
+  state.exMode = m;
+  renderExplore();
+  if (m === "code") document.getElementById("tqsInput").focus();
+}
+let lastDoc = null;
+const WIN_RE = /^([0-9]+(ms|s|m|h|d|w)|\$[a-z_][a-z0-9_]*)$/;
+/// A small mirror of the engine's validator for the shapes the builder knows; the engine
+/// (POST /api/v1/validate) stays the authority and returns the same codes and paths.
+function parseTqs(text) {
+  const problems = [], P = (code, path, message) => problems.push({ code, path, message });
+  let d;
+  try { d = JSON.parse(text); } catch (e) { P("schema", "$", `not JSON: ${e.message}`); return { problems }; }
+  if (!d || typeof d !== "object" || Array.isArray(d)) { P("schema", "$", "a TQS document is a JSON object"); return { problems }; }
+  const known = ["tqs", "id", "title", "kind", "time", "vars", "queries", "formulas", "top", "search", "trace_id", "limit"];
+  Object.keys(d).filter(k => !known.includes(k)).forEach(k => P("schema", k, `unknown field "${k}"`));
+  if (d.tqs !== "3") P("version", "tqs", `unsupported version ${JSON.stringify(d.tqs)}; this engine speaks "3"`);
+  if (typeof d.id !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(d.id)) P("id", "id", "id must match ^[a-z][a-z0-9_-]{0,31}$");
+  if (!["timeseries", "table"].includes(d.kind)) P("schema", "kind", d.kind && ["trace_search", "trace", "log_search", "log_patterns"].includes(d.kind) ? `${d.kind} documents open in the Traces and Logs views` : "kind must be timeseries or table here");
+  if (!d.time || d.time.from === undefined) P("time", "time", "time.from is required");
+  if (!Array.isArray(d.queries) || d.queries.length === 0 || d.queries.length > 10) { P("queries", "queries", "1..=10 queries required"); return { problems }; }
+  const q = d.queries[0], m = CATALOG.find(c => c.name === q?.metric || c.name === `${q?.metric}_count` && false);
+  const qp = "queries[0]";
+  if (!m) P("metric", `${qp}.metric`, `${JSON.stringify(q?.metric)} is not in the catalog`);
+  const out = {};
+  if (m) {
+    out.metric = m.name;
+    const f = q.fn;
+    if (!f || !f.op) P("fn", `${qp}.fn`, 'metrics queries need fn (use {"op":"last"} for the latest value)');
+    else if (m.type === "histogram") {
+      if (f.op !== "histogram_quantile") P("fn", `${qp}.fn.op`, `${m.name} is a histogram: use histogram_quantile`);
+      const name = { 0.5: "p50", 0.95: "p95", 0.99: "p99" }[f.q];
+      if (typeof f.q !== "number" || f.q < 0 || f.q > 1) P("q", `${qp}.fn.q`, "histogram_quantile needs q in [0, 1]");
+      else if (!name) P("q", `${qp}.fn.q`, "the builder shows q = 0.5, 0.95 or 0.99");
+      out.fn = name;
+    } else {
+      if (!FNS[m.type].some(([x]) => x === f.op)) P("fn", `${qp}.fn.op`, `${JSON.stringify(f.op)} is not offered for a ${m.type}`);
+      out.fn = f.op;
+    }
+    if (f && f.op !== "last") {
+      if (!f.window) P("window", `${qp}.fn.window`, `${f.op} needs a window`);
+      else if (!WIN_RE.test(f.window)) P("window", `${qp}.fn.window`, `bad duration ${JSON.stringify(f.window)}`);
+      out.window = f.window;
+    }
+    const a = q.agg || {};
+    if (q.agg && !["sum", "avg", "max", "min", "count"].includes(a.op)) P("agg", `${qp}.agg.op`, "agg.op is sum, avg, max, min or count");
+    out.agg = a.op || "sum";
+    out.by = Array.isArray(a.by) ? a.by : [];
+    out.by.forEach((l, i) => { if (!m.labels.includes(l)) P("label", `${qp}.agg.by[${i}]`, `${JSON.stringify(l)} is not a label of ${m.name}`); });
+    out.filters = [];
+    (q.match || []).forEach((x, i) => {
+      if (!m.labels.includes(x.label)) P("label", `${qp}.match[${i}].label`, `${JSON.stringify(x.label)} is not a label of ${m.name}`);
+      if (!["=", "!=", "=~", "!~"].includes(x.op)) P("op", `${qp}.match[${i}].op`, `${JSON.stringify(x.op)}: matchers take =, !=, =~, !~`);
+      if (typeof x.value !== "string") P("schema", `${qp}.match[${i}].value`, "value is a string");
+      out.filters.push({ label: x.label, op: x.op, value: x.value });
+    });
+  }
+  const extra = d.queries.length > 1 ? "several queries" : (d.formulas || []).length ? "formulas" : q && (q.then || q.derive || q.offset || q.having) ? "then/derive/offset/having" : null;
+  return { problems, out, extra, doc: d };
+}
+function checkTqs(apply) {
+  const r = parseTqs(document.getElementById("tqsInput").value);
+  const el = document.getElementById("tqsProblems");
+  el.innerHTML = r.problems.length
+    ? r.problems.map(p => `<div class="problem"><span class="code-badge">${esc(p.code)}</span><span class="path">${esc(p.path)}</span><span>${esc(p.message)}</span></div>`).join("")
+    : `<div class="status-line"><span class="dot" style="background:var(--good)"></span>Valid${r.extra ? ` · uses ${esc(r.extra)}: the preview shows the first query; the builder cannot edit this one` : " · preview updated"}</div>`;
+  if (apply && !r.problems.length) {
+    Object.assign(ex, r.out); ex.hidden.clear();
+    exExtra = r.extra; lastDoc = r.doc;
+    renderPreview();
+  }
+}
+let tqsTimer;
+document.getElementById("tqsInput").addEventListener("input", () => { clearTimeout(tqsTimer); tqsTimer = setTimeout(() => checkTqs(true), 300); });
+document.getElementById("tqsInput").addEventListener("keydown", e => {
+  const t = e.target;
+  if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); const p = t.selectionStart; t.setRangeText("  ", p, t.selectionEnd, "end"); return; }
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); clearTimeout(tqsTimer); checkTqs(true); toast("Ran the TQS document"); }
+});
+
+function renderExplore(keepPop) {
+  if (!keepPop) closePop();
+  renderMode();
+  if (state.exMode === "builder") renderQueryBar();
+  renderPreview();
+}
+function renderPreview() {
+  const m = metricOf(), unit = unitOf(m), series = exSeries();
+  document.getElementById("exViz").innerHTML = ["line", "bars", "stat"].map(v => `<button type="button" class="${v === state.exViz ? "on" : ""}" data-viz="${v}">${v}</button>`).join("");
+  document.getElementById("exViz").querySelectorAll("[data-viz]").forEach(x => x.onclick = () => { state.exViz = x.dataset.viz; renderExplore(); });
+  document.getElementById("exTitle").textContent = `${ex.agg}${ex.by.length ? " by " + ex.by.join(", ") : ""}`;
+  document.getElementById("exSub").textContent = `${series.length} series${ex.by.length && series.length === 8 ? " · first 8 shown" : ""} · last ${state.range}`;
+  const pv = document.getElementById("exPreview");
+  charts.forEach(c => { if (c.el.closest("#exPreview")) charts.delete(c); });
+  const visible = series.map((s, i) => ({ ...s, color: i })).filter((_, i) => !ex.hidden.has(i));
+  if (state.exViz === "stat") {
+    pv.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">${visible.map(s => `<div style="border:1px solid var(--line);border-radius:8px;padding:12px"><div class="hint mono" style="overflow-wrap:anywhere">${esc(s.name)}</div><div class="num" style="font-size:24px;font-weight:650;margin-top:2px">${esc(fmtVal(s.values[s.values.length - 1], unit))}</div><div class="spark" data-sp="${s.color}" style="height:30px"></div></div>`).join("")}</div>`;
+    pv.querySelectorAll("[data-sp]").forEach(el => sparkline(el, series[+el.dataset.sp].values, col(+el.dataset.sp)));
+  } else {
+    pv.innerHTML = `<div class="chart" style="height:300px"></div>`;
+    lineChart(pv.querySelector(".chart"), null, visible, { unit, bars: state.exViz === "bars", label: ex.metric });
+  }
+  const stat = (v, f) => esc(fmtVal(f(v), unit));
+  document.getElementById("exStats").innerHTML = `<table><thead><tr><th>Series</th><th class="r">Last</th><th class="r">Min</th><th class="r">Max</th><th class="r">Avg</th></tr></thead><tbody>${series.map((s, i) => `<tr class="series-row ${ex.hidden.has(i) ? "off" : ""}" data-i="${i}" tabindex="0" aria-pressed="${!ex.hidden.has(i)}" title="Click to show or hide"><td class="mono" style="overflow-wrap:anywhere"><span class="sw" style="background:${col(i)}"></span>${esc(s.name)}</td><td class="r num">${stat(s.values, v => v[v.length - 1])}</td><td class="r num">${stat(s.values, v => Math.min(...v))}</td><td class="r num">${stat(s.values, v => Math.max(...v))}</td><td class="r num">${stat(s.values, v => sum(v) / v.length)}</td></tr>`).join("")}</tbody></table>`;
+  document.querySelectorAll("#exStats [data-i]").forEach(r => { const t = () => { const i = +r.dataset.i; ex.hidden.has(i) ? ex.hidden.delete(i) : ex.hidden.add(i); renderExplore(); }; r.onclick = t; r.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t(); } }; });
+  document.getElementById("exCode").innerHTML = highlight(exDoc());
+}
+document.getElementById("copyTqs").onclick = e => { e.preventDefault(); const t = JSON.stringify(exDoc(), null, 2); navigator.clipboard?.writeText(t).then(() => toast("Copied TQS"), () => toast("Copy is blocked here; select the text instead")); };
+document.getElementById("saveExplore").onclick = () => {
+  const m = metricOf(), doc = exDoc(), unit = unitOf(m), series = exSeries(), viz = state.exViz;
+  const title = `${ex.fn} ${m.name.replace(/_seconds|_total|_count/g, "")} · ${ex.agg}${ex.by.length ? " by " + ex.by.join(", ") : ""}`;
+  state.panels.splice(state.panels.length - 1, 0, { id: `custom-${Date.now()}`, title, sub: "added from Explore", span: viz === "stat" ? 3 : 6, type: "custom", viz, unit, custom: true, data: () => series, tqs: () => ({ queries: doc.queries }) });
+  toast(`Added “${title}” to Shop overview`);
+};
+
+// ---------------------------------------------------------------- traces & logs views
+function renderTraces() {
+  const svc = document.getElementById("trSvc").value, min = +document.getElementById("trMin").value, err = document.getElementById("trErr").checked;
+  const rows = traces.filter(t => (svc === "all" || t.services.includes(svc)) && t.dur >= min && (!err || t.err));
+  const el = document.getElementById("traceTable"); el.innerHTML = traceTable(rows.slice(0, 15)); wireTraceRows(el);
+  charts.forEach(c => { if (c.el.id === "trChart") charts.delete(c); });
+  lineChart(document.getElementById("trChart"), document.getElementById("trChartLegend"), SERVICES.map((s, i) => ({ name: s, values: shape(300 + i, [60, 180, 420][i], { incident: i ? 2.2 : 0.3, noise: 0.25 }) })), { unit: "ms", label: "span p95" });
+}
+["trSvc", "trMin", "trErr"].forEach(id => document.getElementById(id).onchange = renderTraces);
+const logState = { tab: "lines", sev: "all" };
+function renderLogs() {
+  charts.forEach(c => { if (c.el.id === "logVol") charts.delete(c); });
+  lineChart(document.getElementById("logVol"), document.getElementById("logVolLegend"), [["ERROR", 7, 4], ["WARN", 12, 3], ["INFO", 60, 0.1]].map(([n, b, inc], i) => ({ name: n, color: [7, 3, 0][i], values: shape(400 + i, b, { incident: inc }) })), { bars: true, label: "log volume" });
+  document.getElementById("sevSeg").innerHTML = ["all", "ERROR", "WARN", "INFO"].map(s => `<button type="button" class="${s === logState.sev ? "on" : ""}" data-sev="${s}">${s}</button>`).join("");
+  document.getElementById("sevSeg").querySelectorAll("[data-sev]").forEach(b => b.onclick = () => { logState.sev = b.dataset.sev; renderLogs(); });
+  const q = document.getElementById("logQ").value.toLowerCase();
+  const rows = logs.filter(l => (logState.sev === "all" || l.sev === logState.sev) && (!q || l.body.toLowerCase().includes(q)));
+  const el = document.getElementById("logTable");
+  if (logState.tab === "lines") el.innerHTML = logTable(rows.slice(0, 40), false);
+  else {
+    const groups = new Map(); rows.forEach(l => { const g = groups.get(l.pat) || { pat: l.pat, sev: l.sev, n: 0, svcs: new Set(), ex: l.body }; g.n++; g.svcs.add(l.svc); groups.set(l.pat, g); });
+    const list = [...groups.values()].sort((a, b) => b.n - a.n);
+    el.innerHTML = `<table><thead><tr><th class="r">Lines</th><th>Level</th><th>Pattern</th><th>Services</th></tr></thead><tbody>${list.map(g => `<tr><td class="r num">${g.n}</td><td><span class="sev ${g.sev}">${g.sev}</span></td><td class="body-text" style="font-family:var(--mono);font-size:12px">${esc(g.pat).replace(/&lt;\*&gt;/g, '<span class="mask">&lt;*&gt;</span>')}</td><td class="mono">${esc([...g.svcs].join(", "))}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No lines match.</td></tr>`}</tbody></table><p class="hint">Patterns are a deterministic masking of numbers, ids, IPs and quoted strings, so the same template groups the same on every node.</p>`;
+  }
+}
+document.getElementById("logQ").oninput = renderLogs;
+document.querySelectorAll("[data-ltab]").forEach(b => b.onclick = () => { logState.tab = b.dataset.ltab; document.querySelectorAll("[data-ltab]").forEach(x => x.classList.toggle("on", x === b)); renderLogs(); });
+
+// ---------------------------------------------------------------- shell: drawer, toast, routing, toolbar
+function openDrawer(title, html) {
+  const root = document.getElementById("drawerRoot");
+  root.innerHTML = `<div class="drawer-bg"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="${esc(title)}"><header><h3>${esc(title)}</h3><span class="spacer"></span><button class="btn" type="button" id="closeDrawer">Close</button></header><div class="content">${html}</div></aside>`;
+  const close = () => { root.innerHTML = ""; document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  root.querySelector(".drawer-bg").onclick = close; root.querySelector("#closeDrawer").onclick = close; document.addEventListener("keydown", onKey);
+  root.querySelector("#closeDrawer").focus();
+}
+let toastTimer;
+function toast(msg) { const r = document.getElementById("toastRoot"); r.innerHTML = `<div class="toast" role="status">${esc(msg)}</div>`; clearTimeout(toastTimer); toastTimer = setTimeout(() => r.innerHTML = "", 2600); }
+
+const VIEWS = { dashboards: "Dashboards", explore: "Explore", traces: "Traces", logs: "Logs" };
+function route() {
+  const v = (location.hash || "#dashboards").slice(1);
+  const view = VIEWS[v] ? v : "dashboards";
+  Object.keys(VIEWS).forEach(k => document.getElementById(`view-${k}`).hidden = k !== view);
+  document.querySelectorAll(".nav a").forEach(a => a.setAttribute("aria-current", a.dataset.view === view ? "page" : "false"));
+  document.getElementById("crumb").textContent = view === "dashboards" ? "Dashboards · dashboards/shop.yaml" : VIEWS[view];
+  document.getElementById("viewTitle").textContent = view === "dashboards" ? DASHES.find(d => d.id === state.dash).title : view === "explore" ? "Build a view" : VIEWS[view];
+  document.getElementById("svcVar").hidden = view === "explore";
+  render(view);
+}
+function render(view = (location.hash || "#dashboards").slice(1)) {
+  charts.clear();
+  if (view === "explore") renderExplore(); else if (view === "traces") renderTraces(); else if (view === "logs") renderLogs(); else renderDashboard();
+}
+document.getElementById("rangeSeg").innerHTML = Object.keys(RANGES).map(r => `<button type="button" data-range="${r}" class="${r === state.range ? "on" : ""}">${r}</button>`).join("");
+document.getElementById("rangeSeg").querySelectorAll("[data-range]").forEach(b => b.onclick = () => { state.range = b.dataset.range; document.querySelectorAll("[data-range]").forEach(x => x.classList.toggle("on", x === b)); render(); });
+document.getElementById("svcSel").onchange = e => { state.svc = e.target.value; render(); };
+document.getElementById("liveBtn").onclick = e => { state.live = !state.live; const b = document.getElementById("liveBtn"); b.classList.toggle("off", !state.live); b.setAttribute("aria-pressed", state.live); b.querySelector("span").textContent = state.live ? "Live · hot tail 0 s" : "Paused"; };
+document.getElementById("dashList").innerHTML = DASHES.map(d => `<button type="button" data-dash="${d.id}" class="${d.id === state.dash ? "on" : ""}">${esc(d.title)}</button>`).join("");
+document.getElementById("dashList").querySelectorAll("[data-dash]").forEach(b => b.onclick = () => { state.dash = b.dataset.dash; document.querySelectorAll("[data-dash]").forEach(x => x.classList.toggle("on", x === b)); if (location.hash !== "#dashboards") location.hash = "dashboards"; else route(); });
+window.addEventListener("hashchange", route);
+let rz; new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => charts.forEach(c => c.el.isConnected && drawLine(c)), 80); }).observe(document.querySelector("main"));
+route();
+})();
+</script>

@@ -1,0 +1,4 @@
+{ "tqs": "3", "id": "checkout-p99", "kind": "timeseries", "time": {"from": "-15m", "step": "30s"},
+  "queries": [ { "name": "p99", "metric": "http_server_request_duration",
+                 "match": [ {"label": "job", "op": "=", "value": "shop-api"}, {"label": "http_route", "op": "=", "value": "/checkout"} ],
+                 "fn": {"op": "histogram_quantile", "q": 0.99, "window": "2m"}, "agg": {"op": "sum", "by": ["http_response_status_code"]} } ] }

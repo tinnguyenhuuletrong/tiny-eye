@@ -1,0 +1,201 @@
+# yaml-language-server: $schema=../../../doc/schema/dashboard.schema.json
+# The demo shop (examples/demo/app): golden signals, payments, errors, logs and traces.
+# Metric names are what the OpenTelemetry Node SDK emits, translated by tiny-eye's OTLP receiver
+# (dots → underscores, histograms → _bucket/_count/_sum, monotonic sums → _total).
+id: shop
+title: Shop overview
+vars:
+  service: shop-api
+panels:
+  - display: stat
+    unit: req/s
+    query:
+      tqs: "3"
+      id: requests
+      title: Requests per second
+      kind: table
+      time: { from: "-5m" }
+      queries:
+        - name: r
+          metric: http_server_request_duration_count
+          match: [{ label: job, op: "=", value: "$service" }]
+          fn: { op: rate, window: 2m }
+          agg: { op: sum }
+          fill: zero
+
+  - display: stat
+    unit: "%"
+    query:
+      tqs: "3"
+      id: error-rate
+      title: Error rate (5xx)
+      kind: table
+      time: { from: "-5m" }
+      queries:
+        - name: e
+          metric: http_server_request_duration_count
+          match: [{ label: job, op: "=", value: "$service" }, { label: http_response_status_code, op: "=~", value: "5.." }]
+          fn: { op: rate, window: 2m }
+          agg: { op: sum }
+          fill: zero
+          hidden: true
+        - name: a
+          metric: http_server_request_duration_count
+          match: [{ label: job, op: "=", value: "$service" }]
+          fn: { op: rate, window: 2m }
+          agg: { op: sum }
+          hidden: true
+      formulas:
+        - { name: pct, expr: "100 * e / greatest(a, 0.001)" }
+
+  - display: stat
+    unit: s
+    query:
+      tqs: "3"
+      id: latency-p95
+      title: Latency p95
+      kind: table
+      time: { from: "-5m" }
+      queries:
+        - name: p
+          metric: http_server_request_duration
+          match: [{ label: job, op: "=", value: "$service" }]
+          fn: { op: histogram_quantile, q: 0.95, window: 2m }
+          agg: { op: sum }
+
+  - display: stat
+    unit: orders/min
+    query:
+      tqs: "3"
+      id: orders
+      title: Orders per minute
+      kind: table
+      time: { from: "-5m" }
+      queries:
+        - name: o
+          metric: shop_orders_total
+          fn: { op: rate, window: 2m }
+          agg: { op: sum }
+          fill: zero
+          hidden: true
+      formulas:
+        - { name: per_min, expr: "o * 60" }
+
+  - display: timeseries
+    unit: req/s
+    query:
+      tqs: "3"
+      id: requests-by-route
+      title: Requests by route
+      kind: timeseries
+      time: { from: "-30m", step: "30s" }
+      queries:
+        - name: r
+          metric: http_server_request_duration_count
+          match: [{ label: job, op: "=", value: "$service" }]
+          fn: { op: rate, window: 2m }
+          agg: { op: sum, by: [http_route] }
+
+  - display: timeseries
+    unit: s
+    query:
+      tqs: "3"
+      id: latency
+      title: Latency p50 / p95 / p99
+      kind: timeseries
+      time: { from: "-30m", step: "30s" }
+      queries:
+        - { name: p50, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.5, window: 2m }, agg: { op: sum } }
+        - { name: p95, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.95, window: 2m }, agg: { op: sum } }
+        - { name: p99, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.99, window: 2m }, agg: { op: sum } }
+
+  - display: bar
+    unit: req/s
+    query:
+      tqs: "3"
+      id: failures-by-status
+      title: Failed requests by status code
+      kind: timeseries
+      time: { from: "-30m", step: "30s" }
+      queries:
+        - name: f
+          metric: http_server_request_duration_count
+          match: [{ label: job, op: "=", value: "$service" }, { label: http_response_status_code, op: "=~", value: "[45].." }]
+          fn: { op: rate, window: 2m }
+          agg: { op: sum, by: [http_response_status_code] }
+
+  - display: timeseries
+    unit: s
+    query:
+      tqs: "3"
+      id: payments-latency
+      title: Card authorization p95 by outcome
+      kind: timeseries
+      time: { from: "-30m", step: "30s" }
+      queries:
+        - name: p
+          metric: payments_authorize_duration
+          fn: { op: histogram_quantile, q: 0.95, window: 2m }
+          agg: { op: sum, by: [outcome] }
+
+  - display: table
+    query:
+      tqs: "3"
+      id: top-routes
+      title: Routes, last 5 minutes
+      kind: table
+      time: { from: "-5m" }
+      queries:
+        - { name: rps, metric: http_server_request_duration_count, match: [{ label: job, op: "=", value: "$service" }], fn: { op: rate, window: 2m }, agg: { op: sum, by: [http_route] } }
+        - { name: p95, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.95, window: 2m }, agg: { op: sum, by: [http_route] } }
+
+  - display: timeseries
+    unit: spans/s
+    query:
+      tqs: "3"
+      id: span-errors
+      title: Error spans per second by service
+      kind: timeseries
+      time: { from: "-30m", step: "30s" }
+      queries:
+        - name: e
+          spans: [{ field: status_code, op: "=", value: 2 }]
+          measure: { op: rate }
+          agg: { by: [service_name] }
+          fill: zero
+
+  - display: logs
+    query:
+      tqs: "3"
+      id: recent-errors
+      title: Recent warnings and errors
+      kind: log_search
+      time: { from: "-15m" }
+      search:
+        logs: [{ field: severity_number, op: ">=", value: 13 }]
+        order: desc
+      limit: 50
+
+  - display: logs
+    query:
+      tqs: "3"
+      id: error-patterns
+      title: Error patterns
+      kind: log_patterns
+      time: { from: "-1h" }
+      search:
+        logs: [{ field: severity_number, op: ">=", value: 13 }]
+      limit: 20
+
+  - display: traces
+    query:
+      tqs: "3"
+      id: slow-checkouts
+      title: Slow or failed checkouts
+      kind: trace_search
+      time: { from: "-30m" }
+      search:
+        spans: [{ field: span_name, op: "contains", value: "/checkout" }]
+        trace: [{ field: duration_ms, op: ">", value: 500 }]
+        order: duration_desc
+      limit: 20
