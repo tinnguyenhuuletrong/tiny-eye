@@ -5,8 +5,7 @@ title: tiny-eye self-monitoring
 vars:
   job: tiny-eye
 panels:
-  - display: timeseries
-    unit: rows/s
+  - ui: { display: timeseries, unit: rows/s, w: 9, h: 4 }
     query:
       tqs: "3"
       id: ingest-rate
@@ -19,8 +18,7 @@ panels:
           match: [{ label: job, op: "=", value: "$job" }]
           fn: { op: rate, window: 5m }
           agg: { op: sum, by: [table] }
-  - display: stat
-    unit: bytes
+  - ui: { display: stat, unit: bytes, w: 3, h: 2 }
     query:
       tqs: "3"
       id: hot-bytes

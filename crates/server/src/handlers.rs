@@ -71,25 +71,69 @@ pub async fn discover_catalog(State(st): State<AppState>) -> Response {
     }
 }
 
-pub async fn list_dashboards(State(st): State<AppState>) -> Json<Vec<DashboardSummary>> {
-    Json(
-        st.dashboards
+fn to_api(d: &engine::dashboards::Dashboard) -> Dashboard {
+    Dashboard {
+        id: d.id.clone(),
+        title: d.title.clone(),
+        vars: Some(d.vars.clone()),
+        panels: d
+            .panels
             .iter()
-            .map(|d| DashboardSummary { id: d.id.clone(), title: d.title.clone(), panels: d.panels.len() as i64 })
+            .map(|p| Panel {
+                query: p.query.clone(),
+                ui: p.ui.as_ref().map(|u| PanelUi {
+                    display: u.display.clone(),
+                    unit: u.unit.clone(),
+                    w: u.w.map(i64::from),
+                    h: u.h.map(i64::from),
+                }),
+            })
             .collect(),
-    )
+    }
+}
+
+pub async fn list_dashboards(State(st): State<AppState>) -> Json<Vec<DashboardSummary>> {
+    let ds = st.dashboards.read().map(|d| d.clone()).unwrap_or_default();
+    Json(ds.iter().map(|d| DashboardSummary { id: d.id.clone(), title: d.title.clone(), panels: d.panels.len() as i64 }).collect())
 }
 
 pub async fn get_dashboard(State(st): State<AppState>, Path(id): Path<String>) -> Response {
-    match st.dashboards.iter().find(|d| d.id == id) {
-        Some(d) => Json(Dashboard {
-            id: d.id.clone(),
-            title: d.title.clone(),
-            vars: Some(d.vars.clone()),
-            panels: d.panels.iter().map(|p| Panel { display: p.display.clone(), unit: p.unit.clone(), query: p.query.clone() }).collect(),
-        })
-        .into_response(),
+    let found = st.dashboards.read().ok().and_then(|ds| ds.iter().find(|d| d.id == id).cloned());
+    match found {
+        Some(d) => Json(to_api(&d)).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown dashboard\n").into_response(),
+    }
+}
+
+/// The UI's new state of a dashboard → validated → `<dashboards dir>/<id>.yaml` → served.
+pub async fn save_dashboard(State(st): State<AppState>, Path(id): Path<String>, body: String) -> Response {
+    let bad = |ps: Vec<tqs::Problem>| (StatusCode::BAD_REQUEST, Json(problems(ps))).into_response();
+    let d: engine::dashboards::Dashboard = match serde_json::from_str(&body) {
+        Ok(d) => d,
+        Err(e) => return bad(vec![tqs::Problem { code: "schema", path: "$".into(), message: e.to_string() }]),
+    };
+    if d.id != id {
+        return bad(vec![tqs::Problem {
+            code: "id",
+            path: "id".into(),
+            message: format!("body id {:?} differs from the URL id {id:?}", d.id),
+        }]);
+    }
+    let dir = st.node.cfg.dashboards.dir.clone();
+    let d2 = d.clone();
+    match tokio::task::spawn_blocking(move || engine::dashboards::save(&dir, &d2)).await {
+        Ok(Ok(path)) => {
+            tracing::info!(dashboard = %d.id, file = %path.display(), "dashboard saved");
+            if let Ok(mut ds) = st.dashboards.write() {
+                match ds.iter_mut().find(|x| x.id == d.id) {
+                    Some(slot) => *slot = d.clone(),
+                    None => ds.push(d.clone()),
+                }
+            }
+            Json(to_api(&d)).into_response()
+        }
+        Ok(Err(ps)) => bad(ps),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")).into_response(),
     }
 }
 

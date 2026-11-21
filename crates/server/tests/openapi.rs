@@ -23,8 +23,9 @@ fn examples() -> Vec<(String, Value)> {
         out.push((p.display().to_string(), serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap()));
     }
     for d in engine::dashboards::load(root().join("dashboards").to_str().unwrap()).unwrap() {
-        for (i, p) in d.panels.into_iter().enumerate() {
-            out.push((format!("dashboard {} panel {i}", d.id), p.query));
+        for (i, p) in d.panels.iter().enumerate() {
+            // What runs: the stored query with the dashboard's vars as defaults.
+            out.push((format!("dashboard {} panel {i}", d.id), p.effective_query(&d.vars)));
         }
     }
     assert!(out.len() >= 7);

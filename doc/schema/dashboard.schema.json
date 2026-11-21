@@ -32,8 +32,26 @@
     },
     "Panel": {
       "additionalProperties": false,
+      "description": "A panel is data (`query`: what to fetch) plus presentation (`ui`: how to draw it and where).",
+      "properties": {
+        "query": {
+          "$ref": "#/$defs/TqsDocument"
+        },
+        "ui": {
+          "$ref": "#/$defs/PanelUi"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "PanelUi": {
+      "additionalProperties": false,
+      "description": "Everything the UI needs that is not part of the query. Panels flow in list order over a 12-column grid of fixed-height rows.",
       "properties": {
         "display": {
+          "description": "how to draw the result (default: timeseries for timeseries queries, table otherwise)",
           "enum": [
             "timeseries",
             "stat",
@@ -44,16 +62,23 @@
           ],
           "type": "string"
         },
-        "query": {
-          "$ref": "#/$defs/TqsDocument"
+        "h": {
+          "description": "height in rows (default: 2 for stat, 4 otherwise)",
+          "maximum": 8,
+          "minimum": 1,
+          "type": "integer"
         },
         "unit": {
+          "description": "unit shown next to values, e.g. req/s, s, %",
           "type": "string"
+        },
+        "w": {
+          "description": "width in columns of the 12-column grid (default: 3 for stat, 6 otherwise)",
+          "maximum": 12,
+          "minimum": 1,
+          "type": "integer"
         }
       },
-      "required": [
-        "query"
-      ],
       "type": "object"
     },
     "TqsAgg": {

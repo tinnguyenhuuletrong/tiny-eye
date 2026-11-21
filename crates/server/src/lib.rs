@@ -25,7 +25,8 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AppState {
     pub node: Arc<Node>,
-    pub dashboards: Arc<Vec<Dashboard>>,
+    /// Loaded from the dashboards directory at start; replaced in place by `save_dashboard`.
+    pub dashboards: Arc<std::sync::RwLock<Vec<Dashboard>>>,
     /// token → scopes; empty = auth disabled.
     pub tokens: Arc<HashMap<String, Vec<Scope>>>,
 }
@@ -33,7 +34,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(node: Arc<Node>, dashboards: Vec<Dashboard>) -> anyhow::Result<AppState> {
         let tokens = load_tokens(&node.cfg)?;
-        Ok(AppState { node, dashboards: Arc::new(dashboards), tokens: Arc::new(tokens) })
+        Ok(AppState { node, dashboards: Arc::new(std::sync::RwLock::new(dashboards)), tokens: Arc::new(tokens) })
     }
 }
 
@@ -105,6 +106,7 @@ mod tests {
         assert_eq!(required_scope("POST", "/api/v1/write"), Scope::Ingest);
         assert_eq!(required_scope("POST", "/api/v1/query"), Scope::Query);
         assert_eq!(required_scope("GET", "/api/v1/dashboards/abc"), Scope::Query);
+        assert_eq!(required_scope("PUT", "/api/v1/dashboards/abc"), Scope::Admin, "saving a dashboard writes a file");
         assert_eq!(required_scope("GET", "/healthz"), Scope::Public);
         assert_eq!(required_scope("HEAD", "/api/v1/catalog"), Scope::Query, "HEAD needs GET's scope");
         assert_eq!(required_scope("PUT", "/api/v1/query"), Scope::Admin, "unknown method fails closed");

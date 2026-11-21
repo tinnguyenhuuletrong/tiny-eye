@@ -49,10 +49,12 @@ curl -s localhost:7070/api/v1/dashboards/shop | jq '.panels[].query.title'
 Each panel is a plain TQS document, so what the dashboard shows is exactly what
 `POST /api/v1/query` returns for it.
 
-**Add or change a view.** Edit the YAML (VS Code autocompletes and validates it through the
-`# yaml-language-server: $schema=…` header, from `doc/schema/dashboard.schema.json`), then restart
-tiny-eye; dashboards load at start and a panel that does not validate stops the start with its
-file and problem codes. To try a panel before saving it:
+**Add or change a view.** Each panel is `query` (TQS: what to fetch) plus `ui` (`display`, `unit`,
+and its place: `w` of 12 columns, `h` rows; panels flow in list order). Either edit the YAML (VS
+Code autocompletes and validates it through the `# yaml-language-server: $schema=…` header, from
+`doc/schema/dashboard.schema.json`) and restart, or send the whole new state with
+`PUT /api/v1/dashboards/<id>` (admin scope), which validates it and rewrites the file. The file
+is the source of truth either way, so commit it. To try a panel before saving it:
 
 ```bash
 curl -s localhost:7070/api/v1/validate -d @my-panel.json | jq   # every problem, with its JSON path

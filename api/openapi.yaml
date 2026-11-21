@@ -106,6 +106,23 @@ paths:
       responses:
         "200": { description: dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/Dashboard" } } } }
         "404": { description: unknown dashboard }
+    put:
+      operationId: save_dashboard
+      x-scope: admin
+      summary: Save a dashboard
+      description: |
+        The UI sends the whole new state of the dashboard (panels in order, each with its `query`
+        and `ui`). The engine validates it like a file loaded at start (shape, id, every panel's
+        TQS), writes it to the dashboards directory as `<id>.yaml` (replacing the file that holds
+        this id), and serves it from then on. The YAML file stays the source of truth: commit it.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Dashboard" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/Dashboard" } } } }
+        "400": { description: invalid dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/ProblemResponse" } } } }
 
   /api/v1/write:
     post:
@@ -291,13 +308,23 @@ components:
           items: { $ref: "#/components/schemas/Panel" }
 
     Panel:
+      description: "A panel is data (`query`: what to fetch) plus presentation (`ui`: how to draw it and where)."
       type: object
       additionalProperties: false
       required: [query]
       properties:
-        display: { type: string, enum: [timeseries, stat, table, bar, traces, logs] }
-        unit: { type: string }
         query: { $ref: "#/components/schemas/TqsDocument" }
+        ui: { $ref: "#/components/schemas/PanelUi" }
+
+    PanelUi:
+      description: "Everything the UI needs that is not part of the query. Panels flow in list order over a 12-column grid of fixed-height rows."
+      type: object
+      additionalProperties: false
+      properties:
+        display: { type: string, enum: [timeseries, stat, table, bar, traces, logs], description: "how to draw the result (default: timeseries for timeseries queries, table otherwise)" }
+        unit: { type: string, description: "unit shown next to values, e.g. req/s, s, %" }
+        w: { type: integer, minimum: 1, maximum: 12, description: "width in columns of the 12-column grid (default: 3 for stat, 6 otherwise)" }
+        h: { type: integer, minimum: 1, maximum: 8, description: "height in rows (default: 2 for stat, 4 otherwise)" }
 
     LokiPush:
       x-codegen: false   # decoded by receivers::loki_push

@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=../../../doc/schema/dashboard.schema.json
+# Each panel is `query` (TQS: what to fetch) + `ui` (display, unit, w of 12 columns, h rows).
 # The demo shop (examples/demo/app): golden signals, payments, errors, logs and traces.
 # Metric names are what the OpenTelemetry Node SDK emits, translated by tiny-eye's OTLP receiver
 # (dots → underscores, histograms → _bucket/_count/_sum, monotonic sums → _total).
@@ -7,8 +8,7 @@ title: Shop overview
 vars:
   service: shop-api
 panels:
-  - display: stat
-    unit: req/s
+  - ui: { display: stat, unit: req/s, w: 3, h: 2 }
     query:
       tqs: "3"
       id: requests
@@ -23,8 +23,7 @@ panels:
           agg: { op: sum }
           fill: zero
 
-  - display: stat
-    unit: "%"
+  - ui: { display: stat, unit: "%", w: 3, h: 2 }
     query:
       tqs: "3"
       id: error-rate
@@ -48,8 +47,7 @@ panels:
       formulas:
         - { name: pct, expr: "100 * e / greatest(a, 0.001)" }
 
-  - display: stat
-    unit: s
+  - ui: { display: stat, unit: s, w: 3, h: 2 }
     query:
       tqs: "3"
       id: latency-p95
@@ -63,8 +61,7 @@ panels:
           fn: { op: histogram_quantile, q: 0.95, window: 2m }
           agg: { op: sum }
 
-  - display: stat
-    unit: orders/min
+  - ui: { display: stat, unit: orders/min, w: 3, h: 2 }
     query:
       tqs: "3"
       id: orders
@@ -81,8 +78,7 @@ panels:
       formulas:
         - { name: per_min, expr: "o * 60" }
 
-  - display: timeseries
-    unit: req/s
+  - ui: { display: timeseries, unit: req/s, w: 6, h: 4 }
     query:
       tqs: "3"
       id: requests-by-route
@@ -96,8 +92,7 @@ panels:
           fn: { op: rate, window: 2m }
           agg: { op: sum, by: [http_route] }
 
-  - display: timeseries
-    unit: s
+  - ui: { display: timeseries, unit: s, w: 6, h: 4 }
     query:
       tqs: "3"
       id: latency
@@ -109,8 +104,7 @@ panels:
         - { name: p95, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.95, window: 2m }, agg: { op: sum } }
         - { name: p99, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.99, window: 2m }, agg: { op: sum } }
 
-  - display: bar
-    unit: req/s
+  - ui: { display: bar, unit: req/s, w: 6, h: 4 }
     query:
       tqs: "3"
       id: failures-by-status
@@ -124,8 +118,7 @@ panels:
           fn: { op: rate, window: 2m }
           agg: { op: sum, by: [http_response_status_code] }
 
-  - display: timeseries
-    unit: s
+  - ui: { display: timeseries, unit: s, w: 6, h: 4 }
     query:
       tqs: "3"
       id: payments-latency
@@ -138,7 +131,7 @@ panels:
           fn: { op: histogram_quantile, q: 0.95, window: 2m }
           agg: { op: sum, by: [outcome] }
 
-  - display: table
+  - ui: { display: table, w: 6, h: 4 }
     query:
       tqs: "3"
       id: top-routes
@@ -149,8 +142,7 @@ panels:
         - { name: rps, metric: http_server_request_duration_count, match: [{ label: job, op: "=", value: "$service" }], fn: { op: rate, window: 2m }, agg: { op: sum, by: [http_route] } }
         - { name: p95, metric: http_server_request_duration, match: [{ label: job, op: "=", value: "$service" }], fn: { op: histogram_quantile, q: 0.95, window: 2m }, agg: { op: sum, by: [http_route] } }
 
-  - display: timeseries
-    unit: spans/s
+  - ui: { display: timeseries, unit: spans/s, w: 6, h: 4 }
     query:
       tqs: "3"
       id: span-errors
@@ -164,7 +156,7 @@ panels:
           agg: { by: [service_name] }
           fill: zero
 
-  - display: logs
+  - ui: { display: logs, w: 6, h: 4 }
     query:
       tqs: "3"
       id: recent-errors
@@ -176,7 +168,7 @@ panels:
         order: desc
       limit: 50
 
-  - display: logs
+  - ui: { display: logs, w: 6, h: 4 }
     query:
       tqs: "3"
       id: error-patterns
@@ -187,7 +179,7 @@ panels:
         logs: [{ field: severity_number, op: ">=", value: 13 }]
       limit: 20
 
-  - display: traces
+  - ui: { display: traces, w: 12, h: 4 }
     query:
       tqs: "3"
       id: slow-checkouts
