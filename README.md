@@ -1,104 +1,133 @@
 # tiny-eye
 
-A blob-first observability engine in one Rust binary. Metrics, logs and traces are stored as
-sorted ZSTD Parquet in object storage (local disk or S3), tracked by a DuckLake catalog, and
-queried with **TQS 3**, a closed JSON query schema compiled to DuckDB SQL that reproduces
-Prometheus semantics point for point. Built from [the specification](doc/spec/Observability%20Engine%20Spec.md)
-and its [research evidence](doc/research/).
+Metrics, logs and traces in one Rust binary: stored as Parquet on disk or S3, queried with a
+JSON language that returns the same points as Prometheus.
 
-```
-remote-write / OTLP-HTTP / Loki push ─► WAL (fsync) ─► hot tail (in-memory DuckDB) ─► ack
-                                                          │ every 60 s / 64 MB
-                                                          ▼
-                       sorted Parquet (bloom, ZSTD) ─► object storage ─► envelope (If-None-Match)
-                                                                           │ every 5 s
-TQS JSON ─► validate ─► compile ─► DuckDB:  lake ∪ hot rows above watermark ◄─ checkpoint → DuckLake
-                                                                           hourly compaction, retention
-```
+## What it is
+
+- **One binary, one process.** Ingests Prometheus remote-write 1.0, OTLP/HTTP (protobuf and JSON)
+  and Loki push (JSON). Single-node mode today.
+- **Open storage.** Sorted, ZSTD-compressed Parquet in local disk or S3, tracked by a DuckLake
+  catalog and read by embedded DuckDB 2.0.1.
+- **TQS 3 queries.** A closed JSON schema compiled to DuckDB SQL, tested point by point against
+  Prometheus 3.16. Covers metrics, span and log aggregates, trace search, waterfalls, log search
+  and log patterns.
+- **Dashboards as YAML in git**, a web UI embedded in the binary (dashboards with drag-and-resize
+  layout editing, Explore with a Builder | TQS switch, traces, logs), and an MCP bridge for AI agents.
+
+![The Shop overview dashboard of the demo, in tiny-eye's web UI](docs/assets/ui-dashboard.jpg)
 
 ## Quick start
 
 ```bash
-make tools      # pinned Prometheus 3.16 + DuckDB 2.0.1 extensions into .tools/ (once)
-make run        # single node on 127.0.0.1:7070, data under ./data (config/dev.yaml)
-```
+make tools      # once: pinned DuckDB extensions + Prometheus (for tests) into .tools/
+make run        # builds the UI and binary, serves 127.0.0.1:7070 with config/dev.yaml
 
-```bash
-# write: any Prometheus agent (remote_write url http://127.0.0.1:7070/api/v1/write),
-# an OTel Collector (otlphttp endpoint http://127.0.0.1:7070), or Loki clients (/loki/api/v1/push)
-
-# read: TQS
 curl -s localhost:7070/api/v1/query -d '{"tqs":"3","id":"rps","kind":"timeseries",
   "time":{"from":"-1h","step":"1m"},
   "queries":[{"name":"r","metric":"http_requests_total","fn":{"op":"rate","window":"5m"},"agg":{"op":"sum","by":["job"]}}]}'
+
+claude mcp add tiny-eye -- "$PWD/target/release/tiny-eye" mcp --url http://127.0.0.1:7070
 ```
 
-**Full walkthrough with a real app:** [examples/demo](examples/demo/README.md): a Node.js shop
-instrumented with OpenTelemetry, k6 load, a dashboard, ad-hoc queries, and MCP setup for Claude
-Code / Claude Desktop (`make demo`, `make demo-app`, `make demo-load`).
+Needs Rust stable, a C/C++ compiler and Node.js 20+. Send data from any OpenTelemetry SDK
+(`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:7070`, `http/protobuf`), Prometheus remote-write
+(`/api/v1/write`) or Loki push (`/loki/api/v1/push`). Open http://127.0.0.1:7070 for the UI.
 
-Agents: `tiny-eye mcp --url http://127.0.0.1:7070` (stdio MCP). Tools: [doc/schema/mcp-tools.md](doc/schema/mcp-tools.md).
-More query examples: [api/examples](api/examples). Language reference: SPEC §8.
+For a full walkthrough with a real app, run the demo shop: `make demo`, `make demo-app`,
+`make demo-load` ([guide](docs/examples/demo-shop.md)).
 
-## Principles
+## How it works
 
-1. **Keep it simple**: three crates (`tqs`, `engine`, `server`), one binary, one process for single-node mode.
-2. **One source of truth, generated everywhere else**:
+```mermaid
+flowchart LR
+  A[remote-write / OTLP / Loki] --> W[WAL + hot tail in RAM]
+  W -->|flush every 60 s or 64 MB| P[sorted Parquet on disk or S3]
+  P -->|checkpoint every 5 s| L[DuckLake catalog]
+  Q[TQS JSON] --> E[validate, compile to SQL]
+  E --> D[DuckDB: lake + hot rows]
+  L --> D
+  W --> D
+```
 
-   | Definition | Generates |
-   | --- | --- |
-   | [`api/openapi.yaml`](api/openapi.yaml) | axum router (operationId → handler; a missing one is a compile error), response types, auth scope per route (`x-scope`), MCP tools (`x-mcp-tool`) |
-   | [`schema/tables.yaml`](schema/tables.yaml) | Arrow schemas, typed row builders, DuckLake DDL, hot-tail DDL, partition expressions |
-   | [`config/default.yaml`](config/default.yaml) | every default (embedded); user YAML and `TINY_EYE__SECTION__KEY` env vars override |
-   | [`dashboards/*.yaml`](dashboards) | dashboards, as TQS panels in git |
-   | sources above + code | [`doc/schema/`](doc/schema): JSON Schemas for TQS, dashboards and config (VS Code / Monaco), MCP tool docs, formula grammar (`make schemas`, checked by a test) |
+A write is acknowledged once it is in the write-ahead log and the hot tail, so it is queryable
+immediately. Hourly compaction and retention run in the same process.
 
-3. **Configuration-driven**: sizes, intervals, durability, retention, storage, auth come from config.
-4. **Proven, not claimed**: each rule has a test that can fail; results are in [doc/results](doc/results).
+## Documentation
+
+The docs site (published from `docs/` by GitHub Pages, at `https://<owner>.github.io/tiny-eye/`)
+renders the pages in [`docs/`](docs). Start with:
+
+- [What is tiny-eye](docs/intro.md)
+- [Quickstart](docs/getting-started/quickstart.md)
+- [Demo shop](docs/examples/demo-shop.md)
+- [Architecture](docs/deep-dive/architecture.md)
+
+## Status
+
+Built (single node):
+
+- Ingest: Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs (protobuf and JSON,
+  gzip), Loki push (JSON); sample-age bounds; secret attribute redaction; arena limit with 429.
+- Durability `wal` (group-committed fsync, replay on restart) and `memory`.
+- Flush per (table, hour): sorted, ZSTD, page statistics, delta and byte-stream-split encodings,
+  `trace_id` bloom filters; envelopes written with a create-only PUT.
+- Idempotent checkpointer, hot tail with a per-node watermark, hourly compaction, series dedup,
+  retention through DuckLake.
+- TQS 3 with Prometheus staleness; HTTP API with every validation problem code; catalog
+  discovery; YAML dashboards with save from the UI; MCP stdio bridge; bearer-token scopes;
+  self-metrics.
+- Web UI served by the binary: dashboards (live panels, edit layout, add panel, save to YAML),
+  Explore (Builder | TQS, validated by the engine), trace search with waterfalls, log search and
+  patterns.
+
+Not built yet:
+
+- Cluster mode (roles, lease and fencing, hot-tail RPC, `replicated` durability), OTLP gRPC,
+  Loki protobuf push.
+- Alert evaluation and Alertmanager, materialized panels, a Grafana data source.
+- Snapshot export, multi-region buckets, native histograms, a trace index.
+- Span events and links are not stored. OTLP delta temporality and exponential histograms are
+  skipped. Response `freshness_s` is always 0 and `partial_regions` always empty.
+
+Details: [Limitations and roadmap](docs/deep-dive/limitations-and-roadmap.md).
 
 ## Evidence
 
-| What | How | Result |
+Every result below comes from a test that can fail. Reports are generated into
+[`docs/deep-dive/evidence/`](docs/deep-dive/evidence).
+
+| Claim | How | Result |
 | --- | --- | --- |
-| TQS = Prometheus | `make conformance`: 33 metric functions, 11 real-panel shapes over 3 namespaces, spans/logs/traces vs an independent computation, 38 validation/injection cases, 15 mutants | [104/104, 15/15 mutants caught](doc/results/tqs-coverage.md) |
-| The whole binary = Prometheus | `make e2e`: same remote-written samples into Prometheus 3.16 and tiny-eye; data spread over L1, L0, a pending envelope and RAM | [20/20 panels equal](doc/results/e2e.md) |
-| Storage assumptions on this machine | `make poc`: DuckLake registration + schema refusal, hot tail counted once, atomic compaction swap, retention deletes objects, bloom per row group, Arrow appender types | 6/6 |
-| Durability + overload | `crates/engine/tests/node.rs`: crash without flush loses no acknowledged sample (WAL replay); a failed flush is retried in order and loses nothing; abandoned queries return their connection; retries do not double count; arena limit → 429 | pass |
-| Contracts in sync | `crates/server/tests/{openapi,schemas}.rs`: TQS JSON Schema ⇔ Rust validator on every example; generated docs current; config/dashboards valid | pass |
-| Performance (8-core laptop, 2,620 series × 6 h, 3.7 M samples) | `make bench` / `make bench-s3` | remote-write **1.65 M samples/s**; flush 0.6 s; 6 h panels: `sum by (rate)` 0.58 s, histogram p99 73 ms, gauge 100 ms, one series 21 ms; trace by id 11 ms; absent trace id **22 → 2 S3 GETs** after compaction ([local](doc/results/bench-local.md), [MinIO](doc/results/bench-s3.md)) |
+| TQS returns what Prometheus returns | `make conformance`: 33 metric functions, real panel shapes, spans/logs/traces, validation and injection cases, a mutation check | [104/104 cases, 15/15 mutants caught](docs/deep-dive/evidence/tqs-coverage.md) |
+| The whole binary returns what Prometheus returns | `make e2e`: the same remote-written samples in Prometheus 3.16 and tiny-eye, spread over Parquet, a pending envelope and RAM | [20/20 panels equal](docs/deep-dive/evidence/e2e.md) |
+| Acknowledged data survives a crash | `crates/engine/tests/node.rs`: crash without flush, WAL replay, retried flushes, no double counting | pass |
+| Ingest and query speed (8-core laptop, 2,620 series x 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
+| Trace lookups on S3 stay cheap | `make bench-s3` (MinIO) | absent trace id: [22 GETs before compaction, 2 after](docs/deep-dive/evidence/bench-s3.md) |
 
-## Commands
+## Repository layout
 
-`make help`. Daily: `make fmt lint test`. Before a PR: `make check`. Hooks: `make hooks`.
+| Path | Contents |
+| --- | --- |
+| `api/` | `openapi.yaml`: the HTTP API, auth scopes and MCP tools are generated from it; TQS examples |
+| `config/` | `default.yaml` (every default, embedded in the binary) and `dev.yaml` |
+| `crates/tqs` | TQS model, validator, formula parser, SQL compiler, conformance suite |
+| `crates/engine` | WAL, hot tail, flush, checkpoint, compaction, retention, queries, dashboards |
+| `crates/server` | The binary: HTTP handlers, receivers, auth, MCP bridge, embedded UI, benchmark |
+| `dashboards/` | Dashboards as YAML |
+| `deploy/` | Docker Compose for a local MinIO |
+| `docs/` | Documentation and generated evidence reports |
+| `examples/` | The demo shop: Node.js app, k6 load, dashboard, queries |
+| `research/` | The specification and the research it is based on |
+| `schema/` | `tables.yaml` (stored tables) and `generated/` (JSON Schemas, MCP tools, grammar) |
+| `ui/` | Web UI (Preact + Vite, embedded in the binary) and `prototype/` (the design prototype) |
+| `website/` | Docusaurus site that publishes `docs/` |
 
-## Status against the spec
+## Contributing
 
-Built (single node, SPEC M1 + most of M2):
+See [CONTRIBUTING.md](CONTRIBUTING.md). `make help` lists every task; the daily loop is
+`make fmt lint test`, and `make check` runs everything CI runs before a pull request.
 
-- Ingest: Prometheus remote-write 1.0, OTLP/HTTP metrics/traces/logs (protobuf + JSON, gzip), Loki push (JSON); sample-age bounds; secret attribute redaction; arena limit with 429
-- Durability `wal` (group-committed fsync, replay on restart) and `memory`
-- Flush per (table, hour), sorted, ZSTD, page stats, delta / byte-stream-split encodings, `trace_id` bloom; envelopes with create-only PUT
-- Checkpointer (idempotent via `applied_envelopes`), hot tail with per-node watermark, hourly L0→L1 compaction with `positive_delta`, series dedup, retention through DuckLake
-- TQS 3: every construct of SPEC §8 incl. Prometheus staleness; HTTP API, validation with every problem code; catalog discovery; YAML dashboards; MCP stdio bridge; bearer-token scopes; self-metrics
+## License
 
-Not built yet (by milestone):
-
-- M3 cluster: roles, lease + fencing, hot-tail RPC, `replicated` durability; OTLP gRPC; Loki protobuf push
-- M4: alert evaluator + Alertmanager, materialized panels, Grafana data source or UI (Q11)
-- Laptop snapshot export (E9), multi-region buckets, native histograms, `traces_index`
-- Span events and links (SPEC §4.3) are not stored yet; OTLP points flagged "no recorded value" are stored as values
-- Response `freshness_s` is always 0 (the hot tail is read) and `partial_regions` always empty (single region)
-
-Decisions taken where the spec left a question open use its proposed defaults (Q1–Q20), except
-**Q7 durability**: single node defaults to `wal`.
-
-## Known deviations and findings
-
-- DuckDB core must be a release build in every profile; its DEBUG build aborts when release-built extensions free memory (found by the PoC; see `Cargo.toml`).
-- DuckLake needs the `icu` extension in addition to `ducklake`/`httpfs` (snapshot functions use TIMESTAMPTZ math).
-- DuckDB 2.0.1: `epoch_ms(TIMESTAMP_NS) // n` raises a spurious cast error; `epoch_ns` is used instead.
-- Result `labels` are parsed from the series key; a label value containing `,` is split ambiguously (the `key` itself is exact).
-- OTLP delta temporality and exponential histograms are counted and skipped.
-- A `kind: trace` lookup without `time` probes every span file; pass a time range (SPEC §7.2 assumes one).
-- Duplicate samples (same series and timestamp, e.g. a retried request) are removed at flush and compaction (`unique` in `schema/tables.yaml`); two copies can coexist briefly in the hot tail.
-- 500 responses carry the engine's error text (useful locally; front the API with a proxy before exposing it).
+Apache-2.0. See [LICENSE](LICENSE).

@@ -1,0 +1,8 @@
+{
+  "label": "Examples",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "Worked examples: a demo shop end to end, TQS recipes, sending data from common agents, AI agents over MCP, and dashboards as code."
+  }
+}
