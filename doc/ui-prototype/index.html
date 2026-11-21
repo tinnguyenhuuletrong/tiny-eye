@@ -238,6 +238,45 @@ pre.code { margin: 0; background: var(--surface-2); border: 1px solid var(--line
 .tqs-box[open] .chev { transform: rotate(45deg); }
 .tqs-box pre.code { max-height: 320px; }
 
+
+/* Dashboard board: 12 columns × fixed-height rows; panels carry w (columns) and h (rows). */
+.board { grid-auto-rows: 92px; }
+.board > .panel { grid-row: span var(--h, 4); min-height: 0; overflow: hidden; position: relative; }
+.board > .panel .body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.board .chart { height: auto; flex: 1; min-height: 60px; }
+.w1{grid-column:span 1}.w2{grid-column:span 2}.w3{grid-column:span 3}.w4{grid-column:span 4}.w5{grid-column:span 5}.w6{grid-column:span 6}
+.w7{grid-column:span 7}.w8{grid-column:span 8}.w9{grid-column:span 9}.w10{grid-column:span 10}.w11{grid-column:span 11}.w12{grid-column:span 12}
+.dash-actions { display: flex; gap: 8px; }
+.edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--accent-soft); color: var(--ink); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: var(--r); padding: 10px 12px; margin-bottom: 14px; font-size: 13px; }
+.edit-bar svg { color: var(--accent); flex: none; }
+.board.editing > .panel { outline: 1px dashed var(--line-strong); outline-offset: -1px; }
+.board.editing > .panel .body { pointer-events: none; }
+.grip { display: none; border: 0; background: none; color: var(--ink-3); cursor: grab; padding: 2px; border-radius: 4px; margin-left: -4px; }
+.grip:hover { color: var(--ink); background: var(--surface-2); }
+.board.editing .grip { display: inline-flex; }
+.board.editing > .panel[draggable="true"] { cursor: grab; }
+.board.editing > .panel[draggable="true"]:active { cursor: grabbing; }
+.resize { display: none; position: absolute; right: 2px; bottom: 2px; width: 18px; height: 18px; border: 0; padding: 0; background: none; cursor: nwse-resize; color: var(--ink-3); z-index: 2; }
+.resize::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; border-radius: 0 0 2px 0; }
+.resize:hover, .resize:focus-visible { color: var(--accent); }
+.board.editing .resize { display: block; }
+.size-tag { display: none; position: absolute; right: 24px; bottom: 6px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); background: var(--surface); padding: 0 4px; border-radius: 4px; }
+.board.editing .size-tag { display: block; }
+.panel.drop-before { box-shadow: inset 4px 0 0 var(--accent); }
+.panel.drop-after { box-shadow: inset -4px 0 0 var(--accent); }
+.panel.dragging { opacity: 0.45; }
+.panel.resizing { outline: 2px solid var(--accent) !important; }
+.add-tile { grid-row: span 2; grid-column: span 3; border: 1.5px dashed var(--line-strong); border-radius: var(--r); background: transparent; color: var(--ink-2); display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 500; }
+.add-tile:hover { border-color: var(--accent); color: var(--accent); }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.form-grid .full { grid-column: 1 / -1; }
+.form-grid select { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 8px; padding: 6px 9px; width: 100%; }
+.np-preview { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.np-preview .chart { height: 200px; }
+.np-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 16px; }
+@media (max-width: 1100px) { .w1,.w2,.w3,.w4,.w5 { grid-column: span 6; } .w7,.w8,.w9,.w10,.w11 { grid-column: span 12; } }
+@media (max-width: 820px) { .board > .panel, .add-tile { grid-column: 1 / -1 !important; } .form-grid { grid-template-columns: minmax(0, 1fr); } }
+
 @media (max-width: 1100px) { .span3 { grid-column: span 6; } .span4, .span8 { grid-column: span 12; } .explore { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 820px) {
   .app { grid-template-columns: minmax(0, 1fr); }
@@ -284,10 +323,22 @@ pre.code { margin: 0; background: var(--surface-2); border: 1px solid var(--line
       </label>
       <div class="seg" id="rangeSeg" role="group" aria-label="Time range"></div>
       <button class="live" id="liveBtn" type="button" aria-pressed="true"><i></i><span>Live · hot tail 0 s</span></button>
+      <div class="dash-actions" id="dashActions">
+        <button class="btn" type="button" id="editLayout">Edit layout</button>
+        <button class="btn primary" type="button" id="addPanel">+ Add panel</button>
+      </div>
     </div>
 
     <section class="view" id="view-dashboards">
-      <div class="grid" id="dashGrid"></div>
+      <div class="edit-bar" id="editBar" hidden>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16v4z"/><path d="M13 7l4 4"/></svg>
+        <span><b>Editing layout.</b> Drag a panel by its grip to move it, drag the corner to resize. Arrow keys work on both handles.</span>
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="layoutReset">Reset</button>
+        <button class="btn" type="button" id="layoutCancel">Cancel</button>
+        <button class="btn primary" type="button" id="layoutDone">Done</button>
+      </div>
+      <div class="grid board" id="dashGrid"></div>
     </section>
 
     <section class="view" id="view-explore" hidden>
@@ -578,10 +629,15 @@ const DEFAULT_PANELS = () => [
 state.panels = DEFAULT_PANELS();
 const DASHES = [{ id: "shop", title: "Shop overview" }, { id: "self", title: "tiny-eye self-monitoring" }];
 
+const DEFAULT_H = { stat: 2, line: 4, routes: 4, logs: 4, traces: 4 };
+function sizeOf(p) { p.w ??= p.span ?? 6; p.h ??= p.type === "custom" ? (p.viz === "stat" ? 2 : 4) : DEFAULT_H[p.type] ?? 4; return p; }
 function panelShell(p) {
+  sizeOf(p);
   const el = document.createElement("div");
-  el.className = `panel span${p.span}${p.type === "stat" ? " stat" : ""}`;
-  el.innerHTML = `<header><h2>${esc(p.title)}</h2>${p.sub ? `<span class="sub">${esc(p.sub)}</span>` : ""}<div class="tools"><button class="icon-btn" type="button" data-tqs title="Show the TQS document">{ }</button>${p.custom ? `<button class="icon-btn" type="button" data-remove title="Remove panel">×</button>` : ""}</div></header><div class="body"></div>`;
+  el.className = `panel w${p.w}${p.type === "stat" ? " stat" : ""}`;
+  el.style.setProperty("--h", p.h);
+  el.dataset.id = p.id;
+  el.innerHTML = `<header><span class="grip" role="button" tabindex="0" aria-label="Move ${esc(p.title)} (arrow keys)" title="Drag to move"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3.5" r="1.3"/><circle cx="11" cy="3.5" r="1.3"/><circle cx="5" cy="8" r="1.3"/><circle cx="11" cy="8" r="1.3"/><circle cx="5" cy="12.5" r="1.3"/><circle cx="11" cy="12.5" r="1.3"/></svg></span><h2>${esc(p.title)}</h2>${p.sub ? `<span class="sub">${esc(p.sub)}</span>` : ""}<div class="tools"><button class="icon-btn" type="button" data-tqs title="Show the TQS document">{ }</button>${p.custom ? `<button class="icon-btn" type="button" data-remove title="Remove panel">×</button>` : ""}</div></header><div class="body"></div><span class="size-tag">${p.w}×${p.h}</span><button class="resize" type="button" aria-label="Resize ${esc(p.title)} (arrow keys)" title="Drag to resize"></button>`;
   el.querySelector("[data-tqs]").onclick = () => openDrawer(`${p.title} · TQS`, `<p class="hint" style="margin-top:0">Stored in <span class="mono">dashboards/shop.yaml</span>, validated with <span class="mono">POST /api/v1/validate</span>, run with <span class="mono">POST /api/v1/query</span>.</p><pre class="code">${highlight(tqsFor(p))}</pre>`);
   const rm = el.querySelector("[data-remove]");
   if (rm) rm.onclick = () => { state.panels = state.panels.filter(x => x !== p); renderDashboard(); toast(`Removed "${p.title}"`); };
@@ -591,6 +647,7 @@ function renderDashboard() {
   charts.clear();
   const g = document.getElementById("dashGrid");
   g.innerHTML = "";
+  g.classList.toggle("editing", layout.editing);
   if (state.dash === "self") { renderSelf(g); return; }
   for (const p of state.panels) {
     const el = panelShell(p), body = el.querySelector(".body");
@@ -623,15 +680,183 @@ function renderDashboard() {
       if (p.viz === "stat") { const v = p.data()[0].values; body.innerHTML = `<div class="value num" style="font-size:28px;font-weight:650">${esc(fmtVal(v[v.length - 1], p.unit))}</div><div class="spark"></div>`; sparkline(body.querySelector(".spark"), v, "var(--s1)"); }
       else lineChart(body.querySelector(".chart"), body.querySelector(".legend"), p.data(), { unit: p.unit, bars: p.viz === "bars", label: p.title });
     }
+    wireLayout(el, p);
+  }
+  if (layout.editing) {
+    const add = document.createElement("button");
+    add.type = "button"; add.className = "add-tile"; add.innerHTML = `<span style="font-size:18px">+</span> Add panel`;
+    add.onclick = openAddPanel;
+    g.appendChild(add);
   }
 }
+
+// ---------------------------------------------------------------- layout editing
+const LAYOUT_KEY = "tiny-eye-proto-layout";
+const layout = { editing: false, snapshot: null };
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(state.panels.filter(p => !p.custom).map(p => [p.id, p.w, p.h]))); } catch (_) { /* storage blocked: layout lasts for this visit */ }
+}
+function loadLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null");
+    if (!Array.isArray(saved)) return;
+    const byId = new Map(state.panels.map(p => [p.id, p]));
+    const ordered = saved.map(([id, w, h]) => { const p = byId.get(id); if (p) { p.w = w; p.h = h; byId.delete(id); } return p; }).filter(Boolean);
+    state.panels = [...ordered, ...byId.values()];
+  } catch (_) { /* no saved layout */ }
+}
+function setEditing(on) {
+  layout.editing = on;
+  if (on) layout.snapshot = state.panels.map(p => ({ p, w: sizeOf(p).w, h: p.h }));
+  document.getElementById("editBar").hidden = !on;
+  document.getElementById("editLayout").textContent = on ? "Editing…" : "Edit layout";
+  document.getElementById("editLayout").disabled = on;
+  renderDashboard();
+}
+function redrawCharts() { charts.forEach(c => c.el.isConnected && drawLine(c)); }
+function move(p, delta) {
+  const i = state.panels.indexOf(p), j = Math.max(0, Math.min(state.panels.length - 1, i + delta));
+  if (i === j) return;
+  state.panels.splice(i, 1); state.panels.splice(j, 0, p);
+  renderDashboard();
+  document.querySelector(`.panel[data-id="${CSS.escape(p.id)}"] .grip`)?.focus();
+}
+function resizeTo(el, p, w, h) {
+  w = Math.max(2, Math.min(12, w)); h = Math.max(1, Math.min(8, h));
+  if (w === p.w && h === p.h) return false;
+  el.classList.remove(`w${p.w}`); p.w = w; p.h = h;
+  el.classList.add(`w${w}`); el.style.setProperty("--h", h);
+  el.querySelector(".size-tag").textContent = `${w}×${h}`;
+  return true;
+}
+let dragId = null;
+function wireLayout(el, p) {
+  if (!layout.editing) return;
+  const grip = el.querySelector(".grip"), handle = el.querySelector(".resize");
+  // Move: HTML drag and drop; the whole panel is the drag source while editing.
+  el.draggable = true;
+  el.ondragstart = e => { dragId = p.id; el.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); };
+  el.ondragend = () => { dragId = null; document.querySelectorAll(".drop-before, .drop-after, .dragging").forEach(x => x.classList.remove("drop-before", "drop-after", "dragging")); };
+  el.ondragover = e => {
+    if (!dragId || dragId === p.id) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    const r = el.getBoundingClientRect(), before = e.clientX < r.left + r.width / 2;
+    el.classList.toggle("drop-before", before); el.classList.toggle("drop-after", !before);
+  };
+  el.ondragleave = () => el.classList.remove("drop-before", "drop-after");
+  el.ondrop = e => {
+    e.preventDefault();
+    const src = state.panels.find(x => x.id === dragId);
+    if (!src || src === p) return;
+    const before = el.classList.contains("drop-before");
+    state.panels.splice(state.panels.indexOf(src), 1);
+    state.panels.splice(state.panels.indexOf(p) + (before ? 0 : 1), 0, src);
+    renderDashboard();
+  };
+  grip.onkeydown = e => { if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); move(p, -1); } if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); move(p, 1); } };
+  // Resize: pointer drag on the corner, snapping to columns and rows.
+  handle.onpointerdown = e => {
+    e.preventDefault(); e.stopPropagation(); el.draggable = false;
+    handle.setPointerCapture(e.pointerId);
+    const grid = document.getElementById("dashGrid"), gs = getComputedStyle(grid);
+    const gap = parseFloat(gs.columnGap) || 14, colW = (grid.clientWidth - gap * 11) / 12, rowH = 92;
+    const r0 = el.getBoundingClientRect();
+    el.classList.add("resizing");
+    handle.onpointermove = ev => {
+      const w = Math.round((ev.clientX - r0.left + gap) / (colW + gap)), h = Math.round((ev.clientY - r0.top + gap) / (rowH + gap));
+      if (resizeTo(el, p, w, h)) redrawCharts();
+    };
+    handle.onpointerup = () => { handle.onpointermove = null; el.classList.remove("resizing"); el.draggable = true; redrawCharts(); };
+  };
+  handle.onkeydown = e => {
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (d) { e.preventDefault(); if (resizeTo(el, p, p.w + d[0], p.h + d[1])) redrawCharts(); }
+  };
+}
+document.getElementById("editLayout").onclick = () => setEditing(true);
+document.getElementById("layoutDone").onclick = () => { saveLayout(); setEditing(false); toast("Layout saved (in the app: w/h per panel in dashboards/shop.yaml)"); };
+document.getElementById("layoutCancel").onclick = () => {
+  state.panels = layout.snapshot.map(({ p, w, h }) => { p.w = w; p.h = h; return p; });
+  setEditing(false); toast("Changes discarded");
+};
+document.getElementById("layoutReset").onclick = () => {
+  const custom = state.panels.filter(p => p.custom);
+  state.panels = [...DEFAULT_PANELS(), ...custom];
+  try { localStorage.removeItem(LAYOUT_KEY); } catch (_) { /* ignore */ }
+  renderDashboard(); toast("Default layout restored");
+};
+
+// ---------------------------------------------------------------- add panel
+function openAddPanel() {
+  const np = { title: "", metric: `${H}_count`, fn: "rate", window: "5m", agg: "sum", by: ["http_route"], filters: [], viz: "line", w: 6 };
+  const options = (list, cur) => list.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
+  const autoTitle = () => { const m = CATALOG.find(x => x.name === np.metric); return `${np.fn} ${m.name.replace(/_seconds|_total|_count/g, "")}${np.by.length ? " by " + np.by.join(", ") : ""}`; };
+  openDrawer("New panel", `
+    <div class="form-grid">
+      <div class="field full"><label for="npTitle">Title</label><input class="input" id="npTitle" placeholder=""></div>
+      <div class="field full"><label for="npMetric">Metric</label><select id="npMetric" class="mono"></select></div>
+      <div class="field"><label for="npFn">Function</label><select id="npFn"></select></div>
+      <div class="field"><label for="npBy">Group by</label><select id="npBy"></select></div>
+      <div class="field"><span class="lbl">Visualization</span><div class="seg" id="npViz"></div></div>
+      <div class="field"><span class="lbl">Width</span><div class="seg" id="npW"></div></div>
+    </div>
+    <div class="field" style="margin-top:16px"><span class="lbl">Preview</span><div class="np-preview" id="npPreview"></div></div>
+    <p class="hint" style="margin-top:10px">Filters, formulas and several queries: open it in Explore, then add it from there.</p>
+    <div class="np-actions"><button class="btn" type="button" id="npExplore">Open in Explore</button><button class="btn primary" type="button" id="npAdd">Add panel</button></div>`);
+  const $ = id => document.getElementById(id);
+  const draw = () => {
+    const m = CATALOG.find(x => x.name === np.metric);
+    if (!FNS[m.type].some(([f]) => f === np.fn)) np.fn = FNS[m.type][0][0];
+    np.by = np.by.filter(l => m.labels.includes(l));
+    $("npMetric").innerHTML = options(CATALOG.map(c => [c.name, `${c.name}  (${c.type})`]), np.metric);
+    $("npFn").innerHTML = options(FNS[m.type].map(([f, d]) => [f, `${f} · ${d}`]), np.fn);
+    $("npBy").innerHTML = options([["", "nothing (one series)"], ...m.labels.map(l => [l, l])], np.by[0] || "");
+    $("npViz").innerHTML = [["line", "Line"], ["bars", "Bars"], ["stat", "Stat"]].map(([v, l]) => `<button type="button" class="${np.viz === v ? "on" : ""}" data-v="${v}">${l}</button>`).join("");
+    $("npW").innerHTML = [[3, "¼"], [6, "½"], [9, "¾"], [12, "Full"]].map(([w, l]) => `<button type="button" class="${np.w === w ? "on" : ""}" data-w="${w}">${l}</button>`).join("");
+    $("npTitle").placeholder = autoTitle();
+    $("npViz").querySelectorAll("[data-v]").forEach(b => b.onclick = () => { np.viz = b.dataset.v; if (np.viz === "stat" && np.w > 6) np.w = 3; draw(); });
+    $("npW").querySelectorAll("[data-w]").forEach(b => b.onclick = () => { np.w = +b.dataset.w; draw(); });
+    const series = seriesFor(np), unit = m.type === "histogram" ? "s" : "", pv = $("npPreview");
+    charts.forEach(c => { if (c.el.closest("#npPreview")) charts.delete(c); });
+    pv.innerHTML = `<div style="font-weight:600;font-size:13.5px">${esc($("npTitle").value || autoTitle())}</div>`;
+    if (np.viz === "stat") {
+      const v = series[0].values;
+      pv.innerHTML += `<div class="num" style="font-size:28px;font-weight:650">${esc(fmtVal(v[v.length - 1], unit))}</div><div class="spark"></div>`;
+      sparkline(pv.querySelector(".spark"), v, "var(--s1)");
+    } else {
+      pv.innerHTML += `<div class="chart"></div><div class="legend"></div>`;
+      lineChart(pv.querySelector(".chart"), pv.querySelector(".legend"), series, { unit, bars: np.viz === "bars", label: "preview" });
+    }
+  };
+  $("npMetric").onchange = e => { np.metric = e.target.value; draw(); };
+  $("npFn").onchange = e => { np.fn = e.target.value; draw(); };
+  $("npBy").onchange = e => { np.by = e.target.value ? [e.target.value] : []; draw(); };
+  $("npTitle").oninput = () => { const t = document.querySelector("#npPreview > div"); if (t) t.textContent = $("npTitle").value || autoTitle(); };
+  $("npExplore").onclick = () => {
+    Object.assign(ex, { metric: np.metric, fn: np.fn, window: np.window, agg: np.agg, by: np.by, filters: [] });
+    state.exViz = np.viz; state.exMode = "builder";
+    document.getElementById("closeDrawer").click();
+    location.hash = "explore";
+  };
+  $("npAdd").onclick = () => {
+    const m = CATALOG.find(x => x.name === np.metric), title = $("npTitle").value.trim() || autoTitle(), series = seriesFor(np), doc = docFor(np, np.viz, `panel-${Date.now()}`);
+    const panel = { id: doc.id, title, sub: "new panel", w: np.w, h: np.viz === "stat" ? 2 : 4, type: "custom", viz: np.viz, unit: m.type === "histogram" ? "s" : "", custom: true, data: () => series, tqs: () => ({ queries: doc.queries }) };
+    state.panels.push(panel);
+    document.getElementById("closeDrawer").click();
+    if (location.hash !== "#dashboards" && location.hash !== "") location.hash = "dashboards"; else renderDashboard();
+    requestAnimationFrame(() => document.querySelector(`.panel[data-id="${CSS.escape(panel.id)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    toast(`Added “${title}”. Use Edit layout to move or resize it.`);
+  };
+  draw();
+}
+document.getElementById("addPanel").onclick = openAddPanel;
 function renderSelf(g) {
   const panels = [
     { title: "Ingested rows / s by table", s: [["metrics_points", 2900], ["spans", 640], ["logs", 210], ["metrics_series", 12]] },
     { title: "Hot tail size", unit: "", s: [["bytes (MB)", 38]] },
   ];
   panels.forEach((p, k) => {
-    const el = document.createElement("div"); el.className = "panel span6";
+    const el = document.createElement("div"); el.className = "panel w6"; el.style.setProperty("--h", 4);
     el.innerHTML = `<header><h2>${esc(p.title)}</h2></header><div class="body"><div class="chart"></div><div class="legend"></div></div>`;
     g.appendChild(el);
     lineChart(el.querySelector(".chart"), el.querySelector(".legend"), p.s.map(([n, b], i) => ({ name: n, values: shape(200 + k * 10 + i, b) })), { label: p.title });
@@ -679,24 +904,26 @@ const ex = new Proxy({ metric: `${H}_count`, fn: "rate", window: "5m", agg: "sum
 });
 const metricOf = () => CATALOG.find(c => c.name === ex.metric);
 const unitOf = m => m.type === "histogram" ? "s" : m.name.endsWith("_bytes") ? "" : "";
-function exDoc() {
-  const m = metricOf(), isHist = m.type === "histogram";
-  const fn = isHist ? { op: "histogram_quantile", q: { p50: 0.5, p95: 0.95, p99: 0.99 }[ex.fn], window: ex.window } : ex.fn === "last" ? { op: "last" } : { op: ex.fn, window: ex.window };
+function exDoc() { return docFor(ex, state.exViz, "explore"); }
+function docFor(c, viz, id) {
+  const m = CATALOG.find(x => x.name === c.metric), isHist = m.type === "histogram";
+  const fn = isHist ? { op: "histogram_quantile", q: { p50: 0.5, p95: 0.95, p99: 0.99 }[c.fn], window: c.window } : c.fn === "last" ? { op: "last" } : { op: c.fn, window: c.window };
   const query = { name: "a", metric: isHist ? m.name.replace(/_count$/, "") : m.name };
-  if (ex.filters.length) query.match = ex.filters.map(f => ({ label: f.label, op: f.op, value: f.value }));
+  if (c.filters.length) query.match = c.filters.map(f => ({ label: f.label, op: f.op, value: f.value }));
   query.fn = fn;
-  query.agg = ex.by.length ? { op: ex.agg, by: ex.by } : { op: ex.agg };
-  return { tqs: "3", id: "explore", kind: state.exViz === "stat" ? "table" : "timeseries", time: { from: `-${state.range}` }, queries: [query] };
+  query.agg = c.by.length ? { op: c.agg, by: c.by } : { op: c.agg };
+  return { tqs: "3", id, kind: viz === "stat" ? "table" : "timeseries", time: { from: `-${state.range}` }, queries: [query] };
 }
 function cartesian(lists) { return lists.reduce((acc, l) => acc.flatMap(a => l.map(v => [...a, v])), [[]]); }
-function exSeries() {
-  const m = metricOf(), isHist = m.type === "histogram";
-  const base = isHist ? ({ p50: 0.045, p95: 0.21, p99: 0.48 }[ex.fn]) : m.type === "gauge" ? (m.name.includes("bytes") ? 180e6 : 40) : ex.fn === "increase" ? 600 : 9;
-  const allowed = l => (VALUES[l] || ["a", "b"]).filter(v => ex.filters.every(f => f.label !== l || (f.op === "=" ? f.value === v : f.op === "!=" ? f.value !== v : true)));
-  const keys = ex.by.length ? cartesian(ex.by.map(allowed)) : [[]];
-  const seed = [...ex.metric].reduce((a, c) => a + c.charCodeAt(0), 0) + ex.fn.length * 13;
+function exSeries() { return seriesFor(ex); }
+function seriesFor(c) {
+  const m = CATALOG.find(x => x.name === c.metric), isHist = m.type === "histogram";
+  const base = isHist ? ({ p50: 0.045, p95: 0.21, p99: 0.48 }[c.fn]) : m.type === "gauge" ? (m.name.includes("bytes") ? 180e6 : 40) : c.fn === "increase" ? 600 : 9;
+  const allowed = l => (VALUES[l] || ["a", "b"]).filter(v => c.filters.every(f => f.label !== l || (f.op === "=" ? f.value === v : f.op === "!=" ? f.value !== v : true)));
+  const keys = c.by.length ? cartesian(c.by.map(allowed)) : [[]];
+  const seed = [...c.metric].reduce((a, ch) => a + ch.charCodeAt(0), 0) + c.fn.length * 13;
   return keys.slice(0, 8).map((k, i) => ({
-    name: k.length ? ex.by.map((l, j) => `${l}=${k[j]}`).join(", ") : `${ex.agg}(${ex.fn})`,
+    name: k.length ? c.by.map((l, j) => `${l}=${k[j]}`).join(", ") : `${c.agg}(${c.fn})`,
     values: shape(seed + i * 7, base * [1, 0.72, 0.55, 0.41, 0.33, 0.26, 0.2, 0.15][i], { incident: isHist ? 1.3 : 0, noise: 0.1 }),
   }));
 }
@@ -979,6 +1206,8 @@ function route() {
   document.getElementById("crumb").textContent = view === "dashboards" ? "Dashboards · dashboards/shop.yaml" : VIEWS[view];
   document.getElementById("viewTitle").textContent = view === "dashboards" ? DASHES.find(d => d.id === state.dash).title : view === "explore" ? "Build a view" : VIEWS[view];
   document.getElementById("svcVar").hidden = view === "explore";
+  document.getElementById("dashActions").hidden = view !== "dashboards" || state.dash !== "shop";
+  if (view !== "dashboards" && layout.editing) { layout.editing = false; document.getElementById("editBar").hidden = true; document.getElementById("editLayout").textContent = "Edit layout"; document.getElementById("editLayout").disabled = false; }
   render(view);
 }
 function render(view = (location.hash || "#dashboards").slice(1)) {
@@ -993,6 +1222,7 @@ document.getElementById("dashList").innerHTML = DASHES.map(d => `<button type="b
 document.getElementById("dashList").querySelectorAll("[data-dash]").forEach(b => b.onclick = () => { state.dash = b.dataset.dash; document.querySelectorAll("[data-dash]").forEach(x => x.classList.toggle("on", x === b)); if (location.hash !== "#dashboards") location.hash = "dashboards"; else route(); });
 window.addEventListener("hashchange", route);
 let rz; new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => charts.forEach(c => c.el.isConnected && drawLine(c)), 80); }).observe(document.querySelector("main"));
+loadLayout();
 route();
 })();
 </script>
