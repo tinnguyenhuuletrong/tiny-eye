@@ -16,7 +16,7 @@ run against S3.
 | A C/C++ compiler | The `duckdb` crate compiles DuckDB from source. The first build takes several minutes. |
 | `curl`, `tar`, `gunzip` | `make tools` downloads pinned binaries. |
 | Node.js 20+ and npm | Builds the web UI, which `make build` and `make run` embed. Also needed for the demo shop and the docs site. Not needed if you build with `cargo` directly. |
-| Docker (optional) | Only for MinIO (`make s3-up`) and the demo load test (`make demo-load`). |
+| Docker (optional) | For the container image (`make docker`), MinIO (`make s3-up`) and the demo load test (`make demo-load`). |
 
 ## Build from source
 
@@ -29,7 +29,21 @@ make build    # web UI (ui/dist), then the release binary: target/release/tiny-e
 
 Replace `OWNER` with the GitHub owner of the repository you clone from.
 
-### What `make tools` downloads
+## Run with Docker
+
+The `Dockerfile` builds the binary with the web UI embedded and the pinned DuckDB extensions, in a
+slim non-root image:
+
+```bash
+make docker                                             # docker build -t tiny-eye:dev .
+docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev
+```
+
+Data, catalog and WAL live in the `/data` volume. Configure it with `-e TINY_EYE__SECTION__KEY=value`
+(see [Configuration](../deep-dive/configuration.md)). The build compiles DuckDB, so give Docker at
+least 8 GB of memory. More in [Operations](../deep-dive/operations.md).
+
+## What `make tools` downloads
 
 `make tools` fills `.tools/` (git-ignored) with pinned versions, so builds and tests do not
 depend on what is installed on your machine:

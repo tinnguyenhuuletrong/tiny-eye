@@ -34,6 +34,8 @@ Needs Rust stable, a C/C++ compiler and Node.js 20+. Send data from any OpenTele
 (`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:7070`, `http/protobuf`), Prometheus remote-write
 (`/api/v1/write`) or Loki push (`/loki/api/v1/push`). Open http://127.0.0.1:7070 for the UI.
 
+Or in a container: `make docker` then `docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev`.
+
 For a full walkthrough with a real app, run the demo shop: `make demo`, `make demo-app`,
 `make demo-load` ([guide](docs/examples/demo-shop.md)).
 
@@ -115,7 +117,7 @@ Every result below comes from a test that can fail. Reports are generated into
 | `crates/engine` | WAL, hot tail, flush, checkpoint, compaction, retention, queries, dashboards |
 | `crates/server` | The binary: HTTP handlers, receivers, auth, MCP bridge, embedded UI, benchmark |
 | `dashboards/` | Dashboards as YAML |
-| `deploy/` | Docker Compose for a local MinIO |
+| `deploy/` | Docker Compose for a local MinIO (the image itself is built by `Dockerfile`) |
 | `docs/` | Documentation and generated evidence reports |
 | `examples/` | The demo shop: Node.js app, k6 load, dashboard, queries |
 | `research/` | The specification and the research it is based on |

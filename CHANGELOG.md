@@ -40,6 +40,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   storage proof of concept (`make poc`), benchmarks on local disk and MinIO (`make bench`, `make bench-s3`).
 - Demo: a Node.js shop instrumented with OpenTelemetry, k6 load, a dashboard, ad-hoc queries and
   MCP setup for Claude Code / Claude Desktop (`make demo`, `make demo-app`, `make demo-load`).
+- Container image: multi-stage `Dockerfile` (web UI, binary, pinned DuckDB extensions; non-root,
+  data in a `/data` volume), `make docker`, and a release workflow publishing multi-arch images to
+  GitHub Container Registry on version tags.
 - Documentation site (Docusaurus, `website/`) published to GitHub Pages, and standard project files
   (license, contributing guide, security policy, code of conduct, issue and PR templates, Dependabot).
 

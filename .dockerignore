@@ -1,0 +1,9 @@
+target
+.tools
+.state
+data
+.git
+**/node_modules
+ui/dist
+website/build
+website/.docusaurus

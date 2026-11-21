@@ -56,12 +56,27 @@ WantedBy=multi-user.target
 
 ### Containers
 
-No container image is published yet. If you build one:
+The repository's `Dockerfile` builds one image with the web UI embedded and the pinned DuckDB
+extensions inside (`make docker`, tag `tiny-eye:dev`). The release workflow publishes it to
+`ghcr.io/<owner>/tiny-eye` for amd64 and arm64 on version tags.
 
-- set `server.listen: 0.0.0.0:7070` (the default `127.0.0.1:7070` is unreachable from outside the container);
-- ship the DuckDB extensions in the image and set `duckdb.extension_dir`, so the node needs no network at start;
-- mount a persistent volume for `ingest.wal_dir` and the catalog file (and for data, in local-disk mode);
-- the node handles `SIGTERM`, so the default `docker stop` works if the stop timeout covers the final flush.
+```bash
+docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev
+```
+
+What the image sets for you, through `TINY_EYE__*` environment variables:
+
+- `server.listen: 0.0.0.0:7070`, so the port is reachable from outside the container;
+- `duckdb.extension_dir: /opt/tiny-eye/duckdb_ext`, so the node needs no network at start;
+- storage, catalog and WAL under the `/data` volume, and dashboards in `/etc/tiny-eye/dashboards`
+  (writable by the `tinyeye` user, so saving from the UI works; mount your own directory there);
+- it runs as a non-root user (uid 10001).
+
+Override any key with another `-e TINY_EYE__SECTION__KEY=value`, or mount a config file and pass
+`--config /path/file.yaml`. The node handles `SIGTERM`, so `docker stop` flushes buffered rows if
+the stop timeout (default 10 s) covers the final flush; raise it with `--stop-timeout` for large
+arenas. Building the image compiles DuckDB: give Docker at least 8 GB of memory, and raise
+`--build-arg BUILD_JOBS=` on bigger builders.
 
 `deploy/docker-compose.yml` only starts MinIO for S3 tests and benchmarks; it does not run tiny-eye.
 

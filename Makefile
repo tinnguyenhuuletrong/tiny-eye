@@ -100,6 +100,11 @@ s3-down: ## Stop MinIO and drop its volume
 .PHONY: check
 check: lint ui test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
 
+## ---- container
+.PHONY: docker
+docker: ## Build the container image tiny-eye:dev (UI + binary + pinned DuckDB extensions)
+	docker build -t tiny-eye:dev .
+
 ## ---- demo (examples/demo/README.md)
 .PHONY: demo demo-app demo-load
 demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo); UI at http://127.0.0.1:7070
