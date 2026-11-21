@@ -61,7 +61,7 @@ More query examples: [api/examples](api/examples). Language reference: SPEC §8.
 | Storage assumptions on this machine | `make poc`: DuckLake registration + schema refusal, hot tail counted once, atomic compaction swap, retention deletes objects, bloom per row group, Arrow appender types | 6/6 |
 | Durability + overload | `crates/engine/tests/node.rs`: crash without flush loses no acknowledged sample (WAL replay); arena limit → 429 | pass |
 | Contracts in sync | `crates/server/tests/{openapi,schemas}.rs`: TQS JSON Schema ⇔ Rust validator on every example; generated docs current; config/dashboards valid | pass |
-| Performance | `make bench` / `make bench-s3` | [local disk](doc/results/bench-local.md), [MinIO](doc/results/bench-s3.md) |
+| Performance (8-core laptop, 2,620 series × 6 h, 3.7 M samples) | `make bench` / `make bench-s3` | remote-write **1.65 M samples/s**; flush 0.6 s; 6 h panels: `sum by (rate)` 0.58 s, histogram p99 73 ms, gauge 100 ms, one series 21 ms; trace by id 11 ms; absent trace id **22 → 2 S3 GETs** after compaction ([local](doc/results/bench-local.md), [MinIO](doc/results/bench-s3.md)) |
 
 ## Commands
 

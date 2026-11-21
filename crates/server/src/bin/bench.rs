@@ -29,6 +29,8 @@ use std::time::Instant;
 
 const SCRAPE: i64 = 15_000;
 
+const CAVEATS: &str = "\n**Caveats.** Synthetic counters rise linearly, so bytes per sample (0.4) is far below real data (the research measured ~6 B/sample on random walks; measure on real exporter data before sizing). L1 is slightly larger than L0 because compaction adds `positive_delta`. Panel timings are with warm DuckDB caches (`enable_external_file_cache`); the GET column is measured with caches off.\n";
+
 struct Args {
     series: usize,
     hours: i64,
@@ -520,6 +522,7 @@ async fn run(a: Args) -> Result<()> {
     node.compact(now + 2 * 3_600_000).await?;
     trace_lookups(&node, &base, &ids, &mut tmd, "Trace lookup by id, after compaction", a.s3.is_some()).await;
     md.push_str(&tmd);
+    md.push_str(CAVEATS);
     md.push_str("\nReproduce: `make bench` (local disk) or `make bench-s3` (MinIO). Numbers are from one run on one machine; MinIO runs on the same host, so S3 latency here is ~1 ms, not a real region's ~20–50 ms.\n");
 
     if let Some(out) = a.out {
