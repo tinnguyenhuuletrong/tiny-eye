@@ -158,6 +158,12 @@ async fn spans_and_logs_round_trip_through_the_lake() {
         .await
         .unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(g.series[0].points[0].1, 10.0);
+    // `exists` on an attribute (review: it bound the key twice and failed).
+    let ex = node
+        .query(r#"{"tqs":"3","id":"x","kind":"log_search","time":{"from":"-1m"},"search":{"logs":[{"field":"attr.logger","op":"exists","value":false}]}}"#)
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(ex.rows.len(), 10, "no log row has a logger attribute");
     let p = node.query(r#"{"tqs":"3","id":"p","kind":"log_patterns","time":{"from":"-1m"}}"#).await.unwrap();
     assert_eq!(p.rows.len(), 1, "10 lines, one template");
     let c = node.catalog().await.unwrap();

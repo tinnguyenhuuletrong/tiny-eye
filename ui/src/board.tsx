@@ -149,7 +149,7 @@ function AddPanel({ catalog, range, vars, onClose, onAdd }: { catalog?: Catalog;
   const auto = m ? `${fn} ${m.name}${builder.by.length ? " by " + builder.by.join(", ") : ""}` : "";
   const panel: Panel | null = m ? {
     query: { ...docFor(builder, m, range, display === "stat" ? "table" : "timeseries"), id: pid, title: title.trim() || auto } as Panel["query"],
-    ui: { display, w, h: display === "stat" ? 2 : 4 },
+    ui: { display, w, h: display === "stat" ? 2 : 4, ...(m.type === "histogram" ? { unit: "s" } : {}) },
   } : null;
   if (!catalog) return <Drawer title="New panel" onClose={onClose}><Empty>Loading the catalog…</Empty></Drawer>;
   if (!metrics.length) return <Drawer title="New panel" onClose={onClose}><Empty>No metrics yet. Send some data first (see Getting started), then add a panel.</Empty></Drawer>;

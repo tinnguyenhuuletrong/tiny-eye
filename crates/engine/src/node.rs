@@ -704,8 +704,11 @@ impl Node {
         tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut dropped = 0;
             for t in Table::ALL {
+                // Series rows are partitioned by day (hour 00): keep them a day longer than points,
+                // or the last points of a day would lose their labels before they expire.
+                let cutoff = if t == Table::MetricsSeries { cutoff_hour - 24 } else { cutoff_hour };
                 let old: Vec<String> =
-                    Self::lake_files(&conn, &store, t)?.into_iter().filter(|(_, h, _)| *h < cutoff_hour).map(|(u, _, _)| u).collect();
+                    Self::lake_files(&conn, &store, t)?.into_iter().filter(|(_, h, _)| *h < cutoff).map(|(u, _, _)| u).collect();
                 if !old.is_empty() {
                     let list = old.iter().map(|u| sql_str(u)).collect::<Vec<_>>().join(", ");
                     conn.execute_batch(&format!("DELETE FROM lake.{} WHERE filename IN ({list})", t.name()))?;
@@ -775,7 +778,11 @@ impl Node {
 
     /// Run `f` on a pooled query connection on a blocking thread, with the query timeout.
     pub async fn with_conn<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> Result<T> + Send + 'static) -> Result<T> {
-        let permit = self.pool_gate.clone().acquire_owned().await?;
+        let timeout = self.cfg.query.timeout.0;
+        // Waiting for a free connection counts against the query timeout too.
+        let permit = tokio::time::timeout(timeout, self.pool_gate.clone().acquire_owned())
+            .await
+            .map_err(|_| anyhow!("no query connection free within the {} ms timeout", timeout.as_millis()))??;
         let conn = self.pool.lock().map_err(|_| anyhow!("pool lock poisoned"))?.pop().context("query pool empty")?;
         let interrupt = conn.interrupt_handle();
         let pool = self.pool.clone();
@@ -786,7 +793,7 @@ impl Node {
             let lease = Lease { conn: Some(conn), pool, _permit: permit };
             f(lease.conn.as_ref().expect("leased connection"))
         });
-        let timeout = self.cfg.query.timeout.0;
+
         match tokio::time::timeout(timeout, job).await {
             Ok(joined) => joined.map_err(|e| anyhow!("query task failed: {e}"))?,
             Err(_) => {

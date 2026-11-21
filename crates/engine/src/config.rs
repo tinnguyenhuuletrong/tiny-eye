@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_norway::Value;
 use std::borrow::Cow;
 use std::time::Duration;
@@ -12,7 +12,7 @@ use std::time::Duration;
 pub const DEFAULT_YAML: &str = include_str!("../../../config/default.yaml");
 const ENV_PREFIX: &str = "TINY_EYE__";
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 /// tiny-eye configuration file (merged over the built-in config/default.yaml).
 pub struct Config {
@@ -38,7 +38,7 @@ pub struct Config {
     pub dashboards: Dashboards,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
     /// Unique node id; part of every file name and envelope.
@@ -49,14 +49,14 @@ pub struct Node {
     pub tenant: String,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Server {
     /// `host:port` to listen on.
     pub listen: String,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Storage {
     /// `./dir`, `file:///abs/dir` or `s3://bucket/prefix`.
@@ -64,7 +64,7 @@ pub struct Storage {
     pub s3: S3,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct S3 {
     /// Empty for AWS; e.g. `http://127.0.0.1:19000` for MinIO.
@@ -77,14 +77,14 @@ pub struct S3 {
     pub allow_http: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     /// A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).
     pub url: String,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DuckDb {
     /// `<dir>/<duckdb version>/<platform>/*.duckdb_extension`; empty = auto-install.
@@ -93,7 +93,7 @@ pub struct DuckDb {
     pub memory_limit: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
     /// Ack after arena admission; a crash loses the unflushed batch.
@@ -102,7 +102,7 @@ pub enum Durability {
     Wal,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Ingest {
     pub durability: Durability,
@@ -122,7 +122,7 @@ pub struct Ingest {
     pub row_group_rows: usize,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Coordinator {
     /// How often pending envelopes are applied to the catalog.
@@ -139,7 +139,7 @@ pub struct Coordinator {
     pub retention_interval: Dur,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Query {
     /// A query running longer is interrupted.
@@ -148,13 +148,13 @@ pub struct Query {
     pub workers: usize,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Auth {
     pub tokens: Vec<TokenSpec>,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenSpec {
     /// Name of the env var holding the token (tokens never live in the file).
@@ -162,7 +162,7 @@ pub struct TokenSpec {
     pub scopes: Vec<Scope>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Ingest,
@@ -170,7 +170,7 @@ pub enum Scope {
     Admin,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Dashboards {
     /// Directory of dashboard YAML files (schema: schema/generated/dashboard.schema.json).
@@ -187,6 +187,17 @@ impl JsonSchema for ByteSize {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({"type": "string", "pattern": "^[0-9]+(B|KB|MB|GB)$", "description": "Size: B, KB, MB, GB (powers of 1024), e.g. 64MB", "examples": ["64MB", "1GB"]})
+    }
+}
+
+impl Serialize for ByteSize {
+    /// Back to the config grammar, in the largest exact unit (`64MB`, `1536KB`).
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let u = [("GB", 1u64 << 30), ("MB", 1 << 20), ("KB", 1 << 10)].into_iter().find(|(_, n)| self.0 > 0 && self.0.is_multiple_of(*n));
+        s.serialize_str(&match u {
+            Some((name, n)) => format!("{}{name}", self.0 / n),
+            None => format!("{}B", self.0),
+        })
     }
 }
 
@@ -228,6 +239,20 @@ impl JsonSchema for Dur {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({"type": "string", "pattern": "^[0-9]+(ms|s|m|h|d|w)$", "description": "Duration: ms, s, m, h, d, w, e.g. 60s", "examples": ["5s", "10m", "15d"]})
+    }
+}
+
+impl Serialize for Dur {
+    /// Back to the config grammar, in the largest exact unit (`60s` → `1m`, `15d`).
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let ms = self.0.as_millis() as u64;
+        let u = [("w", 604_800_000u64), ("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1_000)]
+            .into_iter()
+            .find(|(_, n)| ms > 0 && ms.is_multiple_of(*n));
+        s.serialize_str(&match u {
+            Some((name, n)) => format!("{}{name}", ms / n),
+            None => format!("{ms}ms"),
+        })
     }
 }
 
@@ -316,7 +341,7 @@ impl Config {
         static PW: std::sync::LazyLock<regex::Regex> =
             std::sync::LazyLock::new(|| regex::Regex::new(r"(password=)\S+|(://[^:/@]+:)[^@]+(@)").expect("static regex"));
         c.catalog.url = PW.replace_all(&c.catalog.url, "${1}${2}<redacted>${3}").into_owned();
-        format!("{c:#?}")
+        serde_norway::to_string(&c).unwrap_or_else(|e| format!("<config not printable: {e}>"))
     }
 
     pub fn is_s3(&self) -> bool {
@@ -391,6 +416,14 @@ mod tests {
         assert_eq!(c.node.id, "n7");
         assert_eq!(c.query.workers, 8);
         assert_eq!(c.node.region, "local", "untouched keys keep defaults");
+    }
+
+    #[test]
+    fn printed_config_is_yaml_that_loads_back() {
+        let c = Config::from_layers(None, &[]).expect("defaults");
+        let back = Config::from_layers(Some(&c.redacted_yaml()), &[]).expect("the printed config is a valid config file");
+        assert_eq!(back.ingest.flush_bytes, c.ingest.flush_bytes);
+        assert_eq!(back.coordinator.retention, c.coordinator.retention);
     }
 
     #[test]

@@ -460,12 +460,26 @@ impl Tqs {
                 };
                 for (i, c) in conds.iter().enumerate() {
                     validate_cond(c, fields, &format!("{path}[{i}]"), &mut push);
+                    if c.value.as_str().is_some_and(|v| resolve_var(v, &self.vars, &resolved).is_none()) {
+                        push("var", format!("{path}[{i}].value"), format!("{} is not a defined variable", c.value));
+                    }
+                }
+                let orders: &[&str] = if self.kind == Kind::TraceSearch { &["duration_desc", "start_desc"] } else { &["desc", "asc"] };
+                if let Some(o) = s.order.as_deref().filter(|o| !orders.contains(o)) {
+                    push("schema", "search.order".into(), format!("{o:?}: order is one of {}", orders.join(", ")));
                 }
                 for (i, c) in s.trace.iter().enumerate() {
                     validate_cond(c, TRACE_FIELDS, &format!("search.trace[{i}]"), &mut push);
                     // Whole-trace fields with a narrower grammar than validate_cond's text/number rules.
                     match (c.field.as_str(), c.op.as_str()) {
-                        ("service", "=" | "=~") | ("has_error", "=") => {}
+                        ("service", "=" | "=~") | ("has_error", "=") | ("root.service_name" | "root.span_name", "=" | "!=" | "=~") => {}
+                        ("root.service_name" | "root.span_name", _) => {
+                            push("cond", format!("search.trace[{i}]"), "root fields take =, != or =~".into())
+                        }
+                        ("duration_ms" | "span_count", "=" | "!=" | ">" | ">=" | "<" | "<=") => {}
+                        ("duration_ms" | "span_count", _) => {
+                            push("cond", format!("search.trace[{i}]"), "duration_ms and span_count take =, !=, >, >=, <, <=".into())
+                        }
                         ("service", _) => push("cond", format!("search.trace[{i}]"), "service takes = or =~".into()),
                         ("has_error", _) => push("cond", format!("search.trace[{i}]"), "has_error takes = true|false".into()),
                         _ => {}
@@ -572,15 +586,15 @@ impl Tqs {
                     }
                 }
             } else {
-                let (conds, fields) = match (&q.spans, &q.logs) {
-                    (Some(c), _) => (c, SPAN_FIELDS),
-                    (_, Some(c)) => (c, LOG_FIELDS),
+                let (conds, fields, key) = match (&q.spans, &q.logs) {
+                    (Some(c), _) => (c, SPAN_FIELDS, "spans"),
+                    (_, Some(c)) => (c, LOG_FIELDS, "logs"),
                     _ => unreachable!("one source checked above"),
                 };
                 for (j, c) in conds.iter().enumerate() {
-                    validate_cond(c, fields, &format!("{path}.where[{j}]"), push);
+                    validate_cond(c, fields, &format!("{path}.{key}[{j}]"), push);
                     if c.value.as_str().is_some_and(|v| !var_ok(v)) {
-                        push("var", format!("{path}.where[{j}].value"), format!("{} is not a defined variable", c.value));
+                        push("var", format!("{path}.{key}[{j}].value"), format!("{} is not a defined variable", c.value));
                     }
                 }
                 if q.then.is_some() || !q.derive.is_empty() {
@@ -760,11 +774,31 @@ mod tests {
     }
 
     #[test]
+    fn list_kinds_check_order_and_vars() {
+        let doc = |extra: serde_json::Value| {
+            let mut d = serde_json::json!({"tqs": "3", "id": "x", "kind": "log_search", "time": {"from": "-1h"}, "search": {"logs": [{"field": "service_name", "op": "=", "value": "$svc"}]}});
+            for (k, v) in extra.as_object().expect("object") {
+                d[k] = v.clone();
+            }
+            d
+        };
+        assert_eq!(codes(doc(serde_json::json!({}))), vec!["var"], "an undefined $var is refused");
+        assert!(codes(doc(serde_json::json!({"vars": {"svc": "api"}}))).is_empty());
+        let mut bad = doc(serde_json::json!({"vars": {"svc": "api"}}));
+        bad["search"]["order"] = serde_json::json!("sideways");
+        assert_eq!(codes(bad), vec!["schema"]);
+    }
+
+    #[test]
     fn trace_conditions_have_their_own_grammar() {
         let doc = |c: serde_json::Value| serde_json::json!({"tqs": "3", "id": "x", "kind": "trace_search", "time": {"from": "-1h"}, "search": {"trace": [c]}});
         assert!(codes(doc(serde_json::json!({"field": "service", "op": "=", "value": "api"}))).is_empty());
         assert!(codes(doc(serde_json::json!({"field": "has_error", "op": "=", "value": true}))).is_empty());
         assert!(!codes(doc(serde_json::json!({"field": "service", "op": "!=", "value": "api"}))).is_empty());
         assert!(!codes(doc(serde_json::json!({"field": "has_error", "op": "=", "value": "true"}))).is_empty());
+        assert!(
+            !codes(doc(serde_json::json!({"field": "root.span_name", "op": "contains", "value": "x"}))).is_empty(),
+            "contains never matched a root field"
+        );
     }
 }

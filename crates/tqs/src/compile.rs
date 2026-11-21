@@ -407,10 +407,6 @@ fn ms_of(col: &str) -> String {
     format!("(epoch_ns({col}) // 1000000)")
 }
 
-fn cond_sql(sql: &mut Sql, c: &Cond, signal: &str) -> String {
-    cond_sql_vars(sql, c, signal, &Vars::new(), None)
-}
-
 fn cond_sql_vars(sql: &mut Sql, c: &Cond, signal: &str, vars: &Vars, r: Option<&Resolved>) -> String {
     let resolved;
     let c = match (c.value.as_str(), r) {
@@ -421,6 +417,14 @@ fn cond_sql_vars(sql: &mut Sql, c: &Cond, signal: &str, vars: &Vars, r: Option<&
         _ => c,
     };
     let attrs = if signal == "spans" { "span_attrs" } else { "log_attrs" };
+    // `exists` binds the key itself; compute (and bind) the column only for the other operators,
+    // or the statement ends up with an unused parameter.
+    if c.op == "exists" {
+        let k = sql.text(c.field.split_once('.').map(|x| x.1).unwrap_or_default());
+        let src = if c.field.starts_with("attr.") { attrs } else { "resource_attrs" };
+        let e = format!("map_contains({src}, {k})");
+        return if c.value.as_bool() == Some(true) { e } else { format!("NOT {e}") };
+    }
     let col = if let Some(k) = c.field.strip_prefix("attr.") {
         format!("map_extract_value({attrs}, {})", sql.text(k))
     } else if let Some(k) = c.field.strip_prefix("resource.") {
@@ -438,12 +442,6 @@ fn cond_sql_vars(sql: &mut Sql, c: &Cond, signal: &str, vars: &Vars, r: Option<&
         other => sql.text(other.as_str().unwrap_or_default()),
     };
     match c.op.as_str() {
-        "exists" => {
-            let k = sql.text(c.field.split_once('.').map(|x| x.1).unwrap_or_default());
-            let src = if c.field.starts_with("attr.") { attrs } else { "resource_attrs" };
-            let e = format!("map_contains({src}, {k})");
-            if c.value.as_bool() == Some(true) { e } else { format!("NOT {e}") }
-        }
         "=~" => format!("regexp_full_match(coalesce({col}::VARCHAR, ''), {})", bind(sql, &c.value)),
         "!~" => format!("NOT regexp_full_match(coalesce({col}::VARCHAR, ''), {})", bind(sql, &c.value)),
         "contains" => format!("contains({col}, {})", bind(sql, &c.value)),
@@ -685,7 +683,7 @@ pub fn run_list(conn: &Connection, tqs: &Tqs, r: &Resolved) -> Result<Vec<Vec<(S
             )
         }
         Kind::TraceSearch => {
-            let span_match: Vec<String> = s.spans.iter().map(|c| cond_sql(&mut sql, c, "spans")).collect();
+            let span_match: Vec<String> = s.spans.iter().map(|c| cond_sql_vars(&mut sql, c, "spans", &tqs.vars, Some(r))).collect();
             let matched = if span_match.is_empty() { "true".into() } else { format!("bool_or({})", span_match.join(" AND ")) };
             let mut trace_conds = vec![];
             for c in &s.trace {
@@ -737,7 +735,7 @@ pub fn run_list(conn: &Connection, tqs: &Tqs, r: &Resolved) -> Result<Vec<Vec<(S
             )
         }
         Kind::LogSearch | Kind::LogPatterns => {
-            let mut wh: Vec<String> = s.logs.iter().map(|c| cond_sql(&mut sql, c, "logs")).collect();
+            let mut wh: Vec<String> = s.logs.iter().map(|c| cond_sql_vars(&mut sql, c, "logs", &tqs.vars, Some(r))).collect();
             let ts = ms_of("timestamp_ns");
             wh.push(format!("{ts} > {} AND {ts} <= {}", r.from_ms, r.to_ms));
             if tqs.kind == Kind::LogSearch {

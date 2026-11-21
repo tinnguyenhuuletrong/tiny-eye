@@ -1,5 +1,5 @@
-# yaml-language-server: $schema=../../../doc/schema/dashboard.schema.json
-# Each panel is `query` (TQS: what to fetch) + `ui` (display, unit, w of 12 columns, h rows).
+# yaml-language-server: $schema=../../../schema/generated/dashboard.schema.json
+# Each panel is `ui` (display, unit, w of 12 columns, h rows) + `query` (TQS: what to fetch).
 # The demo shop (examples/demo/app): golden signals, payments, errors, logs and traces.
 # Metric names are what the OpenTelemetry Node SDK emits, translated by tiny-eye's OTLP receiver
 # (dots → underscores, histograms → _bucket/_count/_sum, monotonic sums → _total).

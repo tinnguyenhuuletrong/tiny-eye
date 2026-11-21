@@ -8,7 +8,8 @@ if [[ -z "${2:-}" ]]; then
   curl -sf "$url/api/v1/dashboards/$dash" | jq -r '.panels[].query | "\(.id)\t\(.kind)\t\(.title // "")"'
   exit 0
 fi
+# The dashboard's vars are defaults for the panel's query (exactly what the UI does).
 curl -sf "$url/api/v1/dashboards/$dash" \
-  | jq --arg id "$2" '.panels[] | select(.query.id == $id) | .query' \
+  | jq --arg id "$2" '(.vars // {}) as $v | .panels[] | select(.query.id == $id) | .query | .vars = ($v + (.vars // {}))' \
   | curl -sf "$url/api/v1/query" -H 'Content-Type: application/json' -d @- \
   | jq '{elapsed_ms, series: [.series[] | {name: (if .key == "" then .output else .key end), last: .points[-1]}], rows: .rows[:5]}'
