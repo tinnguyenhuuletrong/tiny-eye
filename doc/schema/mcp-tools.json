@@ -1,0 +1,1121 @@
+{
+  "tools": [
+    {
+      "description": "List metric names (with label keys), services and span names seen in the last 24 h. Bounded.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "discover_telemetry_catalog"
+    },
+    {
+      "description": "Run a TQS 3 query (metrics timeseries/table, spans/logs aggregates, trace search,\ntrace waterfall, log search, log patterns). Invalid documents return every problem\nwith a code and JSON path so all can be fixed in one round trip.",
+      "inputSchema": {
+        "$defs": {
+          "TqsAgg": {
+            "additionalProperties": false,
+            "properties": {
+              "by": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "op": {
+                "enum": [
+                  "sum",
+                  "avg",
+                  "min",
+                  "max",
+                  "count",
+                  "absent"
+                ],
+                "type": "string"
+              },
+              "without": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "TqsCond": {
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "description": "a signal field, attr.<key> or resource.<key>",
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "=",
+                  "!=",
+                  ">",
+                  ">=",
+                  "<",
+                  "<=",
+                  "=~",
+                  "!~",
+                  "contains",
+                  "in",
+                  "exists"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "boolean or (for in) an array of up to 100 values": null,
+                "description": "string",
+                "number": null
+              }
+            },
+            "required": [
+              "field",
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "TqsDerive": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "regex": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "replacement": {
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "from",
+              "regex",
+              "replacement"
+            ],
+            "type": "object"
+          },
+          "TqsDocument": {
+            "additionalProperties": false,
+            "properties": {
+              "formulas": {
+                "items": {
+                  "$ref": "#/$defs/TqsFormula"
+                },
+                "type": "array"
+              },
+              "id": {
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "timeseries",
+                  "table",
+                  "trace_search",
+                  "trace",
+                  "log_search",
+                  "log_patterns"
+                ],
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 5000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "queries": {
+                "items": {
+                  "$ref": "#/$defs/TqsQuery"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              "search": {
+                "$ref": "#/$defs/TqsSearch"
+              },
+              "time": {
+                "$ref": "#/$defs/TqsTime"
+              },
+              "title": {
+                "type": "string"
+              },
+              "top": {
+                "$ref": "#/$defs/TqsTop"
+              },
+              "tqs": {
+                "const": "3",
+                "type": "string"
+              },
+              "trace_id": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "vars": {
+                "additionalProperties": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "tqs",
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "TqsDuration": {
+            "description": "positive duration like \"30s\", \"5m\", \"7d\", or a variable \"$name\" / \"$__range\" / \"$__interval\"",
+            "pattern": "^([0-9]+(ms|s|m|h|d|w)|\\$[a-z_][a-z0-9_]*)$",
+            "type": "string"
+          },
+          "TqsFn": {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "enum": [
+                  "rate",
+                  "increase",
+                  "irate",
+                  "delta",
+                  "resets",
+                  "changes",
+                  "last",
+                  "avg_over_time",
+                  "min_over_time",
+                  "max_over_time",
+                  "sum_over_time",
+                  "count_over_time",
+                  "last_over_time",
+                  "histogram_quantile"
+                ],
+                "type": "string"
+              },
+              "q": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "window": {
+                "$ref": "#/$defs/TqsDuration"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "TqsFormula": {
+            "additionalProperties": false,
+            "properties": {
+              "expr": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "join": {
+                "enum": [
+                  "inner",
+                  "outer"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "expr"
+            ],
+            "type": "object"
+          },
+          "TqsHaving": {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "enum": [
+                  "=",
+                  "!=",
+                  ">",
+                  ">=",
+                  "<",
+                  "<="
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "TqsMatcher": {
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "=",
+                  "!=",
+                  "=~",
+                  "!~"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "TqsMeasure": {
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "enum": [
+                  "duration_ms"
+                ],
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "count",
+                  "rate",
+                  "quantile",
+                  "avg",
+                  "min",
+                  "max",
+                  "sum"
+                ],
+                "type": "string"
+              },
+              "q": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "TqsQuery": {
+            "additionalProperties": false,
+            "description": "Exactly one of metric, spans, logs.",
+            "properties": {
+              "agg": {
+                "$ref": "#/$defs/TqsAgg"
+              },
+              "derive": {
+                "items": {
+                  "$ref": "#/$defs/TqsDerive"
+                },
+                "type": "array"
+              },
+              "fill": {
+                "enum": [
+                  "none",
+                  "zero"
+                ],
+                "type": "string"
+              },
+              "fn": {
+                "$ref": "#/$defs/TqsFn"
+              },
+              "having": {
+                "$ref": "#/$defs/TqsHaving"
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "logs": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "match": {
+                "items": {
+                  "$ref": "#/$defs/TqsMatcher"
+                },
+                "type": "array"
+              },
+              "measure": {
+                "$ref": "#/$defs/TqsMeasure"
+              },
+              "metric": {
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                "type": "string"
+              },
+              "offset": {
+                "$ref": "#/$defs/TqsDuration"
+              },
+              "spans": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "then": {
+                "$ref": "#/$defs/TqsAgg"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "TqsSearch": {
+            "additionalProperties": false,
+            "properties": {
+              "logs": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "order": {
+                "enum": [
+                  "duration_desc",
+                  "start_desc",
+                  "desc",
+                  "asc"
+                ],
+                "type": "string"
+              },
+              "spans": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "trace": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "TqsTime": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/TqsTimePoint"
+              },
+              "step": {
+                "$ref": "#/$defs/TqsDuration"
+              },
+              "to": {
+                "$ref": "#/$defs/TqsTimePoint"
+              }
+            },
+            "required": [
+              "from"
+            ],
+            "type": "object"
+          },
+          "TqsTimePoint": {
+            "description": "epoch ms, \"now\", or \"-<duration>\" relative to now",
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "pattern": "^(now|-[0-9]+(ms|s|m|h|d|w))$",
+                "type": "string"
+              }
+            ]
+          },
+          "TqsTop": {
+            "additionalProperties": false,
+            "properties": {
+              "n": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "order": {
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "rank": {
+                "enum": [
+                  "per_step",
+                  "max",
+                  "avg",
+                  "last"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "formulas": {
+            "items": {
+              "$ref": "#/$defs/TqsFormula"
+            },
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "timeseries",
+              "table",
+              "trace_search",
+              "trace",
+              "log_search",
+              "log_patterns"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 5000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queries": {
+            "items": {
+              "$ref": "#/$defs/TqsQuery"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array"
+          },
+          "search": {
+            "$ref": "#/$defs/TqsSearch"
+          },
+          "time": {
+            "$ref": "#/$defs/TqsTime"
+          },
+          "title": {
+            "type": "string"
+          },
+          "top": {
+            "$ref": "#/$defs/TqsTop"
+          },
+          "tqs": {
+            "const": "3",
+            "type": "string"
+          },
+          "trace_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "vars": {
+            "additionalProperties": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "tqs",
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "name": "run_tqs"
+    },
+    {
+      "description": "Validate a TQS 3 document; returns every problem with code, JSON path and message.",
+      "inputSchema": {
+        "$defs": {
+          "TqsAgg": {
+            "additionalProperties": false,
+            "properties": {
+              "by": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "op": {
+                "enum": [
+                  "sum",
+                  "avg",
+                  "min",
+                  "max",
+                  "count",
+                  "absent"
+                ],
+                "type": "string"
+              },
+              "without": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "TqsCond": {
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "description": "a signal field, attr.<key> or resource.<key>",
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "=",
+                  "!=",
+                  ">",
+                  ">=",
+                  "<",
+                  "<=",
+                  "=~",
+                  "!~",
+                  "contains",
+                  "in",
+                  "exists"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "boolean or (for in) an array of up to 100 values": null,
+                "description": "string",
+                "number": null
+              }
+            },
+            "required": [
+              "field",
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "TqsDerive": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "regex": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "replacement": {
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "from",
+              "regex",
+              "replacement"
+            ],
+            "type": "object"
+          },
+          "TqsDocument": {
+            "additionalProperties": false,
+            "properties": {
+              "formulas": {
+                "items": {
+                  "$ref": "#/$defs/TqsFormula"
+                },
+                "type": "array"
+              },
+              "id": {
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "timeseries",
+                  "table",
+                  "trace_search",
+                  "trace",
+                  "log_search",
+                  "log_patterns"
+                ],
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 5000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "queries": {
+                "items": {
+                  "$ref": "#/$defs/TqsQuery"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              "search": {
+                "$ref": "#/$defs/TqsSearch"
+              },
+              "time": {
+                "$ref": "#/$defs/TqsTime"
+              },
+              "title": {
+                "type": "string"
+              },
+              "top": {
+                "$ref": "#/$defs/TqsTop"
+              },
+              "tqs": {
+                "const": "3",
+                "type": "string"
+              },
+              "trace_id": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "vars": {
+                "additionalProperties": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "tqs",
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "TqsDuration": {
+            "description": "positive duration like \"30s\", \"5m\", \"7d\", or a variable \"$name\" / \"$__range\" / \"$__interval\"",
+            "pattern": "^([0-9]+(ms|s|m|h|d|w)|\\$[a-z_][a-z0-9_]*)$",
+            "type": "string"
+          },
+          "TqsFn": {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "enum": [
+                  "rate",
+                  "increase",
+                  "irate",
+                  "delta",
+                  "resets",
+                  "changes",
+                  "last",
+                  "avg_over_time",
+                  "min_over_time",
+                  "max_over_time",
+                  "sum_over_time",
+                  "count_over_time",
+                  "last_over_time",
+                  "histogram_quantile"
+                ],
+                "type": "string"
+              },
+              "q": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "window": {
+                "$ref": "#/$defs/TqsDuration"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "TqsFormula": {
+            "additionalProperties": false,
+            "properties": {
+              "expr": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "join": {
+                "enum": [
+                  "inner",
+                  "outer"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "expr"
+            ],
+            "type": "object"
+          },
+          "TqsHaving": {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "enum": [
+                  "=",
+                  "!=",
+                  ">",
+                  ">=",
+                  "<",
+                  "<="
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "TqsMatcher": {
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "=",
+                  "!=",
+                  "=~",
+                  "!~"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "TqsMeasure": {
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "enum": [
+                  "duration_ms"
+                ],
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "count",
+                  "rate",
+                  "quantile",
+                  "avg",
+                  "min",
+                  "max",
+                  "sum"
+                ],
+                "type": "string"
+              },
+              "q": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "TqsQuery": {
+            "additionalProperties": false,
+            "description": "Exactly one of metric, spans, logs.",
+            "properties": {
+              "agg": {
+                "$ref": "#/$defs/TqsAgg"
+              },
+              "derive": {
+                "items": {
+                  "$ref": "#/$defs/TqsDerive"
+                },
+                "type": "array"
+              },
+              "fill": {
+                "enum": [
+                  "none",
+                  "zero"
+                ],
+                "type": "string"
+              },
+              "fn": {
+                "$ref": "#/$defs/TqsFn"
+              },
+              "having": {
+                "$ref": "#/$defs/TqsHaving"
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "logs": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "match": {
+                "items": {
+                  "$ref": "#/$defs/TqsMatcher"
+                },
+                "type": "array"
+              },
+              "measure": {
+                "$ref": "#/$defs/TqsMeasure"
+              },
+              "metric": {
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                "type": "string"
+              },
+              "offset": {
+                "$ref": "#/$defs/TqsDuration"
+              },
+              "spans": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "then": {
+                "$ref": "#/$defs/TqsAgg"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "TqsSearch": {
+            "additionalProperties": false,
+            "properties": {
+              "logs": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "order": {
+                "enum": [
+                  "duration_desc",
+                  "start_desc",
+                  "desc",
+                  "asc"
+                ],
+                "type": "string"
+              },
+              "spans": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              },
+              "trace": {
+                "items": {
+                  "$ref": "#/$defs/TqsCond"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "TqsTime": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/TqsTimePoint"
+              },
+              "step": {
+                "$ref": "#/$defs/TqsDuration"
+              },
+              "to": {
+                "$ref": "#/$defs/TqsTimePoint"
+              }
+            },
+            "required": [
+              "from"
+            ],
+            "type": "object"
+          },
+          "TqsTimePoint": {
+            "description": "epoch ms, \"now\", or \"-<duration>\" relative to now",
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "pattern": "^(now|-[0-9]+(ms|s|m|h|d|w))$",
+                "type": "string"
+              }
+            ]
+          },
+          "TqsTop": {
+            "additionalProperties": false,
+            "properties": {
+              "n": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "order": {
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "rank": {
+                "enum": [
+                  "per_step",
+                  "max",
+                  "avg",
+                  "last"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "formulas": {
+            "items": {
+              "$ref": "#/$defs/TqsFormula"
+            },
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "timeseries",
+              "table",
+              "trace_search",
+              "trace",
+              "log_search",
+              "log_patterns"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 5000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queries": {
+            "items": {
+              "$ref": "#/$defs/TqsQuery"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array"
+          },
+          "search": {
+            "$ref": "#/$defs/TqsSearch"
+          },
+          "time": {
+            "$ref": "#/$defs/TqsTime"
+          },
+          "title": {
+            "type": "string"
+          },
+          "top": {
+            "$ref": "#/$defs/TqsTop"
+          },
+          "tqs": {
+            "const": "3",
+            "type": "string"
+          },
+          "trace_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "vars": {
+            "additionalProperties": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "tqs",
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "name": "validate_tqs"
+    }
+  ]
+}

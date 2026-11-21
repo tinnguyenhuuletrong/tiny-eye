@@ -262,7 +262,7 @@ pub fn load_metrics(conn: &Connection, series: &[Series], dir: &std::path::Path)
         ])),
         vec![Arc::new(UInt64Array::from(ids)), Arc::new(Int64Array::from(ts)), Arc::new(Float64Array::from(vs))],
     )?;
-    load(conn, "metrics_points", &pts, dir, "")
+    load(conn, "metrics_points", &pts, dir, ", false AS is_stale")
 }
 
 pub fn span_kind(s: &Span) -> u8 {

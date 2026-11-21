@@ -1,0 +1,5 @@
+{ "tqs": "3", "id": "slow-checkout", "kind": "trace_search", "time": {"from": "-30m"},
+  "search": { "spans": [ {"field": "service_name", "op": "=", "value": "checkout"}, {"field": "attr.http.route", "op": "=~", "value": "/cart.*"} ],
+              "trace": [ {"field": "duration_ms", "op": ">", "value": 500}, {"field": "has_error", "op": "=", "value": true} ],
+              "order": "duration_desc" },
+  "limit": 20 }

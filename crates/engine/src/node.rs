@@ -216,8 +216,6 @@ impl Node {
                 Table::MetricsSeries => format!(
                     "SELECT series_id, any_value(metric_name) AS metric_name, any_value(metric_type) AS metric_type, any_value(labels) AS labels FROM ({union}) GROUP BY series_id"
                 ),
-                // Staleness markers end a series in Prometheus; they carry no value to aggregate.
-                Table::MetricsPoints => format!("SELECT * FROM ({union}) WHERE NOT is_stale"),
                 _ => union,
             };
             conn.execute_batch(&format!("CREATE OR REPLACE VIEW memory.main.{n} AS {body}"))?;

@@ -1,0 +1,8 @@
+{ "tqs": "3", "id": "ai-error-pct", "title": "AI call error % by provider", "kind": "timeseries",
+  "time": {"from": "-2h", "to": "now", "step": "30s"},
+  "queries": [
+    { "name": "e", "metric": "margince_ai_calls_total", "match": [{"label": "outcome", "op": "=", "value": "error"}],
+      "fn": {"op": "rate", "window": "5m"}, "agg": {"op": "sum", "by": ["provider"]}, "fill": "zero" },
+    { "name": "a", "metric": "margince_ai_calls_total", "fn": {"op": "rate", "window": "5m"}, "agg": {"op": "sum", "by": ["provider"]} } ],
+  "formulas": [ { "name": "pct", "expr": "100 * least(e / greatest(a, 1), 1)" } ],
+  "top": {"n": 5, "rank": "max", "order": "desc"} }

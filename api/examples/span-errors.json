@@ -1,0 +1,5 @@
+{ "tqs": "3", "id": "span-errors", "kind": "timeseries", "time": {"from": "-1h", "step": "1m"},
+  "queries": [ { "name": "e", "spans": [ {"field": "status_code", "op": "=", "value": 2} ], "measure": {"op": "count"},
+                 "agg": {"by": ["service_name"]}, "fill": "zero" },
+               { "name": "p99", "spans": [ {"field": "span_kind", "op": "=", "value": 2} ], "measure": {"op": "quantile", "field": "duration_ms", "q": 0.99},
+                 "agg": {"by": ["service_name"]} } ] }

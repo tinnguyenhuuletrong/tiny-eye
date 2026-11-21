@@ -255,7 +255,9 @@ fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &V
         FnOp::Irate => "CASE WHEN n < 2 OR t2 = pt_last THEN NULL ELSE (CASE WHEN v2 < pv_last THEN v2 ELSE v2 - pv_last END) / ((t2 - pt_last) / 1000.0) END".into(),
         FnOp::Resets => "nresets::DOUBLE".into(),
         FnOp::Changes => "nchanges::DOUBLE".into(),
-        FnOp::Last | FnOp::LastOverTime => "v2".into(),
+        // A staleness marker as the latest sample ends the series (Prometheus lookback rule).
+        FnOp::Last => "CASE WHEN st2 THEN NULL ELSE v2 END".into(),
+        FnOp::LastOverTime => "v2".into(),
         FnOp::AvgOverTime => "a".into(),
         FnOp::MinOverTime => "mn".into(),
         FnOp::MaxOverTime => "mx".into(),
@@ -264,15 +266,15 @@ fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &V
     };
     let per_series = format!(
         "sel AS (SELECT series_id, labels FROM metrics_series WHERE {where_}),
-         pts AS (SELECT p.series_id, p.timestamp_ms AS ts, p.value AS v,
+         pts AS (SELECT p.series_id, p.timestamp_ms AS ts, p.value AS v, p.is_stale AS st,
                         lag(p.value) OVER (PARTITION BY p.series_id ORDER BY p.timestamp_ms) AS pv,
                         lag(p.timestamp_ms) OVER (PARTITION BY p.series_id ORDER BY p.timestamp_ms) AS pt
                  FROM metrics_points p WHERE p.series_id IN (SELECT series_id FROM sel)
-                   AND p.timestamp_ms > {lo} AND p.timestamp_ms <= {hi}),
+                   AND p.timestamp_ms > {lo} AND p.timestamp_ms <= {hi}{stale}),
          grid AS (SELECT unnest(generate_series({start}::BIGINT, {end}::BIGINT, {step}::BIGINT)) AS t),
          win AS (SELECT g.t, p.* FROM grid g JOIN pts p ON p.ts {gt} g.t - {o} - {w} AND p.ts <= g.t - {o}),
          per AS (SELECT t, series_id, count(*) AS n, min(ts) AS t1, max(ts) AS t2,
-                        arg_min(v, ts) AS v1, arg_max(v, ts) AS v2,
+                        arg_min(v, ts) AS v1, arg_max(v, ts) AS v2, arg_max(st, ts) AS st2,
                         {corr} AS corr,
                         count(*) FILTER (WHERE v < pv AND {in_win}) AS nresets,
                         count(*) FILTER (WHERE v <> pv AND {in_win}) AS nchanges,
@@ -288,6 +290,8 @@ fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &V
          ser AS (SELECT e.t, {labels} AS labels, {value} AS value FROM ex2 e JOIN sel s USING (series_id))",
         where_ = wh.join(" AND "),
         hi = end - o,
+        // Range functions never see staleness markers; `last` needs them to end a series.
+        stale = if f.op == FnOp::Last { "" } else { " AND NOT p.is_stale" },
         gt = if mutant("closed_window") { ">=" } else { ">" },
         corr = if mutant("no_reset_correction") {
             "0".to_string()
@@ -609,9 +613,16 @@ pub fn run_list(conn: &Connection, tqs: &Tqs, r: &Resolved) -> Result<Vec<Vec<(S
     let s = tqs.search.clone().unwrap_or_default();
     let text = match tqs.kind {
         Kind::Trace => {
+            // `trace_id = unhex(..)` (not `lower(hex(trace_id)) = ..`) so DuckDB can prune files by
+            // min/max and row groups by the bloom filter (E4). An optional time range bounds it further.
             let id = sql.text(tqs.trace_id.as_deref().unwrap_or_default());
+            let range = if tqs.time.is_some() {
+                format!(" AND {ts} > {} AND {ts} <= {}", r.from_ms, r.to_ms, ts = ms_of("start_time_ns"))
+            } else {
+                String::new()
+            };
             format!(
-                "WITH RECURSIVE s AS (SELECT * FROM spans WHERE lower(hex(trace_id)) = {id}),
+                "WITH RECURSIVE s AS (SELECT * FROM spans WHERE trace_id = unhex({id}){range}),
                  tree(span_id, depth) AS (
                    SELECT span_id, 0 FROM s WHERE parent_span_id IS NULL OR parent_span_id NOT IN (SELECT span_id FROM s)
                    UNION ALL SELECT c.span_id, t.depth + 1 FROM s c JOIN tree t ON c.parent_span_id = t.span_id WHERE t.depth < 64),

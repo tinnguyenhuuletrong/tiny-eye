@@ -1,0 +1,9 @@
+{
+  "yaml.schemas": {
+    "doc/schema/config.schema.json": ["config/*.yaml"],
+    "doc/schema/dashboard.schema.json": ["dashboards/*.yaml"]
+  },
+  "json.schemas": [
+    { "fileMatch": ["api/examples/*.json"], "url": "./doc/schema/tqs.schema.json" }
+  ]
+}

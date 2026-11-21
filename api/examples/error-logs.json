@@ -1,0 +1,4 @@
+{ "tqs": "3", "id": "errors", "kind": "log_search", "time": {"from": "-15m"},
+  "search": { "logs": [ {"field": "severity_number", "op": ">=", "value": 17}, {"field": "body", "op": "contains", "value": "timeout"},
+                        {"field": "service_name", "op": "in", "value": ["api", "worker"]} ], "order": "desc" },
+  "limit": 100 }

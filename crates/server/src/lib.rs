@@ -4,6 +4,7 @@
 pub mod handlers;
 pub mod mcp;
 pub mod receivers;
+pub mod schemas;
 
 #[allow(clippy::all)]
 pub mod api {

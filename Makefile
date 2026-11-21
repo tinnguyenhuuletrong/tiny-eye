@@ -44,6 +44,10 @@ build: ## Release build of the tiny-eye binary
 run: tools ## Run a single node with config/dev.yaml (local disk)
 	cargo run --release --bin tiny-eye -- --config config/dev.yaml
 
+.PHONY: schemas
+schemas: ## Regenerate doc/schema (JSON Schemas for TQS/dashboards/config, MCP tools, formula grammar)
+	cargo run --quiet --bin tiny-eye -- schemas --out doc/schema
+
 .PHONY: fmt
 fmt: ## Format all code
 	cargo fmt --all
@@ -68,21 +72,19 @@ conformance: tools ## TQS vs Prometheus 3.16 point by point + validation + mutat
 
 .PHONY: e2e
 e2e: tools ## End-to-end: remote-write the same samples to Prometheus and tiny-eye, compare every panel
-	cargo test --release -p server --test e2e -- --nocapture --test-threads=1
+	cargo test -p server --test e2e -- --nocapture
 
 .PHONY: s3-up s3-down
-s3-up: ## Start MinIO (S3) on :19000 for S3-mode tests and benchmarks
+s3-up: ## Start MinIO (S3) on :19000 with bucket tiny-eye, for S3-mode benchmarks
 	$(COMPOSE) up -d
-	@for i in $$(seq 1 60); do curl -sf http://127.0.0.1:19000/minio/health/live >/dev/null && break; sleep 0.5; done; echo "minio on :19000"
-s3-down: ## Stop MinIO
+	@for i in $$(seq 1 60); do curl -sf http://127.0.0.1:19000/minio/health/live >/dev/null && break; sleep 0.5; done
+	@curl -s -o /dev/null --aws-sigv4 "aws:amz:us-east-1:s3" --user tinyeye:tinyeye-secret -X PUT http://127.0.0.1:19000/tiny-eye
+	@echo "minio on :19000, bucket tiny-eye"
+s3-down: ## Stop MinIO and drop its volume
 	$(COMPOSE) down -v
 
-.PHONY: test-s3
-test-s3: tools s3-up ## Integration tests against MinIO (conditional PUT, S3 data path)
-	TINY_EYE_S3_ENDPOINT=http://127.0.0.1:19000 cargo test --release -p engine --test s3 -- --nocapture
-
 .PHONY: check
-check: lint test conformance ## Everything CI runs
+check: lint test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
 
 ## ---- benchmark
 .PHONY: bench

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../doc/schema/config.schema.json
 # Local development: everything on disk under ./data, fast flushes so changes show up quickly.
 duckdb:
   extension_dir: .tools/duckdb_ext

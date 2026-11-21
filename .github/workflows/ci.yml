@@ -12,4 +12,3 @@ jobs:
       - run: make lint
       - run: make test
       - run: make conformance
-      - run: make e2e

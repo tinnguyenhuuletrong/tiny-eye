@@ -31,10 +31,13 @@ opentelemetry-proto.workspace = true
 ureq.workspace = true
 flate2 = "1"
 rand.workspace = true
+# used by the tiny-eye-bench binary
+tempfile.workspace = true
+ulid.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 jsonschema = { version = "0.62", default-features = false }
+serde_norway.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true

@@ -4,6 +4,7 @@
 //!   tiny-eye [--config <file.yaml>]
 //!   tiny-eye mcp --url http://127.0.0.1:7070 [--token-env VAR]
 //!   tiny-eye config            print the effective configuration (secrets redacted)
+//!   tiny-eye schemas [--out doc/schema]   write editor/agent grammars (JSON Schemas, MCP tools, formula grammar)
 
 use anyhow::{Context, Result, bail};
 use engine::{Config, Node};
@@ -26,6 +27,13 @@ async fn main() -> Result<()> {
             let url = arg(&args, "--url").unwrap_or_else(|| "http://127.0.0.1:7070".into());
             let token = arg(&args, "--token-env").map(|v| std::env::var(&v).with_context(|| format!("{v} is not set"))).transpose()?;
             return tokio::task::spawn_blocking(move || server::mcp::serve(&url, token)).await?;
+        }
+        Some("schemas") => {
+            let out = arg(&args, "--out").unwrap_or_else(|| "doc/schema".into());
+            for f in server::schemas::write(std::path::Path::new(&out))? {
+                println!("{out}/{f}");
+            }
+            return Ok(());
         }
         Some("config") => {
             println!("{}", Config::load(config_path.as_deref())?.redacted_yaml());

@@ -1,0 +1,12 @@
+{ "tqs": "3", "id": "queue-depth", "title": "Queue depth, every declared queue visible at 0 (SPEC §8.14)", "kind": "timeseries",
+  "time": {"from": "-6h", "step": "1m"},
+  "vars": {"namespace": "ns-a"},
+  "queries": [
+    { "name": "a", "metric": "margince_job_queue_depth", "match": [{"label": "kubernetes_namespace", "op": "=", "value": "$namespace"}],
+      "fn": {"op": "last"}, "agg": {"op": "max", "by": ["queue", "kind", "workspace_id"]}, "then": {"op": "sum", "by": ["queue", "kind"]} },
+    { "name": "b", "metric": "margince_job_declared_info",
+      "match": [{"label": "kubernetes_namespace", "op": "=", "value": "$namespace"}, {"label": "queue", "op": "!=", "value": ""}],
+      "fn": {"op": "last"}, "agg": {"op": "sum", "by": ["queue", "kind"]} },
+    { "name": "c", "metric": "margince_job_queue_depth", "match": [{"label": "kubernetes_namespace", "op": "=", "value": "$namespace"}],
+      "fn": {"op": "max_over_time", "window": "7d"}, "agg": {"op": "sum", "by": ["queue", "kind"]} } ],
+  "formulas": [ { "name": "depth", "expr": "coalesce(a, b * 0, c * 0)", "join": "outer" } ] }

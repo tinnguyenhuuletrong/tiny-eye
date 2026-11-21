@@ -3,74 +3,97 @@
 //! single keys. Unknown keys are refused so a typo never silently becomes a default.
 
 use anyhow::{Context, Result, bail};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer};
 use serde_norway::Value;
+use std::borrow::Cow;
 use std::time::Duration;
 
 pub const DEFAULT_YAML: &str = include_str!("../../../config/default.yaml");
 const ENV_PREFIX: &str = "TINY_EYE__";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// tiny-eye configuration file (merged over the built-in config/default.yaml).
 pub struct Config {
+    /// Identity of this node; tenant and region are stamped on every row it ingests.
     pub node: Node,
+    /// HTTP listener (API, OTLP/HTTP, remote-write, Loki push, /metrics).
     pub server: Server,
+    /// Object storage for Parquet data files and commit envelopes.
     pub storage: Storage,
+    /// DuckLake catalog holding table metadata and file lists.
     pub catalog: Catalog,
+    /// Embedded DuckDB settings.
     pub duckdb: DuckDb,
+    /// Write path: durability, flush thresholds, admission limits (SPEC §5).
     pub ingest: Ingest,
+    /// Checkpointer, compactor and retention (SPEC §6).
     pub coordinator: Coordinator,
+    /// Query execution limits (SPEC §7).
     pub query: Query,
+    /// Bearer-token auth; scopes per operation come from api/openapi.yaml (`x-scope`).
     pub auth: Auth,
+    /// Dashboards loaded from YAML files at start.
     pub dashboards: Dashboards,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
+    /// Unique node id; part of every file name and envelope.
     pub id: String,
+    /// Region label stamped on rows (one bucket per region, SPEC §12).
     pub region: String,
+    /// Tenant stamped on rows (single tenant in v1).
     pub tenant: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Server {
+    /// `host:port` to listen on.
     pub listen: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Storage {
+    /// `./dir`, `file:///abs/dir` or `s3://bucket/prefix`.
     pub url: String,
     pub s3: S3,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct S3 {
+    /// Empty for AWS; e.g. `http://127.0.0.1:19000` for MinIO.
     pub endpoint: String,
     pub region: String,
+    /// Secret: prefer the env var TINY_EYE__STORAGE__S3__ACCESS_KEY_ID.
     pub access_key_id: String,
+    /// Secret: prefer the env var TINY_EYE__STORAGE__S3__SECRET_ACCESS_KEY.
     pub secret_access_key: String,
     pub allow_http: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
+    /// A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).
     pub url: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DuckDb {
+    /// `<dir>/<duckdb version>/<platform>/*.duckdb_extension`; empty = auto-install.
     pub extension_dir: String,
     pub threads: usize,
     pub memory_limit: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
     /// Ack after arena admission; a crash loses the unflushed batch.
@@ -79,44 +102,59 @@ pub enum Durability {
     Wal,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Ingest {
     pub durability: Durability,
+    /// Directory of the write-ahead log (durability: wal).
     pub wal_dir: String,
+    /// Flush the open batch when it reaches this size...
     pub flush_bytes: ByteSize,
+    /// ...or this age.
     pub flush_interval: Dur,
+    /// Samples older than this are rejected.
     pub max_sample_age: Dur,
+    /// Samples further ahead than this are rejected.
     pub max_sample_future: Dur,
+    /// Above this many buffered bytes ingest answers 429 / RESOURCE_EXHAUSTED.
     pub arena_limit: ByteSize,
+    /// Parquet row-group size.
     pub row_group_rows: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Coordinator {
+    /// How often pending envelopes are applied to the catalog.
     pub checkpoint_interval: Dur,
+    /// Keep committed rows in RAM this long after the catalog has them.
     pub hot_grace: Dur,
+    /// How often closed hours are checked for compaction.
     pub compaction_interval: Dur,
+    /// Compact an hour this long after it closes.
     pub compaction_delay: Dur,
+    /// Data older than this is deleted.
     pub retention: Dur,
+    /// How often retention runs.
     pub retention_interval: Dur,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Query {
+    /// A query running longer is interrupted.
     pub timeout: Dur,
+    /// DuckDB connections serving queries in parallel.
     pub workers: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Auth {
     pub tokens: Vec<TokenSpec>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenSpec {
     /// Name of the env var holding the token (tokens never live in the file).
@@ -124,7 +162,7 @@ pub struct TokenSpec {
     pub scopes: Vec<Scope>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Ingest,
@@ -132,15 +170,25 @@ pub enum Scope {
     Admin,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Dashboards {
+    /// Directory of dashboard YAML files (schema: doc/schema/dashboard.schema.json).
     pub dir: String,
 }
 
 /// `64MB`, `1GB`, `512KB`, `100B` (powers of 1024).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteSize(pub u64);
+
+impl JsonSchema for ByteSize {
+    fn schema_name() -> Cow<'static, str> {
+        "ByteSize".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type": "string", "pattern": "^[0-9]+(B|KB|MB|GB)$", "description": "Size: B, KB, MB, GB (powers of 1024), e.g. 64MB", "examples": ["64MB", "1GB"]})
+    }
+}
 
 impl<'de> Deserialize<'de> for ByteSize {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -171,6 +219,15 @@ pub struct Dur(pub Duration);
 impl Dur {
     pub fn ms(&self) -> i64 {
         self.0.as_millis() as i64
+    }
+}
+
+impl JsonSchema for Dur {
+    fn schema_name() -> Cow<'static, str> {
+        "Duration".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type": "string", "pattern": "^[0-9]+(ms|s|m|h|d|w)$", "description": "Duration: ms, s, m, h, d, w, e.g. 60s", "examples": ["5s", "10m", "15d"]})
     }
 }
 
@@ -261,6 +318,52 @@ impl Config {
     pub fn is_s3(&self) -> bool {
         self.storage.url.starts_with("s3://")
     }
+}
+
+/// JSON Schema of the config file (for editors), with every default from config/default.yaml
+/// set as `default` so hover shows it. Written to doc/schema/config.schema.json.
+pub fn json_schema() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(Config)).expect("schema is JSON");
+    let defaults: serde_json::Value = serde_norway::from_str(DEFAULT_YAML).expect("embedded defaults");
+    fn inject(s: &mut serde_json::Value, d: &serde_json::Value, defs: &serde_json::Value) {
+        let target = match s.get("$ref").and_then(|r| r.as_str()).and_then(|r| r.strip_prefix("#/$defs/")) {
+            Some(name) => defs.get(name).cloned(),
+            None => None,
+        };
+        if let Some(props) = s.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            for (k, ps) in props.iter_mut() {
+                if let Some(dv) = d.get(k) {
+                    if dv.is_object() {
+                        inject(ps, dv, defs);
+                    } else {
+                        ps["default"] = dv.clone();
+                    }
+                }
+            }
+        } else if let Some(mut t) = target {
+            // Inline the referenced section so each property can carry its own default.
+            inject(&mut t, d, defs);
+            if let Some(desc) = s.get("description").cloned() {
+                t["description"] = desc;
+            }
+            *s = t;
+        }
+    }
+    fn optional(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                m.remove("required");
+                m.values_mut().for_each(optional);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(optional),
+            _ => {}
+        }
+    }
+    let defs = schema.get("$defs").cloned().unwrap_or_default();
+    inject(&mut schema, &defaults, &defs);
+    // A user file is an overlay: every key has a default, so none is required.
+    optional(&mut schema);
+    schema
 }
 
 #[cfg(test)]

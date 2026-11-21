@@ -203,6 +203,11 @@ fn main() {
     }
     o.push_str("];\n\n");
     writeln!(o, "pub const OPENAPI_YAML: &str = include_str!({path:?});").unwrap();
+    // Standalone JSON Schemas for editors (VS Code / Monaco), written to doc/schema by `make schemas`.
+    for (name, schema) in [("TQS_SCHEMA_JSON", "TqsDocument"), ("DASHBOARD_SCHEMA_JSON", "Dashboard")] {
+        let s = self_contained(&serde_json::json!({"$ref": format!("#/components/schemas/{schema}")}), &schemas);
+        writeln!(o, "pub const {name}: &str = {:?};", serde_json::to_string(&s).expect("json")).unwrap();
+    }
     let out = std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("api.rs");
     std::fs::write(out, o).expect("write api.rs");
 }
