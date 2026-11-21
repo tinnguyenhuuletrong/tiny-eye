@@ -1109,19 +1109,11 @@ pub fn run_all(tools: &std::path::Path, work: &std::path::Path) -> Result<Vec<Ca
     let logs = fixtures::logs(&spans);
     fixtures::load_logs(&conn, &logs, work)?;
     let prom = Prom::start(tools, &work.join("prom"), &fixtures::openmetrics(&series))?;
-    let version = std::process::Command::new("go")
-        .args(["version", "-m"])
-        .arg(tools.join("prometheus"))
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.lines().find(|l| l.trim_start().starts_with("mod\t")).map(|l| l.split('\t').nth(3).unwrap_or("").to_string()))
-        .map(|v| {
-            format!("module {v} (= Prometheus 3.{})", v.trim_start_matches("v0.").split('.').next().unwrap_or("?").trim_start_matches('3'))
-        })
-        .unwrap_or_else(|| prom.version.clone());
+    // The running server reports its own version (the research parsed `go version -m`, which
+    // mislabels release binaries).
+    let version = format!("Prometheus {}", prom.version);
     println!(
-        "fixtures: {} series / {} samples, {} spans, {} logs; reference Prometheus {}",
+        "fixtures: {} series / {} samples, {} spans, {} logs; reference {}",
         series.len(),
         series.iter().map(|s| s.points.len()).sum::<usize>(),
         spans.len(),
@@ -1156,7 +1148,7 @@ pub fn run_all(tools: &std::path::Path, work: &std::path::Path) -> Result<Vec<Ca
     writeln!(md, "# TQS 3 coverage results\n")?;
     writeln!(
         md,
-        "Reference: Prometheus {} on the same fixtures. Engine: DuckDB {}. Fixtures: {} series / {} samples (Margince-shaped), {} spans, {} logs.\n",
+        "Reference: {} on the same fixtures. Engine: DuckDB {}. Fixtures: {} series / {} samples (Margince-shaped), {} spans, {} logs.\n",
         version,
         conn.query_row::<String, _, _>("SELECT version()", [], |r| r.get(0))?,
         series.len(),

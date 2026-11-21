@@ -34,15 +34,31 @@ fn redact(key: &str, value: String) -> String {
     }
 }
 
+/// Largest decompressed request body; a small compressed body cannot expand past this.
+pub const MAX_DECOMPRESSED: usize = 256 << 20;
+
+/// Snappy block decode with the declared length checked before allocating.
+fn snappy(body: &[u8]) -> Result<Vec<u8>> {
+    let n = snap::raw::decompress_len(body).context("snappy header")?;
+    if n > MAX_DECOMPRESSED {
+        bail!("snappy body expands to {n} bytes; the limit is {MAX_DECOMPRESSED}");
+    }
+    snap::raw::Decoder::new().decompress_vec(body).context("snappy body")
+}
+
 /// Request bodies may be gzip-compressed (OTLP/HTTP `Content-Encoding: gzip`).
 pub fn decompress(encoding: Option<&str>, body: &[u8]) -> Result<Vec<u8>> {
     match encoding {
         Some("gzip") => {
             let mut out = Vec::new();
-            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(body), &mut out).context("gzip body")?;
+            let mut limited = std::io::Read::take(flate2::read::GzDecoder::new(body), MAX_DECOMPRESSED as u64 + 1);
+            std::io::Read::read_to_end(&mut limited, &mut out).context("gzip body")?;
+            if out.len() > MAX_DECOMPRESSED {
+                bail!("gzip body expands past {MAX_DECOMPRESSED} bytes");
+            }
             Ok(out)
         }
-        Some("snappy") => Ok(snap::raw::Decoder::new().decompress_vec(body).context("snappy body")?),
+        Some("snappy") => snappy(body),
         None | Some("identity") => Ok(body.to_vec()),
         Some(e) => bail!("unsupported Content-Encoding {e:?}"),
     }
@@ -132,7 +148,7 @@ pub struct Sample {
 /// Snappy-compressed `WriteRequest` → rows. `__name__` is the metric; empty labels are dropped
 /// (an empty label value is the same as an absent label, SPEC §4.3).
 pub fn prom_remote_write(body: &[u8], tenant: &str, region: &str) -> Result<Rows> {
-    let raw = snap::raw::Decoder::new().decompress_vec(body).context("remote-write body is not snappy block format")?;
+    let raw = snappy(body).context("remote-write body is not snappy block format")?;
     let req = WriteRequest::decode(raw.as_slice()).context("remote-write body is not a WriteRequest")?;
     let mut rows = Rows::default();
     let mut sink = MetricSink { rows: &mut rows, tenant, region };

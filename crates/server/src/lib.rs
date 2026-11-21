@@ -55,8 +55,10 @@ fn load_tokens(cfg: &Config) -> anyhow::Result<HashMap<String, Vec<Scope>>> {
     Ok(out)
 }
 
-/// The scope an incoming request needs, looked up in the generated operation table.
+/// The scope an incoming request needs, looked up in the generated operation table. HEAD is
+/// served by GET handlers, so it needs GET's scope; anything not in the spec fails closed.
 fn required_scope(method: &str, path: &str) -> Scope {
+    let method = if method == "HEAD" { "GET" } else { method };
     let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     api::OPERATIONS
         .iter()
@@ -65,7 +67,7 @@ fn required_scope(method: &str, path: &str) -> Scope {
             op.method == method && pat.len() == segs.len() && pat.iter().zip(&segs).all(|(p, s)| p.starts_with('{') || p == s)
         })
         .map(|op| op.scope)
-        .unwrap_or(Scope::Public)
+        .unwrap_or(Scope::Admin)
 }
 
 /// Bearer-token auth (SPEC §11): each operation's `x-scope` must be granted; `admin` grants all.
@@ -104,6 +106,9 @@ mod tests {
         assert_eq!(required_scope("POST", "/api/v1/query"), Scope::Query);
         assert_eq!(required_scope("GET", "/api/v1/dashboards/abc"), Scope::Query);
         assert_eq!(required_scope("GET", "/healthz"), Scope::Public);
+        assert_eq!(required_scope("HEAD", "/api/v1/catalog"), Scope::Query, "HEAD needs GET's scope");
+        assert_eq!(required_scope("PUT", "/api/v1/query"), Scope::Admin, "unknown method fails closed");
+        assert_eq!(required_scope("GET", "/nope"), Scope::Admin, "unknown path fails closed");
     }
 
     #[test]

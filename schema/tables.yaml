@@ -12,6 +12,8 @@
 # Options:      nullable (default false), encoding: delta | byte_stream_split,
 #               bloom: true (split-block bloom filter, FPP 0.01; dictionary off)
 # Table keys:   sort    — row order inside every Parquet file
+#               unique  — identity of a row: flush and compaction keep one row per identity, so a
+#                         retried request (or a replayed WAL segment) never double counts
 #               time    — column that decides the hour partition of a row
 #               bloom   — written per row group so trace lookups skip files (E4)
 
@@ -21,6 +23,7 @@ tables:
   metrics_series:
     doc: One row per (series, flush); readers deduplicate by series_id.
     sort: [series_id]
+    unique: [series_id]
     time: day_ms
     columns:
       - { name: tenant, type: utf8 }
@@ -35,6 +38,7 @@ tables:
   metrics_points:
     doc: Raw samples. positive_delta is filled by the compactor (D2).
     sort: [series_id, timestamp_ms]
+    unique: [series_id, timestamp_ms]
     time: timestamp_ms
     columns:
       - { name: tenant, type: utf8 }
@@ -47,6 +51,7 @@ tables:
 
   spans:
     sort: [trace_id, start_time_ns]
+    unique: [trace_id, span_id]
     time: start_time_ns
     columns:
       - { name: tenant, type: utf8 }

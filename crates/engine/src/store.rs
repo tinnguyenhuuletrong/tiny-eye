@@ -67,11 +67,15 @@ impl Store {
         Ok(())
     }
 
-    /// Create-only PUT (`If-None-Match: *`). Errors if the object exists.
-    pub async fn put_new(&self, key: &str, data: Bytes) -> Result<()> {
+    /// Create-only PUT (`If-None-Match: *`): `true` if this call created the object, `false`
+    /// if it already existed (left untouched).
+    pub async fn put_new(&self, key: &str, data: Bytes) -> Result<bool> {
         let opts = PutOptions { mode: PutMode::Create, ..Default::default() };
-        self.inner.put_opts(&self.path(key), PutPayload::from(data), opts).await.with_context(|| format!("PUT (create) {key}"))?;
-        Ok(())
+        match self.inner.put_opts(&self.path(key), PutPayload::from(data), opts).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::AlreadyExists { .. }) | Err(object_store::Error::Precondition { .. }) => Ok(false),
+            Err(e) => Err(e).with_context(|| format!("PUT (create) {key}")),
+        }
     }
 
     pub async fn get(&self, key: &str) -> Result<Bytes> {

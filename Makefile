@@ -86,6 +86,18 @@ s3-down: ## Stop MinIO and drop its volume
 .PHONY: check
 check: lint test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
 
+## ---- demo (examples/demo/README.md)
+.PHONY: demo demo-app demo-load
+demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo)
+	./target/release/tiny-eye --config examples/demo/tiny-eye.yaml
+
+demo-app: ## Run the demo shop: shop-api :3000 + payments :3001 (Node.js, OpenTelemetry)
+	cd examples/demo/app && npm install --no-audit --no-fund && npm start
+
+demo-load: ## k6 load against the demo shop via Docker (DURATION=10m for longer)
+	docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:3000 \
+	  -e DURATION=$(or $(DURATION),3m) grafana/k6:1.4.2 run - < examples/demo/k6/load.js
+
 ## ---- benchmark
 .PHONY: bench
 bench: tools ## Ingest + query + trace-lookup benchmark (local disk); writes doc/results/bench-local.md

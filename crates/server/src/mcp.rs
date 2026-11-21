@@ -74,7 +74,8 @@ fn handle(agent: &ureq::Agent, base: &str, token: Option<&str>, msg: &Value) -> 
             let status = resp.status().as_u16();
             let body = resp.body_mut().read_to_string()?;
             Ok(json!({
-                "content": [{"type": "text", "text": format!("<data status=\"{status}\">\n{body}\n</data>")}],
+                // Telemetry may contain anything, including the closing tag; escape it.
+                "content": [{"type": "text", "text": format!("<data status=\"{status}\">\n{}\n</data>", body.replace("</data", "<\\/data"))}],
                 "isError": status >= 400,
             }))
         }

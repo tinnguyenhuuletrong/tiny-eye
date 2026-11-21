@@ -112,7 +112,15 @@ pub struct Node {
     hot_bytes: std::sync::atomic::AtomicU64,
     wal: Option<Wal>,
     pool: Arc<Mutex<Vec<Connection>>>,
-    pool_gate: Semaphore,
+    pool_gate: Arc<Semaphore>,
+    /// Sealed sequences not yet written to object storage, oldest first. A newer sequence is
+    /// never written while one of these is pending: the watermark is `max(seq_to)`, so a later
+    /// commit would hide (and release) the rows of an earlier, unwritten sequence.
+    unflushed: Mutex<std::collections::BTreeSet<i64>>,
+    /// WAL segments of earlier processes whose rows were replayed into a sequence of this one;
+    /// deleted once that sequence is in object storage (replay never copies, so a crash during
+    /// replay cannot duplicate rows).
+    replay_sources: Mutex<BTreeMap<i64, Vec<std::path::PathBuf>>>,
     /// Serialises flushes (the flusher task and `flush_now` from tests/benchmarks).
     flush_lock: tokio::sync::Mutex<()>,
     /// Serialises catalog writes (single coordinator: checkpoint, compaction, retention).
@@ -127,6 +135,25 @@ fn with_seq(batch: &RecordBatch, seq: i64) -> Result<RecordBatch> {
     let mut cols = batch.columns().to_vec();
     cols.push(Arc::new(Int64Array::from(vec![seq; batch.num_rows()])));
     Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), cols)?)
+}
+
+/// A pooled query connection on loan; returned to the pool on drop (then the permit is freed).
+struct Lease {
+    conn: Option<Connection>,
+    pool: Arc<Mutex<Vec<Connection>>>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if let Some(c) = self.conn.take() {
+            // A panic or interrupt can leave a transaction open; the next user must start clean.
+            let _ = c.execute_batch("ROLLBACK");
+            if let Ok(mut p) = self.pool.lock() {
+                p.push(c);
+            }
+        }
+    }
 }
 
 fn sql_str(s: &str) -> String {
@@ -180,7 +207,9 @@ impl Node {
             Durability::Memory => None,
         };
         let node = Arc::new(Node {
-            pool_gate: Semaphore::new(cfg.query.workers),
+            pool_gate: Arc::new(Semaphore::new(cfg.query.workers)),
+            unflushed: Default::default(),
+            replay_sources: Default::default(),
             cfg,
             store,
             metrics: Metrics::default(),
@@ -252,8 +281,11 @@ impl Node {
         let seq_guard = self.seq.read().await;
         let seq = *seq_guard;
         {
-            let mut open = self.open.lock().map_err(|_| IngestError::Internal(anyhow!("open lock poisoned")))?;
-            rows.series.retain(|s| open.series_seen.insert(s.series_id));
+            let open = self.open.lock().map_err(|_| IngestError::Internal(anyhow!("open lock poisoned")))?;
+            // Only filter here; the ids are marked seen after the append succeeds, so a refused or
+            // failed request does not hide its series rows from the retry.
+            let mut in_request = HashSet::new();
+            rows.series.retain(|s| !open.series_seen.contains(&s.series_id) && in_request.insert(s.series_id));
         }
         let mut batches: Vec<(Table, RecordBatch)> = vec![];
         macro_rules! build {
@@ -291,6 +323,7 @@ impl Node {
         }
         let writer = self.writer.clone();
         let counts: Vec<(Table, u64)> = batches.iter().map(|(t, b)| (*t, b.num_rows() as u64)).collect();
+        let new_series: Vec<u64> = rows.series.iter().map(|s| s.series_id).collect();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let conn = writer.lock().map_err(|_| anyhow!("writer lock poisoned"))?;
             for (t, b) in batches {
@@ -305,6 +338,7 @@ impl Node {
             let mut open = self.open.lock().map_err(|_| IngestError::Internal(anyhow!("open lock poisoned")))?;
             open.bytes += bytes;
             open.rows += nrows;
+            open.series_seen.extend(new_series);
         }
         self.hot_bytes.fetch_add(bytes, Ordering::Relaxed);
         for (t, n) in counts {
@@ -327,7 +361,7 @@ impl Node {
             let mut stmt = conn.prepare("SELECT node_epoch, seq_to FROM lake.applied_envelopes WHERE node_id = ?")?;
             stmt.query_map([&self.cfg.node.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?
         };
-        let pending = self.pending_envelopes().await?;
+        let pending: Vec<Envelope> = self.pending_envelopes().await?.into_iter().map(|(_, e)| e).collect();
         let mut replayed = 0usize;
         for (epoch, seq, path) in leftovers {
             if epoch == self.epoch {
@@ -338,13 +372,6 @@ impl Node {
             if !done {
                 let recs = Wal::read(&path).with_context(|| format!("replaying {}", path.display()))?;
                 let seq_now = *self.seq.read().await;
-                let mut frames = vec![];
-                for (t, b) in &recs {
-                    wal::encode(*t, b, &mut frames)?;
-                }
-                if let Some(w) = &self.wal {
-                    w.append(seq_now, frames).await?;
-                }
                 let conn = self.writer.lock().map_err(|_| anyhow!("writer lock poisoned"))?;
                 let (mut bytes, mut rows) = (0u64, 0u64);
                 for (t, b) in recs {
@@ -358,8 +385,13 @@ impl Node {
                 open.bytes += bytes;
                 open.rows += rows;
                 self.hot_bytes.fetch_add(bytes, Ordering::Relaxed);
+                drop(open);
+                drop(conn);
+                // Keep the old segment until `seq_now` is in object storage (see replay_sources).
+                self.replay_sources.lock().map_err(|_| anyhow!("replay lock poisoned"))?.entry(seq_now).or_default().push(path);
+            } else {
+                std::fs::remove_file(&path)?;
             }
-            std::fs::remove_file(&path)?;
         }
         if replayed > 0 {
             tracing::warn!(rows = replayed, "replayed unflushed rows from the WAL");
@@ -374,21 +406,44 @@ impl Node {
         open.rows > 0 && (open.bytes >= self.cfg.ingest.flush_bytes.0 || open.opened.elapsed() >= self.cfg.ingest.flush_interval.0)
     }
 
-    /// Seal the open sequence and write it to object storage with its envelope.
+    /// Seal the open sequence and write it to object storage with its envelope. Sequences that
+    /// failed earlier are written first, in order; while one keeps failing nothing newer is
+    /// sealed (ingest continues into the open batch until the arena limit answers 429).
     pub async fn flush_now(&self) -> Result<Option<Envelope>> {
         let _g = self.flush_lock.lock().await;
-        let (seq, bytes) = {
+        let mut last = None;
+        let retry: Vec<i64> = self.unflushed.lock().map_err(|_| anyhow!("unflushed lock poisoned"))?.iter().copied().collect();
+        for seq in retry {
+            last = Some(self.write_sequence(seq).await?);
+        }
+        let sealed = {
             let mut s = self.seq.write().await;
             let mut open = self.open.lock().map_err(|_| anyhow!("open lock poisoned"))?;
             if open.rows == 0 {
-                return Ok(None);
+                None
+            } else {
+                let sealed = (*s, open.bytes);
+                *s += 1;
+                *open = OpenBatch { bytes: 0, rows: 0, opened: Instant::now(), series_seen: HashSet::new() };
+                Some(sealed)
             }
-            let sealed = (*s, open.bytes);
-            *s += 1;
-            *open = OpenBatch { bytes: 0, rows: 0, opened: Instant::now(), series_seen: HashSet::new() };
-            sealed
         };
-        self.sealed.lock().map_err(|_| anyhow!("sealed lock poisoned"))?.insert(seq, (bytes, None));
+        if let Some((seq, bytes)) = sealed {
+            self.sealed.lock().map_err(|_| anyhow!("sealed lock poisoned"))?.insert(seq, (bytes, None));
+            self.unflushed.lock().map_err(|_| anyhow!("unflushed lock poisoned"))?.insert(seq);
+            last = Some(self.write_sequence(seq).await?);
+        }
+        Ok(last)
+    }
+
+    /// The envelope key is deterministic per (node, epoch, sequence), so the create-only PUT
+    /// turns a retry after a lost response into a no-op instead of a second commit.
+    fn envelope_key(&self, seq: i64) -> String {
+        format!("commits/{}/{}-{:013}-{seq:012}.json", self.cfg.node.region, self.cfg.node.id, self.epoch)
+    }
+
+    /// Export one sealed sequence per (table, hour), write it, and commit its envelope.
+    async fn write_sequence(&self, seq: i64) -> Result<Envelope> {
         let started = Instant::now();
         let conn = self.lake_conn()?;
         let rgr = self.cfg.ingest.row_group_rows;
@@ -403,8 +458,9 @@ impl Node {
                     .with_context(|| format!("listing hours of {n}"))?;
                 for h in hours {
                     let mut stmt = conn.prepare(&format!(
-                        "SELECT * EXCLUDE (_seq) FROM memory.main.hot_{n} WHERE _seq = {seq} AND {} = {h} ORDER BY {}",
+                        "SELECT * EXCLUDE (_seq) FROM memory.main.hot_{n} WHERE _seq = {seq} AND {} = {h}{} ORDER BY {}",
                         t.hour_sql(),
+                        t.dedup_sql(),
                         t.sort_columns().join(", ")
                     ))?;
                     let batches: Vec<RecordBatch> = stmt.query_arrow([]).with_context(|| format!("exporting {n} hour {h}"))?.collect();
@@ -423,7 +479,7 @@ impl Node {
             self.metrics.flushed_bytes.fetch_add(len, Ordering::Relaxed);
             entries.push(FileEntry { table: t.name().into(), path: self.store.url(&key), bytes: len, rows });
         }
-        let env = Envelope {
+        let mut env = Envelope {
             format: 1,
             envelope_id: ulid::Ulid::new().to_string(),
             kind: "ingest".into(),
@@ -434,20 +490,27 @@ impl Node {
             seq_to: seq,
             files: entries,
         };
-        let key = format!("commits/{}/{}-{}.json", env.region, env.envelope_id, env.node_id);
-        self.store.put_new(&key, serde_json::to_vec(&env)?.into()).await?;
+        let key = self.envelope_key(seq);
+        if !self.store.put_new(&key, serde_json::to_vec(&env)?.into()).await? {
+            // An earlier attempt committed this sequence; its envelope (and files) win.
+            env = serde_json::from_slice(&self.store.get(&key).await?)?;
+        }
         if let Some(w) = &self.wal {
             w.remove(seq);
         }
+        for path in self.replay_sources.lock().map_err(|_| anyhow!("replay lock poisoned"))?.remove(&seq).unwrap_or_default() {
+            let _ = std::fs::remove_file(path);
+        }
+        self.unflushed.lock().map_err(|_| anyhow!("unflushed lock poisoned"))?.remove(&seq);
         self.metrics.flushes.fetch_add(1, Ordering::Relaxed);
         self.metrics.flush_ms.fetch_add(started.elapsed().as_millis() as u64, Ordering::Relaxed);
         tracing::debug!(seq, files = env.files.len(), ms = started.elapsed().as_millis() as u64, "flushed");
-        Ok(Some(env))
+        Ok(env)
     }
 
     // ------------------------------------------------------------------ coordinator
 
-    async fn pending_envelopes(&self) -> Result<Vec<Envelope>> {
+    async fn pending_envelopes(&self) -> Result<Vec<(String, Envelope)>> {
         let mut keys = self.store.list(&format!("commits/{}/", self.cfg.node.region)).await?;
         keys.sort();
         let mut out = vec![];
@@ -456,7 +519,7 @@ impl Node {
             if env.format != 1 {
                 bail!("envelope {k} has format {} but this binary reads format 1", env.format);
             }
-            out.push(env);
+            out.push((k, env));
         }
         Ok(out)
     }
@@ -464,7 +527,8 @@ impl Node {
     /// Apply every pending envelope in one catalog transaction (SPEC §6.1), then delete them.
     pub async fn checkpoint(&self) -> Result<usize> {
         let _g = self.catalog_lock.lock().await;
-        let pending = self.pending_envelopes().await?;
+        let listed = self.pending_envelopes().await?;
+        let pending: Vec<Envelope> = listed.iter().map(|(_, e)| e.clone()).collect();
         if pending.is_empty() {
             self.release_hot()?;
             return Ok(0);
@@ -519,8 +583,8 @@ impl Node {
                 }
             }
         }
-        for env in &pending {
-            self.store.delete(&format!("commits/{}/{}-{}.json", env.region, env.envelope_id, env.node_id)).await?;
+        for (key, _) in &listed {
+            self.store.delete(key).await?;
         }
         self.metrics.checkpoints.fetch_add(1, Ordering::Relaxed);
         self.release_hot()?;
@@ -584,7 +648,8 @@ impl Node {
                         continue;
                     }
                     let list = urls.iter().map(|u| sql_str(u)).collect::<Vec<_>>().join(", ");
-                    let src = format!("read_parquet([{list}], union_by_name = true)");
+                    // One row per identity (tables.yaml `unique`): retried requests collapse here.
+                    let src = format!("(SELECT * FROM read_parquet([{list}], union_by_name = true){})", t.dedup_sql());
                     let sort = t.sort_columns().join(", ");
                     let cols = t.column_names().join(", ");
                     let sql = match t {
@@ -594,7 +659,7 @@ impl Node {
                                     CASE WHEN lag(value) OVER w IS NULL THEN NULL WHEN value >= lag(value) OVER w THEN value - lag(value) OVER w ELSE value END AS positive_delta
                              FROM {src} WINDOW w AS (PARTITION BY series_id ORDER BY timestamp_ms) ORDER BY {sort}"
                         ),
-                        Table::MetricsSeries => format!("SELECT {cols} FROM {src} QUALIFY row_number() OVER (PARTITION BY series_id ORDER BY day_ms) = 1 ORDER BY {sort}"),
+                        Table::MetricsSeries => format!("SELECT {cols} FROM {src} ORDER BY {sort}"),
                         _ => format!("SELECT {cols} FROM {src} ORDER BY {sort}"),
                     };
                     let batches: Vec<RecordBatch> = conn.prepare(&sql)?.query_arrow([])?.collect();
@@ -710,33 +775,25 @@ impl Node {
 
     /// Run `f` on a pooled query connection on a blocking thread, with the query timeout.
     pub async fn with_conn<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> Result<T> + Send + 'static) -> Result<T> {
-        let _permit = self.pool_gate.acquire().await?;
+        let permit = self.pool_gate.clone().acquire_owned().await?;
         let conn = self.pool.lock().map_err(|_| anyhow!("pool lock poisoned"))?.pop().context("query pool empty")?;
         let interrupt = conn.interrupt_handle();
+        let pool = self.pool.clone();
+        // The blocking job owns the connection and the permit and gives both back when it ends,
+        // however it ends: finished, interrupted by the timeout, panicked, or abandoned because
+        // the HTTP client went away (which drops this future, not the blocking job).
         let job = tokio::task::spawn_blocking(move || {
-            let r = f(&conn);
-            (conn, r)
+            let lease = Lease { conn: Some(conn), pool, _permit: permit };
+            f(lease.conn.as_ref().expect("leased connection"))
         });
         let timeout = self.cfg.query.timeout.0;
-        let mut job = job;
-        let (conn, r) = match tokio::time::timeout(timeout, &mut job).await {
-            Ok(j) => j?,
+        match tokio::time::timeout(timeout, job).await {
+            Ok(joined) => joined.map_err(|e| anyhow!("query task failed: {e}"))?,
             Err(_) => {
                 interrupt.interrupt();
-                // The interrupted query returns shortly; give its connection back to the pool then.
-                let pool = self.pool.clone();
-                tokio::spawn(async move {
-                    if let Ok((conn, _)) = job.await
-                        && let Ok(mut p) = pool.lock()
-                    {
-                        p.push(conn);
-                    }
-                });
                 bail!("query exceeded the {} ms timeout", timeout.as_millis());
             }
-        };
-        self.pool.lock().map_err(|_| anyhow!("pool lock poisoned"))?.push(conn);
-        r
+        }
     }
 
     pub fn hot_bytes(&self) -> u64 {

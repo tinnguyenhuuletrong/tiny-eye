@@ -352,6 +352,9 @@ static TRACE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{32}$"
 
 pub const SPAN_FIELDS: &[&str] = &["service_name", "span_name", "span_kind", "status_code", "duration_ms", "region", "trace_id"];
 pub const LOG_FIELDS: &[&str] = &["service_name", "severity_number", "severity_text", "body", "pattern_hash", "trace_id", "region"];
+/// Columns a spans / logs query may group by (besides `attr.*` / `resource.*`).
+pub const SPAN_GROUP_FIELDS: &[&str] = &["service_name", "span_name", "span_kind", "status_code", "region"];
+pub const LOG_GROUP_FIELDS: &[&str] = &["service_name", "severity_number", "severity_text", "pattern_hash", "region"];
 pub const TRACE_FIELDS: &[&str] = &["duration_ms", "has_error", "span_count", "root.service_name", "root.span_name", "service"];
 
 /// Parses `30s`, `5m`, `2h`, `7d` (positive whole units only).
@@ -460,6 +463,16 @@ impl Tqs {
                 }
                 for (i, c) in s.trace.iter().enumerate() {
                     validate_cond(c, TRACE_FIELDS, &format!("search.trace[{i}]"), &mut push);
+                    // Whole-trace fields with a narrower grammar than validate_cond's text/number rules.
+                    match (c.field.as_str(), c.op.as_str()) {
+                        ("service", "=" | "=~") | ("has_error", "=") => {}
+                        ("service", _) => push("cond", format!("search.trace[{i}]"), "service takes = or =~".into()),
+                        ("has_error", _) => push("cond", format!("search.trace[{i}]"), "has_error takes = true|false".into()),
+                        _ => {}
+                    }
+                    if c.field == "has_error" && !c.value.is_boolean() {
+                        push("cond", format!("search.trace[{i}].value"), "has_error compares with true or false".into());
+                    }
                 }
                 if let Some(l) = self.limit
                     && (l == 0 || l > 5_000)
@@ -523,7 +536,10 @@ impl Tqs {
                     }
                     match m.op.as_str() {
                         "=" | "!=" => {}
-                        "=~" | "!~" => validate_regex(&m.value, &format!("{mp}.value"), push),
+                        // A `$var` regex is checked as the value it resolves to.
+                        "=~" | "!~" => {
+                            validate_regex(&resolve_var(&m.value, &self.vars, r).unwrap_or_default(), &format!("{mp}.value"), push)
+                        }
                         o => push("op", format!("{mp}.op"), format!("{o:?}: matchers take =, !=, =~, !~")),
                     }
                 }
@@ -611,7 +627,8 @@ impl Tqs {
                     let ok = if q.metric.is_some() {
                         LABEL_NAME.is_match(l)
                     } else {
-                        SPAN_FIELDS.contains(&l.as_str()) || LOG_FIELDS.contains(&l.as_str()) || ATTR_FIELD.is_match(l)
+                        let fields = if q.spans.is_some() { SPAN_GROUP_FIELDS } else { LOG_GROUP_FIELDS };
+                        fields.contains(&l.as_str()) || ATTR_FIELD.is_match(l)
                     };
                     if !ok {
                         push("label", format!("{path}.agg"), format!("{l:?} cannot be grouped on"));
@@ -642,6 +659,9 @@ impl Tqs {
             match formula::parse(&f.expr) {
                 Err(e) => push("formula", format!("{path}.expr"), e),
                 Ok(ast) => {
+                    if ast.refs().iter().all(|r| r == "time") {
+                        push("formula", format!("{path}.expr"), "a formula needs at least one query (time alone has no series)".into());
+                    }
                     for r in ast.refs() {
                         if !known.contains(&r) {
                             push("formula_ref", format!("{path}.expr"), format!("{r:?} is not a query or an earlier formula"));
@@ -698,5 +718,53 @@ fn validate_cond(c: &Cond, fields: &[&str], path: &str, push: &mut impl FnMut(&'
             path.into(),
             format!("{op:?} with {v} is not valid for {} field {:?}", if numeric { "numeric" } else { "text" }, c.field),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn codes(doc: serde_json::Value) -> Vec<&'static str> {
+        match Tqs::parse(&doc.to_string()).map_err(|p| vec![p]).and_then(|t| t.validate(1_000_000_000).map(|_| ())) {
+            Ok(()) => vec![],
+            Err(ps) => ps.into_iter().map(|p| p.code).collect(),
+        }
+    }
+
+    fn events(by: &str) -> serde_json::Value {
+        serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"},
+            "queries": [{"name": "a", "spans": [], "measure": {"op": "count"}, "agg": {"by": [by]}}]})
+    }
+
+    #[test]
+    fn groupable_fields_are_per_signal() {
+        assert!(codes(events("service_name")).is_empty());
+        assert!(codes(events("resource.k8s.pod")).is_empty(), "resource.* is bound, so it is groupable");
+        assert_eq!(codes(events("duration_ms")), vec!["label"]);
+        assert_eq!(codes(events("severity_text")), vec!["label"], "a logs field is not a spans column");
+    }
+
+    #[test]
+    fn formulas_need_a_query() {
+        let doc = serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"},
+            "queries": [{"name": "a", "metric": "m", "fn": {"op": "last"}}], "formulas": [{"name": "t", "expr": "time"}]});
+        assert_eq!(codes(doc), vec!["formula"]);
+    }
+
+    #[test]
+    fn variable_regexes_are_checked_resolved() {
+        let doc = serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"}, "vars": {"re": "(unclosed"},
+            "queries": [{"name": "a", "metric": "m", "fn": {"op": "last"}, "match": [{"label": "l", "op": "=~", "value": "$re"}]}]});
+        assert_eq!(codes(doc), vec!["regex"]);
+    }
+
+    #[test]
+    fn trace_conditions_have_their_own_grammar() {
+        let doc = |c: serde_json::Value| serde_json::json!({"tqs": "3", "id": "x", "kind": "trace_search", "time": {"from": "-1h"}, "search": {"trace": [c]}});
+        assert!(codes(doc(serde_json::json!({"field": "service", "op": "=", "value": "api"}))).is_empty());
+        assert!(codes(doc(serde_json::json!({"field": "has_error", "op": "=", "value": true}))).is_empty());
+        assert!(!codes(doc(serde_json::json!({"field": "service", "op": "!=", "value": "api"}))).is_empty());
+        assert!(!codes(doc(serde_json::json!({"field": "has_error", "op": "=", "value": "true"}))).is_empty());
     }
 }

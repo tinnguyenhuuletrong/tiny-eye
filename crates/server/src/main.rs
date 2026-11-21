@@ -59,7 +59,9 @@ async fn main() -> Result<()> {
     tracing::info!(%listen, "serving");
     axum::serve(listener, server::app(state))
         .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
+            // SIGINT (Ctrl-C) or SIGTERM (containers, systemd): stop serving, then flush.
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
             tracing::info!("shutting down: flushing buffered rows");
         })
         .await?;

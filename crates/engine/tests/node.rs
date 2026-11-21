@@ -152,8 +152,84 @@ async fn spans_and_logs_round_trip_through_the_lake() {
         .await
         .unwrap();
     assert_eq!(e.series[0].points[0].1, 1.0);
+    // Grouping by a resource attribute binds the key (review finding 6).
+    let g = node
+        .query(r#"{"tqs":"3","id":"g","kind":"table","time":{"from":"-1m"},"queries":[{"name":"n","spans":[],"measure":{"op":"count"},"agg":{"by":["resource.k8s.pod"]}}]}"#)
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(g.series[0].points[0].1, 10.0);
     let p = node.query(r#"{"tqs":"3","id":"p","kind":"log_patterns","time":{"from":"-1m"}}"#).await.unwrap();
     assert_eq!(p.rows.len(), 1, "10 lines, one template");
     let c = node.catalog().await.unwrap();
     assert_eq!(c.services[0].name, "api");
+}
+
+/// Review finding 1: a flush that fails must be retried before anything newer, so the rows it
+/// held are never hidden by a later commit or released from RAM.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_flush_is_retried_and_loses_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let node = Node::open(config(dir.path(), &[])).await.unwrap();
+    let now = now_ms();
+    node.ingest(counter_rows(2, 10, now)).await.unwrap(); // A: 20 samples
+    let objects = dir.path().join("objects");
+    std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o555)).unwrap();
+    assert!(node.flush_now().await.is_err(), "flush must fail on a read-only store");
+    std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(count(&node, "SELECT count(*) FROM metrics_points").await, 20, "A stays visible from RAM");
+    let mut b = counter_rows(1, 5, now);
+    for r in b.series.iter_mut() {
+        r.labels.insert("job".into(), "late".into());
+        r.series_id = engine::ids::series_id("default", "local", "reqs_total", &r.labels);
+    }
+    let id = b.series[0].series_id;
+    for p in b.points.iter_mut() {
+        p.series_id = id;
+    }
+    node.ingest(b).await.unwrap(); // B: 5 samples
+    node.flush_and_checkpoint().await.unwrap(); // writes A, then B
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    node.checkpoint().await.unwrap(); // releases hot rows
+    assert_eq!(count(&node, "SELECT count(*) FROM memory.main.hot_metrics_points").await, 0);
+    assert_eq!(count(&node, "SELECT count(*) FROM lake.metrics_points").await, 25, "A and B both reached the lake");
+}
+
+/// Review finding 2: queries abandoned by their caller (client disconnect) must give their
+/// connection back to the pool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandoned_queries_return_their_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Node::open(config(dir.path(), &[("QUERY__WORKERS", "2")])).await.unwrap();
+    for _ in 0..4 {
+        let n = node.clone();
+        let h = tokio::spawn(async move {
+            n.with_conn(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                Ok(())
+            })
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        h.abort(); // the HTTP handler future is dropped
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    for _ in 0..4 {
+        assert_eq!(count(&node, "SELECT 1").await, 1, "pool still has connections");
+    }
+}
+
+/// Review findings 5 and 7: a retried request stores each sample once, and a refused request
+/// does not hide its series row from the retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retries_do_not_double_count_or_lose_series() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Node::open(config(dir.path(), &[("INGEST__ARENA_LIMIT", "300KB")])).await.unwrap();
+    let now = now_ms();
+    assert!(matches!(node.ingest(counter_rows(300, 100, now)).await, Err(engine::IngestError::Overloaded)));
+    node.ingest(counter_rows(2, 10, now)).await.unwrap();
+    node.ingest(counter_rows(2, 10, now)).await.unwrap(); // the same request again (lost response)
+    node.flush_and_checkpoint().await.unwrap();
+    assert_eq!(count(&node, "SELECT count(*) FROM lake.metrics_points").await, 20, "duplicates collapse at flush");
+    assert_eq!(count(&node, "SELECT count(*) FROM metrics_series").await, 2, "series rows survive the refused request");
 }

@@ -33,6 +33,10 @@ curl -s localhost:7070/api/v1/query -d '{"tqs":"3","id":"rps","kind":"timeseries
   "queries":[{"name":"r","metric":"http_requests_total","fn":{"op":"rate","window":"5m"},"agg":{"op":"sum","by":["job"]}}]}'
 ```
 
+**Full walkthrough with a real app:** [examples/demo](examples/demo/README.md): a Node.js shop
+instrumented with OpenTelemetry, k6 load, a dashboard, ad-hoc queries, and MCP setup for Claude
+Code / Claude Desktop (`make demo`, `make demo-app`, `make demo-load`).
+
 Agents: `tiny-eye mcp --url http://127.0.0.1:7070` (stdio MCP). Tools: [doc/schema/mcp-tools.md](doc/schema/mcp-tools.md).
 More query examples: [api/examples](api/examples). Language reference: SPEC §8.
 
@@ -59,7 +63,7 @@ More query examples: [api/examples](api/examples). Language reference: SPEC §8.
 | TQS = Prometheus | `make conformance`: 33 metric functions, 11 real-panel shapes over 3 namespaces, spans/logs/traces vs an independent computation, 38 validation/injection cases, 15 mutants | [104/104, 15/15 mutants caught](doc/results/tqs-coverage.md) |
 | The whole binary = Prometheus | `make e2e`: same remote-written samples into Prometheus 3.16 and tiny-eye; data spread over L1, L0, a pending envelope and RAM | [20/20 panels equal](doc/results/e2e.md) |
 | Storage assumptions on this machine | `make poc`: DuckLake registration + schema refusal, hot tail counted once, atomic compaction swap, retention deletes objects, bloom per row group, Arrow appender types | 6/6 |
-| Durability + overload | `crates/engine/tests/node.rs`: crash without flush loses no acknowledged sample (WAL replay); arena limit → 429 | pass |
+| Durability + overload | `crates/engine/tests/node.rs`: crash without flush loses no acknowledged sample (WAL replay); a failed flush is retried in order and loses nothing; abandoned queries return their connection; retries do not double count; arena limit → 429 | pass |
 | Contracts in sync | `crates/server/tests/{openapi,schemas}.rs`: TQS JSON Schema ⇔ Rust validator on every example; generated docs current; config/dashboards valid | pass |
 | Performance (8-core laptop, 2,620 series × 6 h, 3.7 M samples) | `make bench` / `make bench-s3` | remote-write **1.65 M samples/s**; flush 0.6 s; 6 h panels: `sum by (rate)` 0.58 s, histogram p99 73 ms, gauge 100 ms, one series 21 ms; trace by id 11 ms; absent trace id **22 → 2 S3 GETs** after compaction ([local](doc/results/bench-local.md), [MinIO](doc/results/bench-s3.md)) |
 
@@ -82,6 +86,8 @@ Not built yet (by milestone):
 - M3 cluster: roles, lease + fencing, hot-tail RPC, `replicated` durability; OTLP gRPC; Loki protobuf push
 - M4: alert evaluator + Alertmanager, materialized panels, Grafana data source or UI (Q11)
 - Laptop snapshot export (E9), multi-region buckets, native histograms, `traces_index`
+- Span events and links (SPEC §4.3) are not stored yet; OTLP points flagged "no recorded value" are stored as values
+- Response `freshness_s` is always 0 (the hot tail is read) and `partial_regions` always empty (single region)
 
 Decisions taken where the spec left a question open use its proposed defaults (Q1–Q20), except
 **Q7 durability**: single node defaults to `wal`.
@@ -93,3 +99,6 @@ Decisions taken where the spec left a question open use its proposed defaults (Q
 - DuckDB 2.0.1: `epoch_ms(TIMESTAMP_NS) // n` raises a spurious cast error; `epoch_ns` is used instead.
 - Result `labels` are parsed from the series key; a label value containing `,` is split ambiguously (the `key` itself is exact).
 - OTLP delta temporality and exponential histograms are counted and skipped.
+- A `kind: trace` lookup without `time` probes every span file; pass a time range (SPEC §7.2 assumes one).
+- Duplicate samples (same series and timestamp, e.g. a retried request) are removed at flush and compaction (`unique` in `schema/tables.yaml`); two copies can coexist briefly in the hot tail.
+- 500 responses carry the engine's error text (useful locally; front the API with a proxy before exposing it).

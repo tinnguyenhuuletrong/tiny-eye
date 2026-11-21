@@ -312,6 +312,10 @@ impl Config {
                 *s = "<redacted>".into();
             }
         }
+        // `postgres:host=… password=…` or a postgres URL with user:password@.
+        static PW: std::sync::LazyLock<regex::Regex> =
+            std::sync::LazyLock::new(|| regex::Regex::new(r"(password=)\S+|(://[^:/@]+:)[^@]+(@)").expect("static regex"));
+        c.catalog.url = PW.replace_all(&c.catalog.url, "${1}${2}<redacted>${3}").into_owned();
         format!("{c:#?}")
     }
 
@@ -387,6 +391,14 @@ mod tests {
         assert_eq!(c.node.id, "n7");
         assert_eq!(c.query.workers, 8);
         assert_eq!(c.node.region, "local", "untouched keys keep defaults");
+    }
+
+    #[test]
+    fn catalog_passwords_are_redacted() {
+        let c =
+            Config::from_layers(Some("catalog: { url: \"postgres:host=db user=te password=s3cret dbname=lake\" }\n"), &[]).expect("cfg");
+        let y = c.redacted_yaml();
+        assert!(!y.contains("s3cret") && y.contains("password=<redacted>"), "{y}");
     }
 
     #[test]

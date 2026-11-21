@@ -228,8 +228,8 @@ fn per_cte(op: FnOp, o: i64, w: i64) -> String {
         let corr = if mutant("no_reset_correction") { "0".to_string() } else { "l.c_corr - f.c_corr".to_string() };
         return format!(
             "cum AS (SELECT *, row_number() OVER w AS i,
-                            sum(CASE WHEN v < pv THEN pv ELSE 0 END) OVER w AS c_corr,
-                            sum(CASE WHEN v < pv THEN 1 ELSE 0 END) OVER w AS c_res,
+                            sum(CASE WHEN v < pv AND NOT isnan(pv) THEN pv ELSE 0 END) OVER w AS c_corr,
+                            sum(CASE WHEN v < pv AND NOT isnan(pv) THEN 1 ELSE 0 END) OVER w AS c_res,
                             sum(CASE WHEN v <> pv THEN 1 ELSE 0 END) OVER w AS c_chg
                      FROM pts WINDOW w AS (PARTITION BY series_id ORDER BY ts ROWS UNBOUNDED PRECEDING)),
              gs AS (SELECT g.t, s.series_id FROM grid g CROSS JOIN (SELECT DISTINCT series_id FROM pts) s),
@@ -246,14 +246,17 @@ fn per_cte(op: FnOp, o: i64, w: i64) -> String {
     }
     // The previous sample is inside the window (strict, as in the research compiler).
     let in_win = format!("pt > t - {o} - {w}");
-    let corr =
-        if mutant("no_reset_correction") { "0".to_string() } else { format!("coalesce(sum(pv) FILTER (WHERE v < pv AND {in_win}), 0)") };
+    let corr = if mutant("no_reset_correction") {
+        "0".to_string()
+    } else {
+        format!("coalesce(sum(pv) FILTER (WHERE v < pv AND NOT isnan(pv) AND {in_win}), 0)")
+    };
     format!(
         "win AS (SELECT g.t, p.* FROM grid g JOIN pts p ON p.ts {gt} g.t - {o} - {w} AND p.ts <= g.t - {o}),
          per AS (SELECT t, series_id, count(*) AS n, min(ts) AS t1, max(ts) AS t2,
                         arg_min(v, ts) AS v1, arg_max(v, ts) AS v2, arg_max(st, ts) AS st2,
                         {corr} AS corr,
-                        count(*) FILTER (WHERE v < pv AND {in_win}) AS nresets,
+                        count(*) FILTER (WHERE v < pv AND NOT isnan(pv) AND {in_win}) AS nresets,
                         count(*) FILTER (WHERE v <> pv AND {in_win}) AS nchanges,
                         arg_max(pv, ts) FILTER (WHERE {in_win}) AS pv_last,
                         arg_max(pt, ts) FILTER (WHERE {in_win}) AS pt_last,
@@ -468,8 +471,11 @@ fn events_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &Va
     let key_parts: Vec<String> = by
         .iter()
         .map(|f| {
+            // Attribute keys are bound; plain fields are validated column names (SPAN/LOG_GROUP_FIELDS).
             let v = if let Some(k) = f.strip_prefix("attr.") {
                 format!("map_extract_value({}, {})", if signal == "spans" { "span_attrs" } else { "log_attrs" }, sql.text(k))
+            } else if let Some(k) = f.strip_prefix("resource.") {
+                format!("map_extract_value(resource_attrs, {})", sql.text(k))
             } else {
                 format!("{f}::VARCHAR")
             };

@@ -20,6 +20,9 @@ struct Table {
     #[serde(default)]
     doc: Option<String>,
     sort: Vec<String>,
+    /// Identity columns (empty = every row is distinct, e.g. log lines).
+    #[serde(default)]
+    unique: Vec<String>,
     time: String,
     columns: Vec<Column>,
 }
@@ -150,6 +153,18 @@ fn main() {
     .unwrap();
     arm(w, &|_, t| format!("{:?}", t.time));
     writeln!(w, "        }}\n    }}").unwrap();
+    writeln!(w, "    /// Identity of a row; flush and compaction keep one row per identity (empty = none).\n    pub fn unique_columns(self) -> &'static [&'static str] {{\n        match self {{").unwrap();
+    arm(w, &|_, t| strs(t.unique.iter().map(String::as_str).collect()));
+    writeln!(w, "        }}\n    }}").unwrap();
+    writeln!(w, "    /// `QUALIFY` clause keeping one row per identity, or empty.\n    pub fn dedup_sql(self) -> &'static str {{\n        match self {{").unwrap();
+    arm(w, &|_, t| {
+        if t.unique.is_empty() {
+            "\"\"".to_string()
+        } else {
+            format!("{:?}", format!(" QUALIFY row_number() OVER (PARTITION BY {}) = 1", t.unique.join(", ")))
+        }
+    });
+    writeln!(w, "        }}\n    }}").unwrap();
     writeln!(w, "    /// SQL for the unix hour of a row (partition key), from the time column's type.\n    pub fn hour_sql(self) -> &'static str {{\n        match self {{").unwrap();
     arm(w, &|_, t| {
         let c = t.columns.iter().find(|c| c.name == t.time).unwrap_or_else(|| panic!("time column {} missing", t.time));
@@ -187,6 +202,9 @@ fn main() {
     writeln!(w, "}}\n").unwrap();
 
     for (name, t) in &file.tables {
+        for c in t.unique.iter().chain(&t.sort).chain(std::iter::once(&t.time)) {
+            assert!(t.columns.iter().any(|x| &x.name == c), "schema/tables.yaml: {name} names unknown column {c}");
+        }
         let cn = camel(name);
         // schema
         writeln!(w, "fn {name}_schema() -> SchemaRef {{\n    static S: std::sync::LazyLock<SchemaRef> = std::sync::LazyLock::new(|| {{\n        Arc::new(Schema::new(vec![").unwrap();
