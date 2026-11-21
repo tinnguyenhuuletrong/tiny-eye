@@ -213,6 +213,55 @@ fn agg_fn(op: Option<AggOp>) -> &'static str {
     }
 }
 
+/// Per (step, series) window statistics: n, t1/v1 (first sample), t2/v2/st2 (last), corr
+/// (reset correction), nresets, nchanges, pv_last/pt_last (sample before the last), and for the
+/// `*_over_time` aggregates a/mn/mx/s. A window is `(t - o - w, t - o]`.
+///
+/// Fast path (everything except avg/min/max/sum_over_time): running sums per series, then the
+/// first and last sample of each window by two ASOF joins — O(series × steps) instead of the
+/// join path's O(series × steps × samples per window). The join path stays for the aggregates
+/// whose value would otherwise come from a difference of large running sums.
+fn per_cte(op: FnOp, o: i64, w: i64) -> String {
+    let gt = if mutant("closed_window") { ">=" } else { ">" };
+    let fast = !matches!(op, FnOp::AvgOverTime | FnOp::MinOverTime | FnOp::MaxOverTime | FnOp::SumOverTime);
+    if fast {
+        let corr = if mutant("no_reset_correction") { "0".to_string() } else { "l.c_corr - f.c_corr".to_string() };
+        return format!(
+            "cum AS (SELECT *, row_number() OVER w AS i,
+                            sum(CASE WHEN v < pv THEN pv ELSE 0 END) OVER w AS c_corr,
+                            sum(CASE WHEN v < pv THEN 1 ELSE 0 END) OVER w AS c_res,
+                            sum(CASE WHEN v <> pv THEN 1 ELSE 0 END) OVER w AS c_chg
+                     FROM pts WINDOW w AS (PARTITION BY series_id ORDER BY ts ROWS UNBOUNDED PRECEDING)),
+             gs AS (SELECT g.t, s.series_id FROM grid g CROSS JOIN (SELECT DISTINCT series_id FROM pts) s),
+             lastp AS (SELECT gs.t, gs.series_id, c.i, c.ts, c.v, c.st, c.pv, c.pt, c.c_corr, c.c_res, c.c_chg
+                       FROM gs ASOF JOIN cum c ON gs.series_id = c.series_id AND c.ts <= gs.t - {o}),
+             firstp AS (SELECT gs.t, gs.series_id, c.i, c.ts, c.v, c.c_corr, c.c_res, c.c_chg
+                        FROM gs ASOF JOIN cum c ON gs.series_id = c.series_id AND c.ts {gt} gs.t - {o} - {w}),
+             per AS (SELECT l.t, l.series_id, l.i - f.i + 1 AS n, f.ts AS t1, l.ts AS t2, f.v AS v1, l.v AS v2, l.st AS st2,
+                            {corr} AS corr, l.c_res - f.c_res AS nresets, l.c_chg - f.c_chg AS nchanges,
+                            CASE WHEN l.i > f.i THEN l.pv END AS pv_last, CASE WHEN l.i > f.i THEN l.pt END AS pt_last,
+                            NULL::DOUBLE AS a, NULL::DOUBLE AS mn, NULL::DOUBLE AS mx, NULL::DOUBLE AS s
+                     FROM lastp l JOIN firstp f USING (t, series_id) WHERE l.i >= f.i)"
+        );
+    }
+    // The previous sample is inside the window (strict, as in the research compiler).
+    let in_win = format!("pt > t - {o} - {w}");
+    let corr =
+        if mutant("no_reset_correction") { "0".to_string() } else { format!("coalesce(sum(pv) FILTER (WHERE v < pv AND {in_win}), 0)") };
+    format!(
+        "win AS (SELECT g.t, p.* FROM grid g JOIN pts p ON p.ts {gt} g.t - {o} - {w} AND p.ts <= g.t - {o}),
+         per AS (SELECT t, series_id, count(*) AS n, min(ts) AS t1, max(ts) AS t2,
+                        arg_min(v, ts) AS v1, arg_max(v, ts) AS v2, arg_max(st, ts) AS st2,
+                        {corr} AS corr,
+                        count(*) FILTER (WHERE v < pv AND {in_win}) AS nresets,
+                        count(*) FILTER (WHERE v <> pv AND {in_win}) AS nchanges,
+                        arg_max(pv, ts) FILTER (WHERE {in_win}) AS pv_last,
+                        arg_max(pt, ts) FILTER (WHERE {in_win}) AS pt_last,
+                        avg(v) AS a, min(v) AS mn, max(v) AS mx, sum(v) AS s
+                 FROM win GROUP BY t, series_id)"
+    )
+}
+
 fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &Vars) -> String {
     let f = q.func.as_ref().expect("validated");
     let hist = f.op == FnOp::HistogramQuantile;
@@ -232,7 +281,6 @@ fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &V
     let o = q.offset.as_deref().and_then(parse_duration_ms).unwrap_or(0);
     let (start, end, step) = if kind == Kind::Table { (r.to_ms, r.to_ms, 1) } else { (r.from_ms, r.to_ms, r.step_ms) };
     let lo = start - o - w;
-    let in_win = format!("pt > t - {o} - {w}");
     let extrap = |is_counter: bool, is_rate: bool| -> String {
         let res = if is_counter { "(v2 - v1 + corr)" } else { "(v2 - v1)" };
         let zero = if is_counter {
@@ -272,16 +320,7 @@ fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &V
                  FROM metrics_points p WHERE p.series_id IN (SELECT series_id FROM sel)
                    AND p.timestamp_ms > {lo} AND p.timestamp_ms <= {hi}{stale}),
          grid AS (SELECT unnest(generate_series({start}::BIGINT, {end}::BIGINT, {step}::BIGINT)) AS t),
-         win AS (SELECT g.t, p.* FROM grid g JOIN pts p ON p.ts {gt} g.t - {o} - {w} AND p.ts <= g.t - {o}),
-         per AS (SELECT t, series_id, count(*) AS n, min(ts) AS t1, max(ts) AS t2,
-                        arg_min(v, ts) AS v1, arg_max(v, ts) AS v2, arg_max(st, ts) AS st2,
-                        {corr} AS corr,
-                        count(*) FILTER (WHERE v < pv AND {in_win}) AS nresets,
-                        count(*) FILTER (WHERE v <> pv AND {in_win}) AS nchanges,
-                        arg_max(pv, ts) FILTER (WHERE {in_win}) AS pv_last,
-                        arg_max(pt, ts) FILTER (WHERE {in_win}) AS pt_last,
-                        avg(v) AS a, min(v) AS mn, max(v) AS mx, sum(v) AS s
-                 FROM win GROUP BY t, series_id),
+         {per_cte},
          ex AS (SELECT *, (t2 - t1) / 1000.0 AS sampled,
                        CASE WHEN n > 1 THEN (t2 - t1) / 1000.0 / (n - 1) END AS avgd,
                        (t1 - (t - {o} - {w})) / 1000.0 AS ds0,
@@ -292,12 +331,7 @@ fn metrics_cte(sql: &mut Sql, q: &NamedQuery, r: &Resolved, kind: Kind, vars: &V
         hi = end - o,
         // Range functions never see staleness markers; `last` needs them to end a series.
         stale = if f.op == FnOp::Last { "" } else { " AND NOT p.is_stale" },
-        gt = if mutant("closed_window") { ">=" } else { ">" },
-        corr = if mutant("no_reset_correction") {
-            "0".to_string()
-        } else {
-            format!("coalesce(sum(pv) FILTER (WHERE v < pv AND {in_win}), 0)")
-        },
+        per_cte = per_cte(f.op, o, w),
     );
     let key = key_expr("labels", q.agg.as_ref(), hist);
     let body = if hist {
@@ -506,6 +540,18 @@ fn apply_top(inner: &str, top: Option<&Top>) -> String {
 }
 
 pub fn run(conn: &Connection, tqs: &Tqs, r: &Resolved) -> Result<Vec<OutRow>> {
+    let (text, params) = timeseries_sql(tqs, r)?;
+    let mut stmt = conn.prepare(&text)?;
+    let rows = stmt
+        .query_map(duckdb::params_from_iter(params.iter()), |row| {
+            Ok(OutRow { output: row.get(0)?, t: row.get(1)?, key: row.get(2)?, value: row.get(3)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// The SQL text and bound parameters `run` executes (also used for EXPLAIN / profiling).
+pub fn timeseries_sql(tqs: &Tqs, r: &Resolved) -> Result<(String, Vec<Value>)> {
     if !matches!(tqs.kind, Kind::Timeseries | Kind::Table) {
         bail!("run() handles timeseries/table; use run_list for {:?}", tqs.kind);
     }
@@ -597,13 +643,7 @@ pub fn run(conn: &Connection, tqs: &Tqs, r: &Resolved) -> Result<Vec<OutRow>> {
     let unions: Vec<String> =
         outputs.iter().map(|(name, s)| format!("SELECT {} AS output, * FROM ({})", lit(name), apply_top(s, tqs.top.as_ref()))).collect();
     let text = format!("WITH {} {} ORDER BY output, key, t", ctes.join(", "), unions.join(" UNION ALL "));
-    let mut stmt = conn.prepare(&text)?;
-    let rows = stmt
-        .query_map(duckdb::params_from_iter(sql.params.iter()), |row| {
-            Ok(OutRow { output: row.get(0)?, t: row.get(1)?, key: row.get(2)?, value: row.get(3)? })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    Ok((text, sql.params))
 }
 
 /// List-shaped results (trace search, waterfall, log search, patterns): rows of named text cells.

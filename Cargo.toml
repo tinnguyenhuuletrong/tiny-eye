@@ -52,8 +52,12 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
-# DuckDB core must be a release build in every profile: its DEBUG build counts allocations
+# DuckDB core must be built without debuginfo in every profile (debuginfo => libduckdb-sys
+# defines DEBUG): its DEBUG build counts allocations
 # and aborts when the (release-built) ducklake/httpfs extensions free memory (found by the PoC).
 [profile.dev.package.libduckdb-sys]
 debug = false
 opt-level = 3
+
+[profile.release.package.libduckdb-sys]
+debug = false

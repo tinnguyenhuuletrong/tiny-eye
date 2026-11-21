@@ -38,6 +38,7 @@ ulid.workspace = true
 [dev-dependencies]
 jsonschema = { version = "0.62", default-features = false }
 serde_norway.workspace = true
+duckdb.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
