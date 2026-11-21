@@ -38,8 +38,12 @@ pub enum QueryError {
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogMetric {
     pub name: String,
+    /// counter | gauge | histogram | summary | unknown
+    pub r#type: String,
     pub series: i64,
     pub label_keys: Vec<String>,
+    /// Up to `VALUES_PER_LABEL` distinct values per key.
+    pub label_values: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +66,16 @@ pub fn labels_of_key(key: &str) -> BTreeMap<String, String> {
 }
 
 const CATALOG_LIMIT: usize = 500;
+const VALUES_PER_LABEL: usize = 50;
+
+fn text_list(v: duckdb::types::Value) -> Vec<String> {
+    match v {
+        duckdb::types::Value::List(v) => {
+            v.into_iter().filter_map(|x| if let duckdb::types::Value::Text(t) = x { Some(t) } else { None }).collect()
+        }
+        _ => vec![],
+    }
+}
 
 impl Node {
     pub fn parse_and_validate(json: &str, now: i64) -> Result<(tqs::Tqs, tqs::Resolved), Vec<tqs::Problem>> {
@@ -139,18 +153,28 @@ impl Node {
         self.with_conn(move |conn| {
             let mut metrics = vec![];
             let mut stmt = conn.prepare(&format!(
-                "SELECT metric_name, count(*) AS n, list_sort(list_distinct(flatten(list(map_keys(labels))))) AS keys
+                "SELECT metric_name, count(*) AS n, list_sort(list_distinct(flatten(list(map_keys(labels))))) AS keys,
+                        CASE max(metric_type) WHEN 1 THEN 'counter' WHEN 2 THEN 'gauge' WHEN 3 THEN 'histogram' WHEN 4 THEN 'summary' ELSE 'unknown' END
                  FROM metrics_series GROUP BY metric_name ORDER BY metric_name LIMIT {}",
                 CATALOG_LIMIT + 1
             ))?;
             let mut rows = stmt.query([])?;
             while let Some(r) = rows.next()? {
-                let keys: duckdb::types::Value = r.get(2)?;
-                let label_keys = match keys {
-                    duckdb::types::Value::List(v) => v.into_iter().filter_map(|x| if let duckdb::types::Value::Text(t) = x { Some(t) } else { None }).collect(),
-                    _ => vec![],
-                };
-                metrics.push(CatalogMetric { name: r.get(0)?, series: r.get(1)?, label_keys });
+                let label_keys = text_list(r.get(2)?);
+                metrics.push(CatalogMetric { name: r.get(0)?, r#type: r.get(3)?, series: r.get(1)?, label_keys, label_values: BTreeMap::new() });
+            }
+            // A bounded sample of values per (metric, label) for pickers.
+            let mut stmt = conn.prepare(&format!(
+                "SELECT metric_name, k, list_sort(list(DISTINCT v))[1:{VALUES_PER_LABEL}]
+                 FROM (SELECT metric_name, unnest(map_keys(labels)) AS k, unnest(map_values(labels)) AS v FROM metrics_series)
+                 WHERE v <> '' GROUP BY 1, 2"
+            ))?;
+            let mut rows = stmt.query([])?;
+            while let Some(r) = rows.next()? {
+                let (name, key): (String, String) = (r.get(0)?, r.get(1)?);
+                if let Some(m) = metrics.iter_mut().find(|m| m.name == name) {
+                    m.label_values.insert(key, text_list(r.get(2)?));
+                }
             }
             let mut services: BTreeMap<String, CatalogService> = BTreeMap::new();
             let mut stmt = conn.prepare(

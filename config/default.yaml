@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=../doc/schema/config.schema.json
+# yaml-language-server: $schema=../schema/generated/config.schema.json
 # tiny-eye configuration: the single source of every default.
 #
 # This file is compiled into the binary as the base layer. A file passed with

@@ -31,10 +31,11 @@ pub struct PanelUi {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Panel {
-    /// A TQS 3 document, kept as JSON so the API returns exactly what the file says.
-    pub query: serde_json::Value,
+    /// Presentation first, as dashboards are written by hand: `ui` then `query`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<PanelUi>,
+    /// A TQS 3 document, kept as JSON so the API returns exactly what the file says.
+    pub query: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,14 +145,23 @@ pub fn save(dir: &str, d: &Dashboard) -> Result<PathBuf, Vec<Problem>> {
     let existing = yaml_files(dir)
         .into_iter()
         .find(|p| std::fs::read_to_string(p).ok().and_then(|t| serde_norway::from_str::<Dashboard>(&t).ok()).is_some_and(|x| x.id == d.id));
-    let path = existing.unwrap_or_else(|| dir.join(format!("{}.yaml", d.id)));
     let body = serde_norway::to_string(d).map_err(|e| vec![Problem { code: "io", path: "$".into(), message: e.to_string() }])?;
-    let text = format!(
-        "# yaml-language-server: $schema=https://tiny-eye.local/schema/dashboard.schema.json\n\
-         # Dashboard \"{}\". Saved by tiny-eye from the UI; this file is the source of truth, so commit it.\n\
-         # Each panel: `query` (TQS: what to fetch) and `ui` (display, unit, w columns of 12, h rows).\n{body}",
-        d.title.replace('\n', " ")
-    );
+    // Keep the file's own leading comment block (its `$schema` line, notes for readers); a new
+    // file gets a short header.
+    let header = existing
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.lines().take_while(|l| l.starts_with('#')).map(|l| format!("{l}\n")).collect::<String>())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "# Dashboard \"{}\": saved by tiny-eye. This file is the source of truth; commit it.\n\
+                 # Each panel: `ui` (display, unit, w of 12 columns, h rows) and `query` (TQS).\n",
+                d.title.replace('\n', " ")
+            )
+        });
+    let path = existing.unwrap_or_else(|| dir.join(format!("{}.yaml", d.id)));
+    let text = format!("{header}{body}");
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, text).map_err(io)?;
     std::fs::rename(&tmp, &path).map_err(io)?;

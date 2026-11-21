@@ -37,16 +37,30 @@ hooks: ## Install the git pre-commit hook (fmt + clippy)
 
 ## ---- develop
 .PHONY: build
-build: ## Release build of the tiny-eye binary
+build: ui ## Release build of the tiny-eye binary, web UI included
 	cargo build --release --bin tiny-eye
 
 .PHONY: run
-run: tools ## Run a single node with config/dev.yaml (local disk)
-	cargo run --release --bin tiny-eye -- --config config/dev.yaml
+run: tools build ## Run a single node with config/dev.yaml (local disk); UI at http://127.0.0.1:7070
+	./target/release/tiny-eye --config config/dev.yaml
+
+## ---- web UI (ui/) and docs site (website/)
+.PHONY: ui ui-dev docs docs-dev
+ui: ## Build the web UI into ui/dist (embedded by the next cargo build); API types generated from api/openapi.yaml
+	cd ui && npm ci --no-audit --no-fund && npm run build
+
+ui-dev: ## UI dev server on :5173 with hot reload, proxying the API to a running node (make run)
+	cd ui && npm install --no-audit --no-fund && npm run dev
+
+docs: ## Build the documentation site (docs/ -> website/build)
+	cd website && npm ci --no-audit --no-fund && BASE_URL=/ npm run build
+
+docs-dev: ## Preview the documentation site on :3000
+	cd website && npm install --no-audit --no-fund && BASE_URL=/ npm start
 
 .PHONY: schemas
-schemas: ## Regenerate doc/schema (JSON Schemas for TQS/dashboards/config, MCP tools, formula grammar)
-	cargo run --quiet --bin tiny-eye -- schemas --out doc/schema
+schemas: ## Regenerate schema/generated (JSON Schemas, formula grammar) and docs/reference/mcp-tools.md
+	cargo run --quiet --bin tiny-eye -- schemas --root .
 
 .PHONY: fmt
 fmt: ## Format all code
@@ -55,7 +69,7 @@ fmt: ## Format all code
 .PHONY: lint
 lint: ## fmt check + clippy (warnings are errors)
 	cargo fmt --all -- --check
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets --features tqs/mutants -- -D warnings
 
 ## ---- test
 .PHONY: test
@@ -68,7 +82,7 @@ poc: tools ## Proof-of-concept storage tests (DuckLake, hot tail, compaction, re
 
 .PHONY: conformance
 conformance: tools ## TQS vs Prometheus 3.16 point by point + validation + mutation check
-	TQS_COVERAGE_OUT=$(ROOT)/doc/results/tqs-coverage.md cargo test --release -p tqs --features mutants --test conformance
+	TQS_COVERAGE_OUT=$(ROOT)/docs/deep-dive/evidence/tqs-coverage.md cargo test --release -p tqs --features mutants --test conformance
 
 .PHONY: e2e
 e2e: tools ## End-to-end: remote-write the same samples to Prometheus and tiny-eye, compare every panel
@@ -84,11 +98,11 @@ s3-down: ## Stop MinIO and drop its volume
 	$(COMPOSE) down -v
 
 .PHONY: check
-check: lint test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
+check: lint ui test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
 
 ## ---- demo (examples/demo/README.md)
 .PHONY: demo demo-app demo-load
-demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo)
+demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo); UI at http://127.0.0.1:7070
 	./target/release/tiny-eye --config examples/demo/tiny-eye.yaml
 
 demo-app: ## Run the demo shop: shop-api :3000 + payments :3001 (Node.js, OpenTelemetry)
@@ -100,12 +114,12 @@ demo-load: ## k6 load against the demo shop via Docker (DURATION=10m for longer)
 
 ## ---- benchmark
 .PHONY: bench
-bench: tools ## Ingest + query + trace-lookup benchmark (local disk); writes doc/results/bench-local.md
-	cargo run --release -p server --bin tiny-eye-bench -- --out doc/results/bench-local.md
+bench: tools ## Ingest + query + trace-lookup benchmark (local disk); writes docs/deep-dive/evidence/bench-local.md
+	cargo run --release -p server --bin tiny-eye-bench -- --out docs/deep-dive/evidence/bench-local.md
 
 .PHONY: bench-s3
-bench-s3: tools s3-up ## Same benchmark with data on MinIO; writes doc/results/bench-s3.md
-	cargo run --release -p server --bin tiny-eye-bench -- --s3 http://127.0.0.1:19000 --out doc/results/bench-s3.md
+bench-s3: tools s3-up ## Same benchmark with data on MinIO; writes docs/deep-dive/evidence/bench-s3.md
+	cargo run --release -p server --bin tiny-eye-bench -- --s3 http://127.0.0.1:19000 --out docs/deep-dive/evidence/bench-s3.md
 
 .PHONY: clean
 clean: ## Remove build output and local state

@@ -58,7 +58,17 @@ pub async fn validate_query(body: String) -> Json<ProblemResponse> {
 pub async fn discover_catalog(State(st): State<AppState>) -> Response {
     match st.node.catalog().await {
         Ok(c) => Json(CatalogResponse {
-            metrics: c.metrics.into_iter().map(|m| CatalogMetric { name: m.name, series: m.series, label_keys: m.label_keys }).collect(),
+            metrics: c
+                .metrics
+                .into_iter()
+                .map(|m| CatalogMetric {
+                    name: m.name,
+                    r#type: m.r#type,
+                    series: m.series,
+                    label_keys: m.label_keys,
+                    label_values: m.label_values,
+                })
+                .collect(),
             services: c
                 .services
                 .into_iter()

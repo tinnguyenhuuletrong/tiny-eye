@@ -1,7 +1,7 @@
 # tiny-eye — working agreement
 
-Blob-first observability engine (SPEC: `doc/spec/Observability Engine Spec.md`, research
-evidence: `doc/research/`). Metrics, logs and traces → sorted ZSTD Parquet in object storage →
+Blob-first observability engine (SPEC: `research/spec/Observability Engine Spec.md`, research
+evidence: `research/`). Metrics, logs and traces → sorted ZSTD Parquet in object storage →
 DuckLake catalog → queried with TQS 3 (closed JSON schema compiled to DuckDB SQL).
 
 ## Principles
@@ -22,7 +22,7 @@ DuckLake catalog → queried with TQS 3 (closed JSON schema compiled to DuckDB S
 4. **Proven, not claimed.** Every semantic rule has a test that can fail: TQS against
    Prometheus point by point (`make conformance`, with a mutation check), storage
    assumptions in `crates/engine/tests/poc.rs`, the whole binary in `make e2e`, numbers in
-   `make bench`. Results land in `doc/results/`.
+   `make bench`. Results land in `docs/deep-dive/evidence/`.
 
 ## Commands
 

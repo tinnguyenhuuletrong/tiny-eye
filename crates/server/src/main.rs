@@ -4,7 +4,7 @@
 //!   tiny-eye [--config <file.yaml>]
 //!   tiny-eye mcp --url http://127.0.0.1:7070 [--token-env VAR]
 //!   tiny-eye config            print the effective configuration (secrets redacted)
-//!   tiny-eye schemas [--out doc/schema]   write editor/agent grammars (JSON Schemas, MCP tools, formula grammar)
+//!   tiny-eye schemas [--root .]   write editor/agent grammars under the repo root (schema/generated, docs/reference)
 
 use anyhow::{Context, Result, bail};
 use engine::{Config, Node};
@@ -29,9 +29,9 @@ async fn main() -> Result<()> {
             return tokio::task::spawn_blocking(move || server::mcp::serve(&url, token)).await?;
         }
         Some("schemas") => {
-            let out = arg(&args, "--out").unwrap_or_else(|| "doc/schema".into());
-            for f in server::schemas::write(std::path::Path::new(&out))? {
-                println!("{out}/{f}");
+            let root = arg(&args, "--root").unwrap_or_else(|| ".".into());
+            for f in server::schemas::write(std::path::Path::new(&root))? {
+                println!("{f}");
             }
             return Ok(());
         }

@@ -269,11 +269,16 @@ components:
     CatalogMetric:
       type: object
       additionalProperties: false
-      required: [name, series, label_keys]
+      required: [name, type, series, label_keys, label_values]
       properties:
         name: { type: string }
+        type: { type: string, enum: [counter, gauge, histogram, summary, unknown], description: "as reported by the sender (OTLP); remote-write metrics are unknown" }
         series: { type: integer, format: int64 }
         label_keys: { type: array, items: { type: string } }
+        label_values:
+          type: object
+          description: up to 50 distinct values per label key (a sample for pickers, not a full list)
+          additionalProperties: { type: array, items: { type: string } }
 
     CatalogService:
       type: object

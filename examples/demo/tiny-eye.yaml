@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=../../doc/schema/config.schema.json
+# yaml-language-server: $schema=../../schema/generated/config.schema.json
 # tiny-eye config for the demo: local disk under ./data/demo, fast flushes, the demo dashboards.
 duckdb:
   extension_dir: .tools/duckdb_ext

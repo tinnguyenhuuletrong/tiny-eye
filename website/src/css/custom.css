@@ -1,0 +1,106 @@
+/*
+ * tiny-eye docs theme: a clean, Geist-like look with system fonts only
+ * (no external font CDNs). Infima variables: https://infima.dev
+ */
+
+:root {
+  --ifm-color-primary: #1d4ed8;
+  --ifm-color-primary-dark: #1a46c2;
+  --ifm-color-primary-darker: #1942b8;
+  --ifm-color-primary-darkest: #143697;
+  --ifm-color-primary-light: #2e5ce5;
+  --ifm-color-primary-lighter: #3964e6;
+  --ifm-color-primary-lightest: #5a7eea;
+
+  --ifm-font-family-base: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+    "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --ifm-font-family-monospace: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+  --ifm-font-size-base: 16px;
+  --ifm-line-height-base: 1.65;
+  --ifm-heading-font-weight: 600;
+  --ifm-font-weight-semibold: 600;
+
+  --ifm-code-font-size: 90%;
+  --ifm-code-border-radius: 6px;
+  --ifm-global-radius: 8px;
+  --ifm-pre-padding: 1rem;
+
+  --ifm-navbar-shadow: none;
+  --ifm-toc-border-color: #eaeaea;
+  --ifm-hr-border-color: #eaeaea;
+  --ifm-table-border-color: #eaeaea;
+  --ifm-table-stripe-background: transparent;
+
+  --docusaurus-highlighted-code-line-bg: rgba(29, 78, 216, 0.08);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #7aa2ff;
+  --ifm-color-primary-dark: #5a8bff;
+  --ifm-color-primary-darker: #4a80ff;
+  --ifm-color-primary-darkest: #1a5fff;
+  --ifm-color-primary-light: #9ab9ff;
+  --ifm-color-primary-lighter: #aac4ff;
+  --ifm-color-primary-lightest: #dae5ff;
+
+  --ifm-background-color: #0a0a0a;
+  --ifm-background-surface-color: #111111;
+  --ifm-toc-border-color: #262626;
+  --ifm-hr-border-color: #262626;
+  --ifm-table-border-color: #262626;
+
+  --docusaurus-highlighted-code-line-bg: rgba(122, 162, 255, 0.12);
+}
+
+/* Headings: tight tracking, like Geist. */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+}
+
+/* Navbar and footer: flat with a hairline border. */
+.navbar {
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+.footer--light {
+  background-color: var(--ifm-background-color);
+  border-top: 1px solid var(--ifm-toc-border-color);
+}
+
+/* Code blocks: comfortable size, hairline border. */
+.theme-code-block {
+  font-size: 0.875rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  box-shadow: none;
+}
+
+code {
+  border: none;
+}
+
+/* Tables: full width, readable. */
+.markdown table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.925rem;
+}
+
+.markdown table th {
+  text-align: left;
+  font-weight: 600;
+}
+
+.markdown table th,
+.markdown table td {
+  padding: 0.5rem 0.75rem;
+}
+
+/* Mermaid diagrams: centered. */
+.docusaurus-mermaid-container {
+  display: flex;
+  justify-content: center;
+}

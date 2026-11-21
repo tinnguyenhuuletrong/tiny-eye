@@ -1,18 +1,18 @@
-//! doc/schema is generated (`make schemas`); this fails when a committed file is stale, so the
+//! schema/generated and docs/reference/mcp-tools.md are generated (`make schemas`); this fails when a committed file is stale, so the
 //! editor grammars, MCP tool docs and config schema can never drift from their sources.
 
 #![allow(clippy::unwrap_used)]
 
 #[test]
 fn doc_schema_is_up_to_date() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../doc/schema");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut stale = vec![];
     for (name, body) in server::schemas::generate() {
         if std::fs::read_to_string(dir.join(name)).ok().as_deref() != Some(body.as_str()) {
             stale.push(name);
         }
     }
-    assert!(stale.is_empty(), "stale generated files in doc/schema: {stale:?} — run `make schemas` and commit");
+    assert!(stale.is_empty(), "stale generated files: {stale:?} — run `make schemas` and commit");
 }
 
 #[test]

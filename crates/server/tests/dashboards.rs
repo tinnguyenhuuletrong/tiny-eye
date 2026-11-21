@@ -58,6 +58,7 @@ async fn ui_state_round_trips_through_the_yaml_file() {
         assert_eq!(s, 200, "{saved}");
         let file = std::fs::read_to_string(dash_dir.join("shop.yaml")).unwrap();
         assert!(file.contains("w: 6") && file.contains("h: 3"), "the YAML file holds the new layout");
+        assert!(file.starts_with("# yaml-language-server: $schema="), "the file keeps its own leading comments");
         assert!(file.find("slow-checkouts").unwrap() < file.find("id: requests").unwrap(), "and the new order");
         let (_, again) = req("GET", &base, None);
         assert_eq!(again, saved, "GET serves what was saved");

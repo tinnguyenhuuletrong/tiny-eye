@@ -9,7 +9,7 @@
 //! staleness marker, 3 % missing scrapes, 0–2 s jitter, a histogram, label values for
 //! `label_replace`, and selections that match nothing (`or vector(0)`, `absent`).
 //!
-//! Run with `make e2e` (needs `make tools`). Writes doc/results/e2e.md.
+//! Run with `make e2e` (needs `make tools`). Writes docs/deep-dive/evidence/e2e.md.
 
 #![allow(clippy::unwrap_used)]
 
@@ -590,7 +590,7 @@ async fn tqs_equals_prometheus_on_remote_written_data() {
     }
     let total = cases().len();
     md.push_str(&format!("\n**{}/{total} panels equal to Prometheus.**\n", total - failed));
-    std::fs::create_dir_all(root.join("doc/results")).unwrap();
-    std::fs::write(root.join("doc/results/e2e.md"), md).unwrap();
-    assert_eq!(failed, 0, "{failed} panel(s) differ from Prometheus; see doc/results/e2e.md");
+    std::fs::create_dir_all(root.join("docs/deep-dive/evidence")).unwrap();
+    std::fs::write(root.join("docs/deep-dive/evidence/e2e.md"), md).unwrap();
+    assert_eq!(failed, 0, "{failed} panel(s) differ from Prometheus; see docs/deep-dive/evidence/e2e.md");
 }

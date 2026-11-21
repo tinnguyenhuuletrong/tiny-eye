@@ -5,6 +5,7 @@ pub mod handlers;
 pub mod mcp;
 pub mod receivers;
 pub mod schemas;
+pub mod web;
 
 #[allow(clippy::all)]
 pub mod api {
@@ -68,7 +69,9 @@ fn required_scope(method: &str, path: &str) -> Scope {
             op.method == method && pat.len() == segs.len() && pat.iter().zip(&segs).all(|(p, s)| p.starts_with('{') || p == s)
         })
         .map(|op| op.scope)
-        .unwrap_or(Scope::Admin)
+        // The web UI's static files are public (they hold no data); any other unknown route,
+        // including every unknown /api path, fails closed.
+        .unwrap_or(if method == "GET" && web::is_ui_path(path) { Scope::Public } else { Scope::Admin })
 }
 
 /// Bearer-token auth (SPEC §11): each operation's `x-scope` must be granted; `admin` grants all.
@@ -93,6 +96,7 @@ pub async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Respo
 /// The full HTTP app: generated routes + auth + body limit.
 pub fn app(state: AppState) -> axum::Router {
     api::router(state.clone())
+        .fallback(web::serve)
         .layer(axum::middleware::from_fn_with_state(state, auth))
         .layer(axum::extract::DefaultBodyLimit::max(64 << 20))
 }
@@ -110,7 +114,10 @@ mod tests {
         assert_eq!(required_scope("GET", "/healthz"), Scope::Public);
         assert_eq!(required_scope("HEAD", "/api/v1/catalog"), Scope::Query, "HEAD needs GET's scope");
         assert_eq!(required_scope("PUT", "/api/v1/query"), Scope::Admin, "unknown method fails closed");
-        assert_eq!(required_scope("GET", "/nope"), Scope::Admin, "unknown path fails closed");
+        assert_eq!(required_scope("GET", "/api/v1/nope"), Scope::Admin, "unknown API path fails closed");
+        assert_eq!(required_scope("GET", "/"), Scope::Public, "the UI shell is public");
+        assert_eq!(required_scope("GET", "/assets/index-abc.js"), Scope::Public);
+        assert_eq!(required_scope("POST", "/"), Scope::Admin);
     }
 
     #[test]

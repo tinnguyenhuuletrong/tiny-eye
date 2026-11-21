@@ -173,7 +173,7 @@ pub enum Scope {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Dashboards {
-    /// Directory of dashboard YAML files (schema: doc/schema/dashboard.schema.json).
+    /// Directory of dashboard YAML files (schema: schema/generated/dashboard.schema.json).
     pub dir: String,
 }
 
@@ -325,7 +325,7 @@ impl Config {
 }
 
 /// JSON Schema of the config file (for editors), with every default from config/default.yaml
-/// set as `default` so hover shows it. Written to doc/schema/config.schema.json.
+/// set as `default` so hover shows it. Written to schema/generated/config.schema.json.
 pub fn json_schema() -> serde_json::Value {
     let mut schema = serde_json::to_value(schemars::schema_for!(Config)).expect("schema is JSON");
     let defaults: serde_json::Value = serde_norway::from_str(DEFAULT_YAML).expect("embedded defaults");

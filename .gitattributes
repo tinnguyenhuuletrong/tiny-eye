@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.parquet binary
+
+# Generated from the sources of truth (make schemas, make conformance, make bench)
+schema/generated/** linguist-generated=true
+docs/reference/mcp-tools.md linguist-generated=true
+docs/deep-dive/evidence/** linguist-generated=true
+
+# Not product code
+ui/prototype/** linguist-documentation=true
+research/** linguist-documentation=true

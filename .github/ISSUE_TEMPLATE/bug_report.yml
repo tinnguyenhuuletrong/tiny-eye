@@ -1,0 +1,59 @@
+name: Bug report
+description: Something tiny-eye does differently from what the docs or Prometheus say it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A minimal reproduction (a TQS document, a config snippet, a remote-write
+        or OTLP payload) makes a fix much faster.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Steps, commands, and the request or TQS document involved.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and responses
+      description: Relevant log lines or HTTP responses (problem codes). Remove secrets.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit hash (`git rev-parse --short HEAD`) or release.
+    validations:
+      required: true
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage
+      options:
+        - Local disk
+        - S3 (AWS)
+        - S3-compatible (MinIO, R2, ...)
+        - Not relevant
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture, Rust version (`rustc --version`).
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The parts of your YAML config or `TINY_EYE__*` environment that differ from config/default.yaml. Remove secrets.
+      render: yaml
