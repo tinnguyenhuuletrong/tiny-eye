@@ -352,7 +352,7 @@ pub struct Resolved {
 /// each other (15 s, 2 min, 5 min, 1 h are all multiples of 15 s), so a dashboard read at any
 /// range can use points materialized at a finer resolution.
 pub fn default_step_ms(range_ms: i64) -> i64 {
-    const STEPS: [i64; 19] = [
+    const STEPS: [i64; 21] = [
         1_000,
         2_000,
         5_000,
@@ -361,6 +361,7 @@ pub fn default_step_ms(range_ms: i64) -> i64 {
         30_000,
         60_000,
         120_000,
+        180_000,
         300_000,
         600_000,
         900_000,
@@ -371,6 +372,7 @@ pub fn default_step_ms(range_ms: i64) -> i64 {
         21_600_000,
         43_200_000,
         86_400_000,
+        172_800_000,
         604_800_000,
     ];
     let want = range_ms / 300;
@@ -389,8 +391,12 @@ pub fn materialize_blocker(tqs: &Tqs) -> Option<&'static str> {
     if tqs.queries.iter().any(|q| q.fill != Fill::None) {
         return Some("fill depends on which series appear in the range");
     }
-    let uses_range_vars = |s: &Option<String>| s.as_deref().is_some_and(|w| w.contains("__range") || w.contains("__interval"));
-    if tqs.queries.iter().any(|q| uses_range_vars(&q.func.as_ref().and_then(|f| f.window.clone())) || uses_range_vars(&q.offset)) {
+    let built_in = |s: &str| s.contains("__range") || s.contains("__interval");
+    if tqs
+        .queries
+        .iter()
+        .any(|q| q.func.as_ref().and_then(|f| f.window.as_deref()).is_some_and(built_in) || q.matchers.iter().any(|m| built_in(&m.value)))
+    {
         return Some("$__range and $__interval depend on the requested range");
     }
     if tqs.queries.iter().any(|q| q.spans.is_some() || q.logs.is_some()) {
@@ -1005,6 +1011,7 @@ mod tests {
         assert_eq!(default_step_ms(15 * 60_000), 5_000);
         assert_eq!(default_step_ms(3_600_000), 15_000);
         assert_eq!(default_step_ms(6 * 3_600_000), 120_000);
+        assert_eq!(default_step_ms(12 * 3_600_000), 180_000);
         assert_eq!(default_step_ms(24 * 3_600_000), 300_000);
         assert_eq!(default_step_ms(7 * 86_400_000), 3_600_000);
         for h in [1, 6, 24, 168] {

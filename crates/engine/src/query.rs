@@ -96,9 +96,6 @@ impl Node {
         let (doc, r) = Self::parse_and_validate(json, now_ms()).map_err(QueryError::Invalid)?;
         self.metrics.queries.fetch_add(1, Ordering::Relaxed);
         let mat = if use_materialized && doc.kind == tqs::Kind::Timeseries { self.materialized_panel(json, r.step_ms) } else { None };
-        if mat.is_some() {
-            self.metrics.materialized_reads.fetch_add(1, Ordering::Relaxed);
-        }
         let res = self.cfg.materialize.resolution.ms();
         let res = self
             .with_conn(move |conn| {
@@ -119,9 +116,12 @@ impl Node {
                     };
                     match doc.kind {
                         tqs::Kind::Timeseries | tqs::Kind::Table => {
-                            let rows = match &mat {
-                                Some(p) => {
-                                    let (rows, info) = crate::materialize::read(conn, p, &doc, &r, res)?;
+                            let stored = match &mat {
+                                Some(p) => crate::materialize::read(conn, p, &doc, &r, res)?,
+                                None => None,
+                            };
+                            let rows = match stored {
+                                Some((rows, info)) => {
                                     out.materialized = Some(info);
                                     rows
                                 }
@@ -158,6 +158,9 @@ impl Node {
         match res {
             Ok(mut o) => {
                 o.elapsed_ms = ms;
+                if o.materialized.is_some() {
+                    self.metrics.materialized_reads.fetch_add(1, Ordering::Relaxed);
+                }
                 Ok(o)
             }
             Err(e) => {

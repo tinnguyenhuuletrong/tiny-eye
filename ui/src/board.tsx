@@ -146,6 +146,7 @@ function AddPanel({ catalog, range, vars, onClose, onAdd }: { catalog?: Catalog;
   const [title, setTitle] = useState("");
   const [display, setDisplay] = useState<"timeseries" | "bar" | "stat">("timeseries");
   const [w, setW] = useState(6);
+  const [store, setStore] = useState(false);
   const [pid] = useState(() => `panel-${Date.now().toString(36)}`);
   // The catalog may arrive after the drawer opened: fall back to the first metric until one is picked.
   const m = metrics.find(x => x.name === (b.metric || metrics[0]?.name));
@@ -156,6 +157,8 @@ function AddPanel({ catalog, range, vars, onClose, onAdd }: { catalog?: Catalog;
   const panel: Panel | null = m ? {
     query: { ...docFor(builder, m, range, display === "stat" ? "table" : "timeseries"), id: pid, title: title.trim() || auto } as Panel["query"],
     ui: { display, w, h: display === "stat" ? 2 : 4, ...(m.type === "histogram" ? { unit: "s" } : {}) },
+    // Stat panels run as instant (table) queries, which cannot be materialized.
+    ...(store && display !== "stat" ? { materialize: true } : {}),
   } : null;
   if (!catalog) return <Drawer title="New panel" onClose={onClose}><Empty>Loading the catalog…</Empty></Drawer>;
   if (!metrics.length) return <Drawer title="New panel" onClose={onClose}><Empty>No metrics yet. Send some data first (see Getting started), then add a panel.</Empty></Drawer>;
@@ -175,6 +178,8 @@ function AddPanel({ catalog, range, vars, onClose, onAdd }: { catalog?: Catalog;
           </select></div>
         <div class="field"><span class="lbl">Visualization</span><Seg label="Visualization" value={display} onChange={v => { setDisplay(v); if (v === "stat" && w > 6) setW(3); }} options={[["timeseries", "Line"], ["bar", "Bars"], ["stat", "Stat"]]} /></div>
         <div class="field"><span class="lbl">Width</span><Seg label="Width" value={w} onChange={setW} options={[[3, "¼"], [6, "½"], [9, "¾"], [12, "Full"]]} /></div>
+        <label class="field full check"><input type="checkbox" checked={store && display !== "stat"} disabled={display === "stat"} onChange={e => setStore((e.target as HTMLInputElement).checked)} />
+          <span><b>Store points</b> (<span class="mono">materialize</span>): keep this panel's results up to date as data arrives, so long ranges load from stored points. Starts now; earlier steps are computed on read.</span></label>
       </div>
       <div class="field" style={{ marginTop: "16px" }}><span class="lbl">Preview</span>
         <div class="np-preview"><b style={{ fontSize: "13.5px" }}>{title.trim() || auto}</b>{panel && <div style={{ height: display === "stat" ? "120px" : "240px", display: "flex", flexDirection: "column" }}><PanelView panel={panel} vars={vars} range={range} tick={0} /></div>}</div></div>

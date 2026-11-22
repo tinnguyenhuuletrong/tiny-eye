@@ -5,17 +5,22 @@
 //! `materialize.resolution` step at a time as data becomes older than `materialize.settle`.
 //! Nothing is computed for the time before a panel was first seen (no backfill).
 //!
+//! A sample that arrives for a timestamp at or before the stored horizon (a sender's backlog
+//! after an outage, a retry) is noted by ingest; the next tick deletes the stored points from
+//! that timestamp on and computes them again, so stored points never miss accepted data.
+//!
 //! A query whose document is a registered panel (ignoring `id`, `title` and `time`) and whose
-//! step is a multiple of the resolution is answered on the step-aligned grid: stored points for
-//! the range they cover, the normal compiler for the rest. Every materializable output point
-//! depends only on its own timestamp (see `tqs::materialize_blocker`), so the answer equals the
-//! raw query on the same grid.
+//! step is a multiple of the resolution, and that overlaps the stored range, is answered on the
+//! step-aligned grid plus the point at `to`: stored points for the range they cover, the normal
+//! compiler for the rest. Every materializable output point depends only on its own timestamp
+//! (see `tqs::materialize_blocker`), so the answer equals the raw query at those timestamps.
 
 use crate::node::Node;
 use anyhow::Result;
 use duckdb::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tqs::compile::OutRow;
 
@@ -35,9 +40,31 @@ pub struct Panel {
     pub doc: tqs::Tqs,
 }
 
-#[derive(Default)]
+/// Steps computed per panel per call (12 h at 15 s): bounds the work behind one query timeout.
+const SLICE_STEPS: i64 = 2_880;
+
 pub struct Registry {
     panels: RwLock<HashMap<String, Arc<Panel>>>,
+    /// Bumped by every `set_materialized`; 0 = never registered (then nothing is forgotten).
+    generation: AtomicU64,
+    /// Generation whose unregistered panels were last deleted.
+    cleaned: AtomicU64,
+    /// Oldest timestamp of a sample ingested at or before the stored horizon; `i64::MAX` = none.
+    late: AtomicI64,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Registry { panels: Default::default(), generation: AtomicU64::new(0), cleaned: AtomicU64::new(0), late: AtomicI64::new(i64::MAX) }
+    }
+}
+
+impl Registry {
+    /// Ingest saw a sample this old (at or before `now - settle`): stored steps from here on are
+    /// recomputed on the next tick.
+    pub(crate) fn note_late(&self, ts_ms: i64) {
+        self.late.fetch_min(ts_ms, Ordering::Relaxed);
+    }
 }
 
 /// How a query was answered when stored points were used.
@@ -115,6 +142,7 @@ impl Node {
         }
         tracing::info!(panels = map.len(), "materialized panels registered");
         *self.mat.panels.write().unwrap_or_else(|e| e.into_inner()) = map;
+        self.mat.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The registered panel a query document is, if its step can use the stored points.
@@ -154,20 +182,66 @@ impl Node {
         Ok(self.extend(start, now_ms).await?.0)
     }
 
-    /// One slice (at most `tqs::MAX_POINTS` steps) per panel; `.1` is true when a panel still
-    /// lags behind the horizon.
+    /// Forget unregistered panels and rewind past late samples, then compute one slice (at most
+    /// `SLICE_STEPS`) per panel, each on its own connection so one slow or failing panel does
+    /// not hold back the others. `.1` is true when a panel still lags behind the horizon.
     async fn extend(&self, start: Option<i64>, now_ms: i64) -> Result<(usize, bool)> {
         let res = self.cfg.materialize.resolution.ms();
         let horizon = floor_to(now_ms - self.cfg.materialize.settle.ms(), res);
         let panels: Vec<Arc<Panel>> = self.mat.panels.read().map(|m| m.values().cloned().collect()).unwrap_or_default();
-        let stored = self
-            .with_conn(move |conn| {
-                // Forget panels that are no longer on any dashboard (or whose query changed).
-                let keep = panels.iter().map(|p| format!("'{}'", p.id)).collect::<Vec<_>>().join(", ");
-                let gone = if keep.is_empty() { "true".to_string() } else { format!("panel_id NOT IN ({keep})") };
-                conn.execute_batch(&format!("DELETE FROM mat.panel_points WHERE {gone}; DELETE FROM mat.panel_state WHERE {gone};"))?;
-                let (mut stored, mut more) = (0usize, false);
-                for p in &panels {
+        let generation = self.mat.generation.load(Ordering::Relaxed);
+        let cleanup = generation > 0 && generation != self.mat.cleaned.load(Ordering::Relaxed);
+        let late = self.mat.late.swap(i64::MAX, Ordering::Relaxed);
+        if cleanup || late != i64::MAX {
+            let keep = panels.iter().map(|p| format!("'{}'", p.id)).collect::<Vec<_>>().join(", ");
+            let r = self
+                .with_conn(move |conn| {
+                    conn.execute_batch("BEGIN TRANSACTION")?;
+                    let done = (|| -> Result<()> {
+                        if cleanup {
+                            // Panels that left every dashboard, or whose query changed. Ids are hex.
+                            let gone = if keep.is_empty() { "true".to_string() } else { format!("panel_id NOT IN ({keep})") };
+                            conn.execute_batch(&format!(
+                                "DELETE FROM mat.panel_state WHERE {gone}; DELETE FROM mat.panel_points WHERE {gone};"
+                            ))?;
+                        }
+                        if late != i64::MAX {
+                            // Steps at or after the late sample may have changed: drop them and end
+                            // the coverage just before the first one (empty when that is before from_t).
+                            let first = ceil_to(late, res);
+                            conn.execute("DELETE FROM mat.panel_points WHERE t >= ?", [first])?;
+                            conn.execute(
+                                "UPDATE mat.panel_state SET to_t = greatest(from_t, ?) - ? WHERE to_t >= ?",
+                                duckdb::params![first, res, first],
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    match done {
+                        Ok(()) => Ok(conn.execute_batch("COMMIT")?),
+                        Err(e) => {
+                            let _ = conn.execute_batch("ROLLBACK");
+                            Err(e)
+                        }
+                    }
+                })
+                .await;
+            match r {
+                Ok(()) if cleanup => self.mat.cleaned.store(generation, Ordering::Relaxed),
+                Ok(()) => {}
+                Err(e) => {
+                    if late != i64::MAX {
+                        self.mat.note_late(late); // retry on the next tick
+                    }
+                    return Err(e.context("materialized panels: forgetting or rewinding"));
+                }
+            }
+        }
+        let (mut stored, mut more) = (0usize, false);
+        for p in panels {
+            let name = p.name.clone();
+            let r = self
+                .with_conn(move |conn| {
                     let to_t: Option<i64> = conn
                         .query_row("SELECT to_t FROM mat.panel_state WHERE panel_id = ?", [&p.id], |r| r.get(0))
                         .map(Some)
@@ -178,95 +252,112 @@ impl Node {
                         (None, None) => horizon,
                     };
                     if lo > horizon {
-                        continue;
+                        return Ok((0, false));
                     }
-                    let hi = horizon.min(lo + res * (tqs::MAX_POINTS - 1));
-                    more |= hi < horizon;
-                    let rows = run(conn, &p.doc, lo, hi, res)?;
+                    let hi = horizon.min(lo + res * (SLICE_STEPS - 1));
+                    // Compute and store in one statement and one transaction.
+                    let (sql, params) = tqs::compile::timeseries_sql(&p.doc, &tqs::Resolved { from_ms: lo, to_ms: hi, step_ms: res })?;
+                    // The compiled SQL numbers its parameters ($1, $2, …); the id is 16 hex digits,
+                    // so it goes in as a literal.
+                    debug_assert!(p.id.bytes().all(|b| b.is_ascii_hexdigit()));
                     conn.execute_batch("BEGIN TRANSACTION")?;
                     let written = (|| -> Result<usize> {
-                        let mut ins = conn.prepare("INSERT INTO mat.panel_points VALUES (?, ?, ?, ?, ?)")?;
-                        for r in &rows {
-                            ins.execute(duckdb::params![p.id, r.output, r.key, r.t, r.value])?;
-                        }
+                        let n = conn.execute(
+                            &format!("INSERT INTO mat.panel_points SELECT '{}', output, key, t, value FROM ({sql})", p.id),
+                            duckdb::params_from_iter(params.iter()),
+                        )?;
                         conn.execute(
                             "INSERT INTO mat.panel_state VALUES (?, ?, ?, ?, ?, ?, ?)
                              ON CONFLICT (panel_id) DO UPDATE SET to_t = excluded.to_t, updated_ms = excluded.updated_ms",
                             duckdb::params![p.id, p.name, p.key, res, lo, hi, now_ms],
                         )?;
-                        Ok(rows.len())
+                        Ok(n)
                     })();
                     match written {
                         Ok(n) => {
                             conn.execute_batch("COMMIT")?;
-                            stored += n;
+                            Ok((n, hi < horizon))
                         }
                         Err(e) => {
                             let _ = conn.execute_batch("ROLLBACK");
-                            return Err(e.context(format!("materializing {}", p.name)));
+                            Err(e)
                         }
                     }
+                })
+                .await;
+            match r {
+                Ok((n, m)) => {
+                    stored += n;
+                    more |= m;
                 }
-                Ok((stored, more))
-            })
-            .await?;
-        self.metrics.materialized_points.fetch_add(stored.0 as u64, std::sync::atomic::Ordering::Relaxed);
-        Ok(stored)
+                Err(e) => tracing::warn!(panel = %name, error = %format!("{e:#}"), "materializing a panel failed; will retry"),
+            }
+        }
+        self.metrics.materialized_points.fetch_add(stored as u64, Ordering::Relaxed);
+        Ok((stored, more))
     }
 
     /// Delete stored points older than `cutoff_ms` (retention).
     pub(crate) async fn retain_materialized(&self, cutoff_ms: i64) -> Result<()> {
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM mat.panel_points WHERE t < ?", [cutoff_ms])?;
-            conn.execute("UPDATE mat.panel_state SET from_t = greatest(from_t, ?)", [cutoff_ms])?;
-            Ok(())
+            // State first, in one transaction: a reader never sees coverage over deleted points.
+            conn.execute_batch("BEGIN TRANSACTION")?;
+            let done = conn
+                .execute("UPDATE mat.panel_state SET from_t = greatest(from_t, ?)", [cutoff_ms])
+                .and_then(|_| conn.execute("DELETE FROM mat.panel_points WHERE t < ?", [cutoff_ms]));
+            match done {
+                Ok(_) => Ok(conn.execute_batch("COMMIT")?),
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e.into())
+                }
+            }
         })
         .await
     }
 }
 
-/// Answer a timeseries query for a materialized panel on the step-aligned grid inside `[from, to]`:
-/// stored points where they exist, the compiler for the head and tail they do not cover.
-pub(crate) fn read(conn: &Connection, p: &Panel, doc: &tqs::Tqs, r: &tqs::Resolved, res: i64) -> Result<(Vec<OutRow>, Info)> {
+/// Answer a timeseries query for a materialized panel on the step-aligned grid inside `[from, to]`
+/// plus the point at `to`: stored points where they exist, the compiler for the head and tail
+/// they do not cover. `None` when no stored point falls in the range (the caller runs the raw
+/// query unchanged).
+pub(crate) fn read(conn: &Connection, p: &Panel, doc: &tqs::Tqs, r: &tqs::Resolved, res: i64) -> Result<Option<(Vec<OutRow>, Info)>> {
     let s = r.step_ms;
     let (from, to) = (ceil_to(r.from_ms, s), floor_to(r.to_ms, s));
-    let mut info = Info { panel: p.name.clone(), resolution_ms: res, stored_points: 0, computed_steps: 0 };
     if from > to {
-        return Ok((vec![], info));
+        return Ok(None);
     }
     let state: Option<(i64, i64)> = conn
         .query_row("SELECT from_t, to_t FROM mat.panel_state WHERE panel_id = ?", [&p.id], |row| Ok((row.get(0)?, row.get(1)?)))
         .map(Some)
         .or_else(|e| if matches!(e, duckdb::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })?;
-    let covered = state.map(|(a, b)| (from.max(ceil_to(a, s)), to.min(floor_to(b, s)))).filter(|(a, b)| a <= b);
-    let mut rows = vec![];
-    match covered {
-        None => {
-            rows = run(conn, doc, from, to, s)?;
-            info.computed_steps = (to - from) / s + 1;
-        }
-        Some((c0, c1)) => {
-            let mut stmt =
-                conn.prepare("SELECT output, t, key, value FROM mat.panel_points WHERE panel_id = ? AND t BETWEEN ? AND ? AND t % ? = 0")?;
-            let stored = stmt
-                .query_map(duckdb::params![p.id, c0, c1, s], |row| {
-                    Ok(OutRow { output: row.get(0)?, t: row.get(1)?, key: row.get(2)?, value: row.get(3)? })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            info.stored_points = stored.len();
-            rows.extend(stored);
-            if from < c0 {
-                rows.extend(run(conn, doc, from, c0 - s, s)?);
-                info.computed_steps += (c0 - from) / s;
-            }
-            if c1 < to {
-                rows.extend(run(conn, doc, c1 + s, to, s)?);
-                info.computed_steps += (to - c1) / s;
-            }
-        }
+    let Some((c0, c1)) = state.map(|(a, b)| (from.max(ceil_to(a, s)), to.min(floor_to(b, s)))).filter(|(a, b)| a <= b) else {
+        return Ok(None);
+    };
+    let mut info = Info { panel: p.name.clone(), resolution_ms: res, stored_points: 0, computed_steps: 0 };
+    let mut stmt =
+        conn.prepare("SELECT output, t, key, value FROM mat.panel_points WHERE panel_id = ? AND t BETWEEN ? AND ? AND t % ? = 0")?;
+    let mut rows = stmt
+        .query_map(duckdb::params![p.id, c0, c1, s], |row| {
+            Ok(OutRow { output: row.get(0)?, t: row.get(1)?, key: row.get(2)?, value: row.get(3)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    info.stored_points = rows.len();
+    if from < c0 {
+        rows.extend(run(conn, doc, from, c0 - s, s)?);
+        info.computed_steps += (c0 - from) / s;
+    }
+    if c1 < to {
+        rows.extend(run(conn, doc, c1 + s, to, s)?);
+        info.computed_steps += (to - c1) / s;
+    }
+    // The newest point, as the raw query would end: dashboards stay as fresh as without the store.
+    if r.to_ms > to {
+        rows.extend(run(conn, doc, r.to_ms, r.to_ms, s)?);
+        info.computed_steps += 1;
     }
     rows.sort_by(|a, b| (&a.output, &a.key, a.t).cmp(&(&b.output, &b.key, b.t)));
-    Ok((rows, info))
+    Ok(Some((rows, info)))
 }
 
 #[cfg(test)]

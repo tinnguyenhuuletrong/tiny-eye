@@ -55,6 +55,14 @@ fn rows(end: i64, from: i64) -> Rows {
     for h in 0..3u64 {
         add("temp", [("host".to_string(), format!("h{h}"))].into(), &move |i| 40.0 + 20.0 * noise(i, 100 + h));
     }
+    // A latency histogram per job: cumulative bucket counters.
+    for (j, job) in ["api", "web"].iter().enumerate() {
+        for (b, le) in ["0.1", "0.5", "1", "+Inf"].iter().enumerate() {
+            let s = 200 + (j * 4 + b) as u64;
+            let labels: Labels = [("job".to_string(), job.to_string()), ("le".to_string(), le.to_string())].into();
+            add("lat_bucket", labels, &move |i| (0..i).map(|k| (b as f64 + 1.0) * (1.0 + 4.0 * noise(k, s))).sum());
+        }
+    }
     r
 }
 
@@ -106,6 +114,54 @@ fn panels() -> Vec<(String, serde_json::Value)> {
                 r#"{"queries":[{"name":"g","metric":"temp","fn":{"op":"last"},"agg":{"op":"avg","by":["host"]},"having":{"op":">","value":50}}]}"#,
             ),
         ),
+        (
+            "t/then".into(),
+            doc(
+                "then",
+                r#"{"queries":[{"name":"t","metric":"reqs_total","fn":{"op":"rate","window":"5m"},"agg":{"op":"max","by":["job","code"]},"then":{"op":"sum","by":["job"]}}]}"#,
+            ),
+        ),
+        (
+            "t/derive".into(),
+            doc(
+                "derive",
+                r#"{"queries":[{"name":"d","metric":"reqs_total","fn":{"op":"increase","window":"5m"},"derive":[{"label":"tier","from":"job","regex":"(api|web)","replacement":"front"}],"agg":{"op":"sum","by":["tier"]}}]}"#,
+            ),
+        ),
+        (
+            "t/offset".into(),
+            doc(
+                "offset",
+                r#"{"queries":[{"name":"o","metric":"reqs_total","fn":{"op":"rate","window":"5m"},"offset":"10m","agg":{"op":"sum","by":["job"]}}]}"#,
+            ),
+        ),
+        (
+            "t/topq".into(),
+            doc(
+                "topq",
+                r#"{"queries":[{"name":"r","metric":"reqs_total","fn":{"op":"rate","window":"5m"},"agg":{"op":"sum","by":["job"]}},
+                    {"name":"k","metric":"reqs_total","match":[{"label":"code","op":"=","value":"500"}],"fn":{"op":"rate","window":"5m"},"agg":{"op":"sum","by":["job"]},"hidden":true}],
+                   "top":{"n":1,"query":"k"}}"#,
+            ),
+        ),
+        (
+            "t/outer".into(),
+            doc(
+                "outer",
+                r#"{"queries":[
+                    {"name":"e","metric":"reqs_total","match":[{"label":"job","op":"=","value":"api"}],"fn":{"op":"rate","window":"5m"},"agg":{"op":"sum"},"hidden":true},
+                    {"name":"a","metric":"temp","fn":{"op":"last"},"agg":{"op":"max"},"hidden":true}],
+                   "formulas":[{"name":"x","expr":"coalesce(e, a * 0)","join":"outer"}]}"#,
+            ),
+        ),
+        ("t/absent".into(), doc("absent", r#"{"queries":[{"name":"z","metric":"nope_total","fn":{"op":"last"},"agg":{"op":"absent"}}]}"#)),
+        (
+            "t/quantile".into(),
+            doc(
+                "quantile",
+                r#"{"queries":[{"name":"p","metric":"lat","fn":{"op":"histogram_quantile","q":0.9,"window":"5m"},"agg":{"op":"sum","by":["job"]}}]}"#,
+            ),
+        ),
     ]
 }
 
@@ -125,6 +181,25 @@ fn assert_same(name: &str, mat: &Out, raw: &Out) {
             assert!((x - y).abs() <= tol, "{name} {k:?} at {t}: materialized {x} vs raw {y}");
         }
     }
+}
+
+/// The raw query at the timestamps a materialized read answers: the step-aligned grid inside
+/// `[from, to]`, plus `to` itself when it is not on the grid.
+async fn raw_on_grid(n: &Node, q: &serde_json::Value, from: i64, to: i64, step: i64) -> Out {
+    let mut q = q.clone();
+    let (f, t) = ((from + step - 1) / step * step, to / step * step);
+    q["time"] = serde_json::json!({"from": f, "to": t, "step": format!("{step}ms")});
+    let raw = n.query_with(&q.to_string(), false).await.unwrap();
+    assert!(raw.materialized.is_none());
+    let mut out = shape(&raw);
+    if to > t {
+        // A timeseries needs from < to: ask for [to - step, to] and keep the point at `to`.
+        q["time"] = serde_json::json!({"from": to - step, "to": to, "step": format!("{step}ms")});
+        for (k, pts) in shape(&n.query_with(&q.to_string(), false).await.unwrap()) {
+            out.entry(k).or_default().extend(pts.into_iter().filter(|p| p.0 == to));
+        }
+    }
+    out
 }
 
 async fn node(dir: &std::path::Path) -> Arc<Node> {
@@ -157,13 +232,9 @@ async fn materialized_reads_equal_raw_reads() {
             if range <= 2 * 3_600_000 - 600_000 {
                 assert!(info.stored_points > 0, "{name}: stored points used for {range} ms");
             }
-            // The raw query on the aligned grid the materialized answer uses.
-            let (f, t) = ((from + 7_000 + step - 1) / step * step, to / step * step);
-            q["time"] = serde_json::json!({"from": f, "to": t, "step": format!("{}ms", step)});
-            let raw = n.query_with(&q.to_string(), false).await.unwrap();
-            assert!(raw.materialized.is_none());
-            assert!(!raw.series.is_empty(), "{name}: the comparison is not vacuous");
-            assert_same(&format!("{name} {range}ms/{step}ms"), &shape(&mat), &shape(&raw));
+            let raw = raw_on_grid(&n, &q, from + 7_000, to, step).await;
+            assert!(!raw.is_empty(), "{name}: the comparison is not vacuous");
+            assert_same(&format!("{name} {range}ms/{step}ms"), &shape(&mat), &raw);
         }
     }
 }
@@ -219,4 +290,56 @@ async fn materialized_points_survive_a_restart() {
     q["time"] = serde_json::json!({"from": "-1h", "step": "15s"});
     let info = n.query(&q.to_string()).await.unwrap().materialized.unwrap();
     assert!(info.stored_points > 100, "points stored before the restart are used: {}", info.stored_points);
+}
+
+#[tokio::test]
+async fn late_samples_are_recomputed() {
+    let dir = tempfile::tempdir().unwrap();
+    let n = node(dir.path()).await;
+    let now = now_ms() / 15_000 * 15_000;
+    n.ingest(rows(now, now - 2 * 3_600_000)).await.unwrap();
+    n.set_materialized(panels());
+    n.materialize_since(now - 3_600_000, now).await.unwrap();
+    // A sender's backlog arrives: a new job's counter for 40 minutes that are already stored.
+    let mut late = Rows::default();
+    let labels: Labels = [("job".to_string(), "late".to_string()), ("code".to_string(), "200".to_string())].into();
+    let id = engine::ids::series_id("default", "local", "reqs_total", &labels);
+    late.series.push(MetricsSeriesRow { series_id: id, metric_name: "reqs_total".into(), labels, ..Default::default() });
+    for i in 0..160 {
+        late.points.push(MetricsPointsRow {
+            series_id: id,
+            timestamp_ms: now - 50 * 60_000 + i * 15_000,
+            value: (i * 7) as f64,
+            ..Default::default()
+        });
+    }
+    n.ingest(late).await.unwrap();
+    n.materialize(now).await.unwrap();
+    let (_, mut q) = panels().remove(0);
+    q["time"] = serde_json::json!({"from": now - 3_600_000, "to": now, "step": "15000ms"});
+    let mat = n.query(&q.to_string()).await.unwrap();
+    assert!(mat.materialized.as_ref().is_some_and(|i| i.stored_points > 0));
+    assert!(mat.series.iter().any(|s| s.key == "job=late"), "the late job is in the materialized answer");
+    let raw = raw_on_grid(&n, &q, now - 3_600_000, now, 15_000).await;
+    assert_same("late samples", &shape(&mat), &raw);
+}
+
+#[tokio::test]
+async fn nothing_is_forgotten_before_panels_are_registered() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = now_ms() / 15_000 * 15_000;
+    {
+        let n = node(dir.path()).await;
+        n.ingest(rows(now, now - 3_600_000)).await.unwrap();
+        n.set_materialized(panels());
+        n.materialize_since(now - 3_600_000, now).await.unwrap();
+    }
+    // A restart whose background loop ticks before the dashboards are registered.
+    let n = node(dir.path()).await;
+    n.materialize(now).await.unwrap();
+    n.set_materialized(panels());
+    let (_, mut q) = panels().remove(0);
+    q["time"] = serde_json::json!({"from": "-1h", "step": "15s"});
+    let info = n.query(&q.to_string()).await.unwrap().materialized.unwrap();
+    assert!(info.stored_points > 100, "stored points survived an unregistered tick: {}", info.stored_points);
 }

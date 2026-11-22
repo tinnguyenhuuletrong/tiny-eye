@@ -35,7 +35,7 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
   },
   {
     title: "Materialized panels",
-    text: "Mark a panel materialize: true; reads use stored points, up to 13× faster, same answer.",
+    text: "Mark a panel materialize: true; long-range reads use stored points, 10–12× faster, same answer.",
     anchor: "materialized-panels-maintained-incrementally",
   },
 ];

@@ -25,7 +25,7 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 ### M4: dashboards and alerts
 
 - The alert evaluator and Alertmanager integration.
-- The rest of materialized panels: the spec's mergeable partials (late rows, spans and logs measures, percentiles across regions) and alert rules on the same state. Phase 1 is built (see [below](#materialized-panels)).
+- The rest of materialized panels: the spec's mergeable partials (spans and logs measures, percentiles across regions) and alert rules on the same state. Phase 1 is built (see [below](#materialized-panels)).
 - A Grafana data source plugin. tiny-eye ships its own web UI instead (see [Dashboards and the web UI](dashboards-and-ui.md)).
 - Dashboard variables with allowed values (options from a query). Variables are plain defaults today.
 
@@ -45,30 +45,23 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 
 ## Materialized panels
 
-**Built (phase 1):** a dashboard panel with `materialize: true` keeps its computed points in a
-node-local DuckDB file, the background loop extends them as data becomes older than
-`materialize.settle`, and a read uses the stored points and computes only the head before the
-coverage and the unsettled tail. The answer equals the raw query on the same grid
-(`crates/engine/tests/materialize.rs`); on the benchmark's 6-hour panels reads are up to 13×
-faster ([Materialized panels](materialized-panels.md), [benchmark](evidence/bench-local.md#materialized-panels)).
+The spec's materialized panels (section 9.1, D5, D6, milestone M4) are **built as phase 1**: a
+panel with `materialize: true` keeps its computed points in a node-local DuckDB file, a background
+task extends them as data settles, late samples trigger a recompute, and reads take stored points
+plus computed head and tail — equal to the raw query at the same timestamps
+([Materialized panels](materialized-panels.md), [benchmark](evidence/bench-local.md#materialized-panels)).
 
 Limits of phase 1, by design:
 
-- **No backfill.** A panel's points start when it is first seen; earlier steps are computed on
-  every read until they fall out of the range.
-- **Late samples.** A sample that arrives later than `settle` after its timestamp is not in the
-  steps already stored.
-- **Shapes.** Timeseries metric queries whose points depend only on their own timestamp. Not
+- **No backfill.** A panel's points start when it is first seen; older steps are computed on read.
+- **Shapes.** Timeseries metric queries whose points depend only on their own timestamp: not
   `table`, `fill: zero`, `top` ranked over the range, `$__range`/`$__interval`, or spans/logs
   measures.
-- **Node-local.** The file belongs to one node; there is one node today.
+- **Node-local.** The store belongs to one node; there is one node today.
 
-**Designed, not built:** the spec (section 9.1, D5, D6, milestone M4) stores mergeable partials
-per time bucket, fed from each flush envelope (never the DuckLake change feed, which reports a
-compaction as N inserts plus N deletes), with log-bucket histograms merged by `SUM`. That
-design handles late rows, spans and logs measures and percentiles across regions, and would
-also feed an alert evaluator. Open points: how the hot tail joins the partials and how partials
-follow retention.
+Not built from section 9.1: the mergeable `view_partials` state fed from flush envelopes, which
+would add spans and logs measures and percentiles merged across regions (log-bucket histograms,
+D6), and alert rules evaluated on the same state.
 
 ## Known deviations
 

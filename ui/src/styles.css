@@ -314,3 +314,6 @@ svg.spark { width: 100%; height: 36px; margin-top: auto; display: block; }
 .body .problems { margin: 4px 0; }
 .wf .span em.inside { left: auto; right: 6px; color: #fff; font-weight: 600; }
 .wf .lane { overflow: hidden; }
+.field.check { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--ink-2); line-height: 1.45; }
+.field.check input { margin-top: 2px; }
+.field.check b { color: var(--ink); font-weight: 600; }

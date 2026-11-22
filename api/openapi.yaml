@@ -228,7 +228,7 @@ components:
         materialized: { $ref: "#/components/schemas/MaterializedInfo" }
 
     MaterializedInfo:
-      description: "Present when stored points of a materialized panel answered the query. The answer is on the step-aligned grid; steps not stored were computed from raw rows."
+      description: "Present when stored points of a materialized panel answered part of the query (stored_points > 0). The series are then on the step-aligned grid plus the point at `to`; steps not stored were computed from raw rows. Absent: the query ran raw, unchanged."
       type: object
       additionalProperties: false
       required: [panel, resolution_ms, stored_points, computed_steps]

@@ -303,7 +303,7 @@ async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) ->
          | Step | Result |\n| :--- | :--- |\n\
          | Catch-up over {hours} h (once; the background loop never backfills) | {stored} points in {catchup_s:.1} s |\n\
          | One background tick (one new 15 s step for every panel) | {tick} points in {tick_ms:.0} ms |\n\n\
-         | Panel | Points | Raw p50 ms | Materialized p50 ms | Faster | Stored / computed steps | Equal |\n\
+         | Panel | Points | Raw p50 ms | Materialized p50 / p95 ms | Faster (p50) | Stored / computed steps | Equal |\n\
          | :--- | ---: | ---: | ---: | ---: | ---: | :--- |",
         n = docs.len(),
         step = step / 1000
@@ -325,10 +325,22 @@ async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) ->
             mat_ms.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let Some(mat) = mat else { continue };
-        // The raw answer on the aligned grid the materialized read uses.
+        // The raw answer at the timestamps the materialized read uses: the aligned grid, plus `to`.
         let (f, to) = ((now - hours * 3_600_000 + step - 1) / step * step, now / step * step);
         q["time"] = serde_json::json!({"from": f, "to": to, "step": format!("{step}ms")});
-        let raw = node.query_with(&q.to_string(), false).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let mut raw = node.query_with(&q.to_string(), false).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        if now > to {
+            q["time"] = serde_json::json!({"from": now - step, "to": now, "step": format!("{step}ms")});
+            let last = node.query_with(&q.to_string(), false).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            for s in last.series {
+                let pts: Vec<(i64, f64)> = s.points.into_iter().filter(|p| p.0 == now).collect();
+                match raw.series.iter_mut().find(|x| x.output == s.output && x.key == s.key) {
+                    Some(x) => x.points.extend(pts),
+                    None => raw.series.push(engine::query::SeriesOut { points: pts, ..s }),
+                }
+            }
+            raw.series.sort_by(|a, b| (&a.output, &a.key).cmp(&(&b.output, &b.key)));
+        }
         let flat = |o: &engine::query::QueryOutput| -> Vec<(String, String, i64, f64)> {
             o.series.iter().flat_map(|s| s.points.iter().map(|p| (s.output.clone(), s.key.clone(), p.0, p.1))).collect()
         };
@@ -337,19 +349,129 @@ async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) ->
             && a.iter()
                 .zip(&b)
                 .all(|(x, y)| x.0 == y.0 && x.1 == y.1 && x.2 == y.2 && (x.3 - y.3).abs() <= 1e-9 * x.3.abs().max(y.3.abs()).max(1.0));
-        let (r50, m50) = (pct(&mut raw_ms, 0.5), pct(&mut mat_ms, 0.5));
+        let (r50, m50, m95) = (pct(&mut raw_ms, 0.5), pct(&mut mat_ms, 0.5), pct(&mut mat_ms, 0.95));
         let info =
             mat.materialized.as_ref().map(|i| format!("{} / {}", i.stored_points, i.computed_steps)).unwrap_or_else(|| "not used".into());
         println!("  {name:<50} raw {r50:>7.1} ms  materialized {m50:>6.1} ms  equal {equal}");
         writeln!(
             md,
-            "| `{name}` | {} | {r50:.1} | {m50:.1} | {:.1}× | {info} | {} |",
+            "| `{name}` | {} | {r50:.1} | {m50:.1} / {m95:.1} | {:.1}× | {info} | {} |",
             a.len(),
             r50 / m50,
             if equal { "yes" } else { "**no**" }
         )?;
     }
+
+    // Read cost against range: raw grows with the samples in range, materialized with the points.
+    let (_, q1) = &docs[0];
+    writeln!(
+        md,
+        "\n### Read cost against range (`sum by (job) (rate(…[5m]))`, the UI's default step for each range)\n\n\
+         | Range | Step | Points | Raw p50 ms | Materialized p50 ms | Faster |\n| :--- | ---: | ---: | ---: | ---: | ---: |"
+    )?;
+    for h in [1, 3, 6].into_iter().filter(|h| *h <= hours) {
+        let step = default_step(h);
+        let mut q = q1.clone();
+        q["time"] = serde_json::json!({"from": now - h * 3_600_000, "to": now, "step": format!("{step}ms")});
+        let (r50, m50, points) = time_both(node, &q.to_string()).await;
+        println!("   {h} h: raw {r50:.1} ms, materialized {m50:.1} ms");
+        writeln!(md, "| {h} h | {} s | {points} | {r50:.1} | {m50:.1} | {:.1}× |", step / 1000, r50 / m50)?;
+    }
+
+    // Coverage after uptime: a panel's points start when it is first seen (no backfill), so a
+    // 6 h read gains in proportion to the hours stored. Same query shape, new keys (window 6m, 7m).
+    writeln!(
+        md,
+        "\n### Coverage after uptime ({hours} h read of `sum by (job) (rate(…))`)\n\n\
+         | Panel stored for | Raw p50 ms | Materialized p50 ms | Faster |\n| :--- | ---: | ---: | ---: |"
+    )?;
+    let mut all: Vec<(String, serde_json::Value)> =
+        docs.iter().map(|(_, d)| (format!("bench/{}", d["id"].as_str().unwrap_or("q")), d.clone())).collect();
+    let (mut fresh, mut hour) = (q1.clone(), q1.clone());
+    fresh["queries"][0]["fn"]["window"] = "7m".into();
+    hour["queries"][0]["fn"]["window"] = "6m".into();
+    all.push(("bench/hour".into(), hour.clone()));
+    node.set_materialized(all.clone());
+    node.materialize_since(now - 3_600_000, now).await?; // only the new panel has no state yet
+    all.push(("bench/fresh".into(), fresh.clone()));
+    node.set_materialized(all); // registered, nothing stored yet
+    let step = default_step(hours);
+    for (label, mut q) in [("0 h (just added)".to_string(), fresh), ("1 h".to_string(), hour), (format!("{hours} h"), q1.clone())] {
+        q["time"] = serde_json::json!({"from": now - hours * 3_600_000, "to": now, "step": format!("{step}ms")});
+        let (r50, m50, _) = time_both(node, &q.to_string()).await;
+        writeln!(md, "| {label} | {r50:.1} | {m50:.1} | {:.1}× |", r50 / m50)?;
+    }
+
+    // Ad-hoc queries: the same query from another client (other id and title) uses the store;
+    // a different query (window 4m) does not.
+    let mut same = q1.clone();
+    same["id"] = "agent-question".into();
+    same["title"] = "asked over MCP".into();
+    same["time"] = serde_json::json!({"from": format!("-{hours}h")});
+    let mut other = same.clone();
+    other["queries"][0]["fn"]["window"] = "4m".into();
+    writeln!(
+        md,
+        "\n### Ad-hoc queries ({hours} h, relative time, no step: what an agent or `curl` sends)\n\n\
+         | Query | p50 ms | Store used |\n| :--- | ---: | :--- |"
+    )?;
+    for (label, q) in [("same query as the panel, other `id` and `title`", &same), ("different query (`window: 4m`)", &other)] {
+        let json = q.to_string();
+        let _ = node.query(&json).await;
+        let mut ms = vec![];
+        let mut used = false;
+        for _ in 0..10 {
+            let t = Instant::now();
+            used = node.query(&json).await.map(|o| o.materialized.is_some()).unwrap_or(false);
+            ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        writeln!(md, "| {label} | {:.1} | {} |", pct(&mut ms, 0.5), if used { "yes" } else { "no (computed raw)" })?;
+    }
+
+    // Background cost and storage.
+    let mut ticks = vec![];
+    for k in 2..12 {
+        let t = Instant::now();
+        node.materialize(now + k * 15_000).await?;
+        ticks.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let tick50 = pct(&mut ticks, 0.5);
+    let path = node.cfg.materialize.path.clone();
+    node.with_conn(|c| Ok(c.execute_batch("CHECKPOINT mat")?)).await?;
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let points: i64 = node.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_points", [], |r| r.get(0))?)).await?;
+    writeln!(
+        md,
+        "\n### Background cost and storage\n\n| Measure | Result |\n| :--- | :--- |\n\
+         | One background tick, {n} panels (p50 of 10) | {tick50:.0} ms every 15 s ({:.1} % of one connection's time) |\n\
+         | Per panel per tick | {:.0} ms |\n\
+         | Stored points / file size | {points} / {:.1} MB ({:.1} bytes per point) |",
+        tick50 / 150.0,
+        tick50 / (docs.len() + 2) as f64,
+        bytes as f64 / 1e6,
+        bytes as f64 / points.max(1) as f64,
+        n = docs.len() + 2 // the six above plus the two coverage panels
+    )?;
     Ok(md)
+}
+
+/// p50 of 10 runs each, raw and materialized, and the number of points returned.
+async fn time_both(node: &Arc<Node>, json: &str) -> (f64, f64, usize) {
+    let (mut raw, mut mat) = (vec![], vec![]);
+    let _ = node.query_with(json, false).await;
+    let _ = node.query_with(json, true).await;
+    let mut points = 0;
+    for _ in 0..10 {
+        let t = Instant::now();
+        let _ = node.query_with(json, false).await;
+        raw.push(t.elapsed().as_secs_f64() * 1000.0);
+        let t = Instant::now();
+        if let Ok(o) = node.query_with(json, true).await {
+            points = o.series.iter().map(|s| s.points.len()).sum();
+        }
+        mat.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    (pct(&mut raw, 0.5), pct(&mut mat, 0.5), points)
 }
 
 /// The step the engine picks when a query gives none (what the dashboard UI sends).

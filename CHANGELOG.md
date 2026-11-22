@@ -55,12 +55,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   `make machine`, `make machine-agent`, `make machine-hog`; a recorded demo video.
 - "What makes it different" docs page and landing section; materialized panels documented as
   designed, not built.
-- Materialized dashboard panels (phase 1): `materialize: true` on a panel keeps its computed
-  points in a node-local DuckDB file (`materialize.path`, `resolution`, `settle`), extends them
-  as data settles, and answers reads from stored points plus computed head and tail, equal to
-  the raw query on the same grid. No backfill. Responses carry `materialized`; benchmark section
-  in `make bench`; the UI marks such panels "stored".
-- The default step is the smallest round step giving at most ~300 points (1h → 15s, 6h → 2m).
+- Materialized dashboard panels, phase 1 of spec section 9.1: `materialize: true` on a panel
+  keeps its computed points in a node-local DuckDB file (`materialize.path`, `resolution`,
+  `settle`), extends them in a background task, recomputes stored steps when late samples
+  arrive, and answers reads from stored points plus computed head, tail and the point at `to`,
+  equal to the raw query at the same timestamps. No backfill. Responses carry `materialized`;
+  `make bench` measures reads, range, coverage, ad-hoc queries, background cost and storage;
+  the UI marks such panels "stored" and offers "Store points" when adding a panel.
+- The default step is the smallest round step giving at most ~300 points (1h → 15s, 6h → 2m,
+  12h → 3m, 24h → 5m, 7d → 1h).
 - OTLP data points with the `NoRecordedValue` flag are stored as staleness markers, so a series
   that ends (a process exits) stops instead of repeating its last value for 5 minutes.
 

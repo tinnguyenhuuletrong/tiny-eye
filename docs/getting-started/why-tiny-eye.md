@@ -121,28 +121,23 @@ files in git, and a layout change in the UI is saved back to the file. See
 
 ## Materialized panels, maintained incrementally
 
-Mark a dashboard panel `materialize: true` and tiny-eye keeps the points it computed. The
-background loop extends them every 15 s as data settles, and a dashboard read takes the stored
-points and computes only what is not stored: the steps before the panel was first seen and the
-last few minutes. A 6-hour or 7-day panel stops re-reading every raw sample on every refresh.
+The spec's materialized panels (section 9.1): mark a dashboard panel `materialize: true` and
+tiny-eye keeps the points it computed, extends them every 15 s as data settles, and answers a
+read from the stored points plus only what is not stored. Long-range panels stop re-reading
+every raw sample on every refresh.
 
-- **Defined by the dashboard query.** What is materialized is exactly the panel's TQS
-  document. Edit the panel in the UI or the YAML and the old points are dropped and the new
-  query starts accumulating; nothing else to configure. Any client sending the same query (the
-  UI, `curl`, an agent over MCP) gets the stored points.
-- **Exact.** A stored point is the output of the same compiled query at the same timestamp, and
-  only queries whose points depend on their own timestamp qualify, so the answer equals the raw
-  query on the same grid. A test compares them point by point over five panel shapes, a counter
-  reset and the hot tail, and a mutation check shows the test can fail.
-- **Measured.** On the benchmark's 6-hour data, the heavy panels read 11 to 13 times faster
-  (`sum by (job) (rate(…[5m]))`: 456 ms raw, 35 ms materialized), with every point equal
-  ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
-- **Trade-offs, stated.** No backfill (we are in beta); a sample later than `materialize.settle`
-  (5 min) after its timestamp is not in the stored steps; spans/logs measures, `table`,
-  `fill: zero` and range-ranked `top` are computed raw.
+- **Defined by the dashboard query.** What is materialized is exactly the panel's TQS document.
+  Edit the panel and the old points are dropped. Any client sending the same query (the UI,
+  `curl`, an agent over MCP) gets the stored points.
+- **Exact, including late data.** Stored points are the same compiled query at the same
+  timestamps, and a sample that arrives late for stored steps makes them recomputed. A test
+  compares materialized and raw answers point by point over 12 query shapes, late samples and
+  restarts.
+- **Measured.** On the benchmark's 6-hour panels, aggregations over many series read 10–12× faster (`sum by (job) (rate(…[5m]))`: 443 ms raw, 38 ms materialized), materialized reads stay near 40 ms from 1 h to 6 h ranges, every point equals the raw answer, and the background cost is 29 ms per panel every 15 s ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
+- **Stated limits.** No backfill: points start when a panel is first seen, so the gain grows
+  with uptime. Spans and logs measures, `table`, `fill: zero` and range-ranked `top` run raw.
 
-The spec's fuller design, mergeable partials per bucket fed from flush envelopes (late rows,
-percentiles across regions, alert rules on the same state), is not built yet. Details:
+How it works, how to use it, when it helps and what it costs:
 [Materialized panels](../deep-dive/materialized-panels.md).
 
 ## Designed, not built yet: rollups

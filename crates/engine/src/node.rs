@@ -223,7 +223,14 @@ impl Node {
             {
                 std::fs::create_dir_all(parent)?;
             }
-            root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))).with_context(|| format!("opening {mat_path}"))?;
+            // Derived data: a file that cannot be opened is moved aside and started again.
+            if let Err(e) = root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))) {
+                let aside = format!("{mat_path}.broken-{epoch}");
+                tracing::warn!(path = %mat_path, moved_to = %aside, error = %e, "materialized panels file unusable; starting a new one");
+                let _ = std::fs::rename(mat_path, &aside);
+                let _ = std::fs::remove_file(format!("{mat_path}.wal"));
+                root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))).with_context(|| format!("opening {mat_path}"))?;
+            }
         }
         root.execute_batch(crate::materialize::DDL)?;
         for t in Table::ALL {
@@ -313,6 +320,10 @@ impl Node {
             self.metrics.rejected_out_of_bounds.fetch_add(dropped as u64, Ordering::Relaxed);
         }
 
+        // A sample at or before the materialized horizon changes stored steps (see materialize.rs).
+        let horizon = now - self.cfg.materialize.settle.ms();
+        let late = rows.points.iter().map(|p| p.timestamp_ms).filter(|t| *t <= horizon).min();
+
         let seq_guard = self.seq.read().await;
         let seq = *seq_guard;
         {
@@ -378,6 +389,10 @@ impl Node {
         self.hot_bytes.fetch_add(bytes, Ordering::Relaxed);
         for (t, n) in counts {
             self.metrics.ingested(t, n);
+        }
+        // Only once the rows are visible, so the recompute cannot run before they are.
+        if let Some(t) = late {
+            self.mat.note_late(t);
         }
         drop(seq_guard);
         Ok(())
@@ -732,7 +747,15 @@ impl Node {
     /// Drop files older than `retention`, expire old snapshots and let DuckLake delete the
     /// objects nothing references any more (SPEC §6.4).
     pub async fn retain(&self, now: i64) -> Result<usize> {
-        self.retain_materialized(now - self.cfg.coordinator.retention.ms()).await?;
+        let dropped = self.retain_lake(now).await?;
+        // Derived data: a failure here never holds back retention of the lake.
+        if let Err(e) = self.retain_materialized(now - self.cfg.coordinator.retention.ms()).await {
+            tracing::warn!(error = %format!("{e:#}"), "retention of materialized points failed; will retry");
+        }
+        Ok(dropped)
+    }
+
+    async fn retain_lake(&self, now: i64) -> Result<usize> {
         let _g = self.catalog_lock.lock().await;
         let conn = self.lake_conn()?;
         let store = self.store.clone();
@@ -773,6 +796,7 @@ impl Node {
         let mut last_compact = Instant::now();
         let mut last_retain = Instant::now() - c.retention_interval.0;
         let mut last_mat = Instant::now();
+        let mut mat_task: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             tokio::select! {
                 _ = tick.tick() => {}
@@ -795,11 +819,15 @@ impl Node {
                     tracing::error!(error = %format!("{e:#}"), "compaction failed; will retry");
                 }
             }
-            if last_mat.elapsed() >= self.cfg.materialize.resolution.0 {
+            // In its own task: a long catch-up never delays flushes or checkpoints.
+            if last_mat.elapsed() >= self.cfg.materialize.resolution.0 && mat_task.as_ref().is_none_or(|h| h.is_finished()) {
                 last_mat = Instant::now();
-                if let Err(e) = self.materialize(now_ms()).await {
-                    tracing::error!(error = %format!("{e:#}"), "materializing panels failed; will retry");
-                }
+                let node = self.clone();
+                mat_task = Some(tokio::spawn(async move {
+                    if let Err(e) = node.materialize(now_ms()).await {
+                        tracing::error!(error = %format!("{e:#}"), "materializing panels failed; will retry");
+                    }
+                }));
             }
             if last_retain.elapsed() >= c.retention_interval.0 {
                 last_retain = Instant::now();

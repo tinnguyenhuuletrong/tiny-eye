@@ -26,7 +26,8 @@ disk or S3 and answers queries that return the same points as Prometheus.
   log search and log patterns.
 - **Dashboards as code.** YAML files in git, editable in the UI (drag, resize, add a panel), saved
   back to the same file. Mark a panel `materialize: true` and tiny-eye keeps its points up to date
-  incrementally: the same answer, up to 13× faster on long ranges.
+  incrementally (spec section 9.1): the same answer, 10–12× faster on long-range
+  aggregations.
 
 ## Quick start
 
@@ -132,7 +133,7 @@ Every claim comes from a test that can fail; reports are generated into
 | The whole binary returns what Prometheus returns | `make e2e`: the same remote-written samples in Prometheus 3.16 and tiny-eye, spread over Parquet, a pending envelope and RAM | [20/20 panels equal](docs/deep-dive/evidence/e2e.md) |
 | Acknowledged data survives a crash | `crates/engine/tests/node.rs`: crash without flush, WAL replay, retried flushes, no double counting | pass |
 | Ingest and query speed (8-core laptop, 2,620 series × 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
-| Materialized panels answer exactly what raw queries answer, faster | `crates/engine/tests/materialize.rs` (point by point, with a mutation check) and `make bench` | 6 h `sum by (rate)`: [456 ms raw, 35 ms materialized, every point equal](docs/deep-dive/evidence/bench-local.md#materialized-panels) |
+| Materialized panels answer exactly what raw queries answer, faster | `crates/engine/tests/materialize.rs` (12 query shapes, late data, restarts) and `make bench` | 6 h `sum by (rate)`: [443 ms raw, 38 ms materialized, every point equal](docs/deep-dive/evidence/bench-local.md#materialized-panels) |
 | Trace lookups on S3 stay cheap | `make bench-s3` (MinIO) | absent trace id: [22 GETs before compaction, 2 after](docs/deep-dive/evidence/bench-s3.md) |
 
 ## Development
