@@ -1,6 +1,6 @@
 ---
 title: AI agents over MCP
-description: Connect Claude Code, Claude Desktop, Cursor or any MCP client to tiny-eye so an agent can discover, validate and run TQS queries.
+description: Connect Claude Code, Claude Desktop, Cursor or any MCP client so an agent can discover, validate and run TQS queries.
 sidebar_position: 4
 ---
 

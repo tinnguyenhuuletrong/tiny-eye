@@ -58,6 +58,11 @@ docs: ## Build the documentation site (docs/ -> website/build)
 docs-dev: ## Preview the documentation site on :3000
 	cd website && npm install --no-audit --no-fund && BASE_URL=/ npm start
 
+.PHONY: media
+media: ## Re-record the README/docs GIFs and videos (needs Chrome + ffmpeg; getting-started needs make demo, demo-app, demo-load running)
+	node docs/assets/media/record.mjs how-it-works
+	node docs/assets/media/record.mjs getting-started
+
 .PHONY: schemas
 schemas: ## Regenerate schema/generated (JSON Schemas, formula grammar) and docs/reference/mcp-tools.md
 	cargo run --quiet --bin tiny-eye -- schemas --root .

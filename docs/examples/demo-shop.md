@@ -1,6 +1,6 @@
 ---
 title: Demo shop
-description: Run a small Node.js shop instrumented with OpenTelemetry, put load on it with k6, and read its traces, metrics and logs through dashboards, TQS and an AI agent.
+description: Run an OpenTelemetry-instrumented Node.js shop under k6 load and read it through dashboards, TQS and an AI agent.
 sidebar_position: 1
 ---
 

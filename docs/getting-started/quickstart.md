@@ -1,11 +1,16 @@
 ---
 title: Quickstart
-description: Build and run tiny-eye, send a metric, a trace and a log line with curl, query them with TQS, and connect an AI agent, in about 5 minutes.
+description: Run a node, send a metric, a trace and a log line with curl, and query them with TQS in about 5 minutes.
 sidebar_position: 1
 ---
 
 This page takes you from a fresh clone to a running node with data you sent yourself. You need
 two terminals. Apart from the first build, it takes about 5 minutes.
+
+Prefer a ready-made app with traffic? `make demo`, `make demo-app` and `make demo-load` run the
+[demo shop](../examples/demo-shop.md); this is what it looks like:
+
+![Starting tiny-eye and the demo shop, then the web UI: a live dashboard, layout editing, Explore, a trace waterfall and log patterns](../assets/getting-started.gif)
 
 ## Prerequisites
 
@@ -19,14 +24,14 @@ two terminals. Apart from the first build, it takes about 5 minutes.
 ## 1. Clone and fetch the pinned tools
 
 ```bash
-git clone https://github.com/OWNER/tiny-eye.git
+git clone https://github.com/tinnguyenhuuletrong/tiny-eye.git
 cd tiny-eye
 make tools
 ```
 
-Replace `OWNER` with the GitHub owner of the repository. `make tools` downloads the pinned DuckDB
+`make tools` downloads the pinned DuckDB
 2.0.1 extensions and Prometheus 3.16 (used only by the test suites) into `.tools/`. See
-[Installation](installation.md) for details.
+[Installation](installation.mdx) for details.
 
 ## 2. Run a node
 

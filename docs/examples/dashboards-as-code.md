@@ -1,6 +1,6 @@
 ---
 title: Dashboards as code
-description: Write tiny-eye dashboards as YAML files in git, with editor autocompletion, validation at load, and saving from the UI through the API.
+description: Write dashboards as YAML in git, with editor autocompletion, validation at load and saving from the UI.
 sidebar_position: 5
 ---
 

@@ -45,6 +45,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   GitHub Container Registry on version tags.
 - Documentation site (Docusaurus, `website/`) published to GitHub Pages, and standard project files
   (license, contributing guide, security policy, code of conduct, issue and PR templates, Dependabot).
+- Docs site landing page, local search, hand-written sidebar, install tabs, Geist theme.
+- Animated "How it works" diagram and a getting-started video, recorded from HTML sources with
+  headless Chrome and ffmpeg (`make media`, sources in `docs/assets/media/`).
+- The binary prints a start banner with the UI URL, the ingest endpoints and the MCP command.
 
 ### Fixed
 
@@ -55,5 +59,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
 - Saving a dashboard keeps the file's leading comments; `run-panel.sh` applies dashboard vars.
 - Retention keeps series rows a day longer than points; waiting for a query connection counts
   against the query timeout.
+- UI: adding a panel while editing the layout keeps the layout edits; the Add panel drawer works
+  when opened before the catalog loads; resize drags read the current layout; stale validation
+  responses in Explore are ignored.
+- Demo shop exports metrics every 10 s (it fell back to the SDK's 60 s default).
 
-[Unreleased]: https://github.com/OWNER/tiny-eye/commits/main
+[Unreleased]: https://github.com/tinnguyenhuuletrong/tiny-eye/commits/main

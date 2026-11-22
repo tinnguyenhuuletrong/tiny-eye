@@ -1,0 +1,349 @@
+<!doctype html>
+<!--
+  Animated "How it works" diagram. Source of docs/assets/how-it-works.gif / .mp4:
+    node docs/assets/media/record.mjs how-it-works      (or: make media)
+  Open it in a browser to watch it live. render(t) is a pure function of time,
+  so the recorder steps it frame by frame and the output is identical every run.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How tiny-eye works</title>
+<style>
+  @font-face { font-family: Geist; src: url(../../../ui/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2) format("woff2"); font-weight: 100 900; }
+  @font-face { font-family: "Geist Mono"; src: url(../../../ui/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2) format("woff2"); font-weight: 100 900; }
+  :root {
+    --bg: #0b0d12; --panel: #12151d; --panel2: #171b25; --line: #262c39; --ink: #e8eaf0; --muted: #8b93a5; --dim: #5a6275;
+    --m: #4c9aff; --l: #f5a524; --t: #a78bfa; --ok: #3ccf91; --accent: #5eead4;
+  }
+  html, body { margin: 0; background: var(--bg); }
+  body { display: grid; place-items: center; min-height: 100vh; }
+  svg { width: 1200px; height: 640px; display: block; font-family: Geist, -apple-system, "Segoe UI", sans-serif; }
+  .mono { font-family: "Geist Mono", ui-monospace, Menlo, monospace; }
+  .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+  .inner { fill: var(--panel2); stroke: var(--line); stroke-width: 1; }
+  .title { fill: var(--ink); font-size: 15px; font-weight: 600; }
+  .label { fill: var(--muted); font-size: 12px; }
+  .small { fill: var(--dim); font-size: 11px; }
+  .wire { stroke: var(--line); stroke-width: 2; fill: none; }
+  .flow { stroke: var(--accent); stroke-width: 2.5; fill: none; stroke-dasharray: 6 8; }
+  .code { fill: #c9d1e3; font-size: 12.5px; }
+  .key { fill: #7dd3fc; } .str { fill: #fcd34d; }
+</style>
+</head>
+<body>
+<svg id="s" viewBox="0 0 1200 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3a4152"/>
+    </marker>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g id="all">
+    <!-- header -->
+    <text x="40" y="38" class="title" style="font-size:20px">tiny-eye</text>
+    <text x="128" y="38" class="label" style="font-size:14px">metrics · logs · traces → Parquet in object storage → one SQL engine</text>
+
+    <!-- senders -->
+    <g id="senders"></g>
+
+    <!-- node -->
+    <rect x="290" y="70" width="280" height="262" rx="14" class="box"/>
+    <text x="310" y="98" class="title">tiny-eye node</text>
+    <rect x="310" y="112" width="240" height="66" rx="9" class="inner"/>
+    <text x="324" y="134" class="label">WAL · fsync</text>
+    <rect x="324" y="146" width="212" height="14" rx="4" fill="#0e1118" stroke="#262c39"/>
+    <rect id="walfill" x="324" y="146" width="0" height="14" rx="4" fill="var(--ok)" opacity=".85"/>
+    <text id="acked" x="536" y="134" class="small mono" text-anchor="end">0 acked</text>
+    <rect x="310" y="190" width="240" height="126" rx="9" class="inner"/>
+    <text x="324" y="212" class="label">hot tail · queryable now</text>
+    <g id="cells"></g>
+    <text id="rows" x="536" y="212" class="small mono" text-anchor="end">0 rows</text>
+
+    <!-- storage -->
+    <rect x="640" y="70" width="280" height="262" rx="14" class="box"/>
+    <text x="660" y="98" class="title">object storage</text>
+    <text x="900" y="98" class="small" text-anchor="end">disk or S3</text>
+    <g id="files"></g>
+
+    <!-- catalog -->
+    <rect x="990" y="70" width="170" height="120" rx="14" class="box"/>
+    <text x="1008" y="98" class="title">DuckLake</text>
+    <text x="1008" y="116" class="label">catalog</text>
+    <text id="snap" x="1008" y="152" class="mono" style="fill:var(--ink);font-size:22px;font-weight:600">#41</text>
+    <text x="1008" y="174" class="small">snapshot</text>
+
+    <!-- duckdb -->
+    <rect id="duckbox" x="990" y="230" width="170" height="102" rx="14" class="box"/>
+    <text x="1008" y="258" class="title">DuckDB</text>
+    <text x="1008" y="278" class="label">lake ∪ hot tail</text>
+    <text id="duckstat" x="1008" y="314" class="small mono"></text>
+
+    <!-- static wires -->
+    <path d="M570 150 C 600 150, 610 150, 640 150" class="wire" marker-end="url(#arrow)"/>
+    <path d="M920 110 C 950 110, 960 110, 990 110" class="wire" marker-end="url(#arrow)"/>
+    <path d="M1075 190 L1075 230" class="wire" marker-end="url(#arrow)"/>
+    <path d="M920 290 C 950 290, 960 290, 990 290" class="wire" marker-end="url(#arrow)"/>
+    <path d="M430 332 C 430 362, 600 362, 780 362 C 960 362, 1075 362, 1075 332" class="wire" marker-end="url(#arrow)"/>
+    <!-- live flows during query -->
+    <path id="f1" d="M1075 190 L1075 230" class="flow" opacity="0"/>
+    <path id="f2" d="M920 290 C 950 290, 960 290, 990 290" class="flow" opacity="0"/>
+    <path id="f3" d="M430 332 C 430 362, 600 362, 780 362 C 960 362, 1075 362, 1075 332" class="flow" opacity="0"/>
+    <text x="605" y="142" class="small" text-anchor="middle">flush</text>
+    <text x="955" y="102" class="small" text-anchor="middle">commit</text>
+
+    <!-- query lane -->
+    <rect x="40" y="392" width="390" height="176" rx="14" class="box"/>
+    <text x="60" y="420" class="title">TQS query</text>
+    <text x="410" y="420" class="small" text-anchor="end">JSON, validated</text>
+    <g id="tqs" class="mono code" style="white-space:pre"></g>
+
+    <rect id="compbox" x="470" y="392" width="260" height="176" rx="14" class="box"/>
+    <text x="490" y="420" class="title">compile</text>
+    <text x="710" y="420" class="small" text-anchor="end">bound SQL</text>
+    <g id="sql" class="mono code" style="white-space:pre"></g>
+
+    <rect x="770" y="392" width="390" height="176" rx="14" class="box"/>
+    <text x="790" y="420" class="title">result</text>
+    <text x="1140" y="420" class="small" text-anchor="end">req/s by route</text>
+    <g id="chart"></g>
+
+    <path d="M430 480 L470 480" class="wire" marker-end="url(#arrow)"/>
+    <path d="M730 480 C 750 480, 750 480, 770 480" class="wire" marker-end="url(#arrow)" opacity=".0"/>
+    <path id="toDuck" d="M600 392 C 600 372, 990 372, 1010 333" class="wire" marker-end="url(#arrow)" opacity=".0"/>
+
+    <!-- moving things on top -->
+    <g id="dots"></g>
+    <g id="movers"></g>
+
+    <!-- caption -->
+    <rect x="40" y="590" width="1120" height="36" rx="10" fill="#10131a" stroke="#1f2430"/>
+    <circle id="capdot" cx="62" cy="608" r="5" fill="var(--accent)"/>
+    <text id="cap" x="78" y="613" style="fill:var(--ink);font-size:14px"></text>
+    <text id="capstep" x="1144" y="613" class="small mono" text-anchor="end"></text>
+  </g>
+</svg>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs, parent, text) => {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  parent.appendChild(e);
+  return e;
+};
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = (x) => { x = clamp(x); return x < .5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; };
+const lerp = (a, b, k) => a + (b - a) * k;
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+
+const L = 15;                    // loop length, seconds
+const FLUSH = 5.2, COMMIT = 6.6, Q0 = 7.8;
+const COLORS = ["var(--m)", "var(--l)", "var(--t)"];
+const SENDERS = [
+  { name: "OpenTelemetry SDK", sub: "OTLP/HTTP", y: 96 },
+  { name: "Prometheus", sub: "remote-write", y: 176 },
+  { name: "Loki clients", sub: "push", y: 256 },
+];
+
+// senders
+for (const s of SENDERS) {
+  const g = $("senders");
+  el("rect", { x: 40, y: s.y, width: 200, height: 56, rx: 12, class: "box" }, g);
+  el("text", { x: 58, y: s.y + 24, class: "title", style: "font-size:14px" }, g, s.name);
+  el("text", { x: 58, y: s.y + 42, class: "label" }, g, s.sub);
+  el("path", { d: `M240 ${s.y + 28} C 265 ${s.y + 28}, 270 ${s.y + 28}, 290 ${s.y + 28 < 150 ? 150 : s.y + 28 > 250 ? 250 : s.y + 28}`, class: "wire", "marker-end": "url(#arrow)" }, g);
+}
+
+// hot tail cells: 12 x 4
+const cells = [];
+for (let r = 0; r < 4; r++) for (let c = 0; c < 12; c++)
+  cells.push(el("rect", { x: 324 + c * 18, y: 226 + r * 20, width: 14, height: 14, rx: 3, fill: "#0e1118", stroke: "#222836" }, $("cells")));
+
+// storage file slots
+const FILES = [
+  { t: "metrics_points", h: "hour=13", c: 0, pre: true },
+  { t: "logs", h: "hour=13", c: 1, pre: true },
+  { t: "spans", h: "hour=13", c: 2, pre: true },
+  { t: "metrics_points", h: "hour=14", c: 0 },
+  { t: "logs", h: "hour=14", c: 1 },
+  { t: "spans", h: "hour=14", c: 2 },
+];
+const slot = (i) => ({ x: 656 + (i % 2) * 128, y: 114 + Math.floor(i / 2) * 70 });
+const fileEls = FILES.map((f, i) => {
+  const { x, y } = slot(i);
+  const g = el("g", {}, $("files"));
+  el("rect", { x, y, width: 118, height: 58, rx: 8, fill: "#0f131b", stroke: "#2a3040" }, g);
+  el("rect", { x, y, width: 5, height: 58, rx: 2, fill: COLORS[f.c] }, g);
+  el("text", { x: x + 14, y: y + 22, class: "mono", style: "fill:var(--ink);font-size:11.5px" }, g, f.t);
+  el("text", { x: x + 14, y: y + 38, class: "small mono" }, g, f.h);
+  el("text", { x: x + 14, y: y + 51, class: "small mono" }, g, "l0 · zstd");
+  return g;
+});
+
+// deterministic arrivals
+const hash = (i) => { let x = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35); return (x ^ (x >>> 16)) >>> 0; };
+const SPACING = 0.13, TRAVEL = 0.75;
+const arrivals = [];
+for (let i = 0; i * SPACING < L; i++) {
+  const s = i * SPACING + (hash(i) % 60) / 1000;
+  arrivals.push({ s, k: hash(i * 7 + 3) % 3 });
+}
+const dotEls = arrivals.map((a) => el("circle", { r: 4.5, fill: COLORS[a.k], opacity: 0 }, $("dots")));
+
+// TQS + SQL text
+const TQS = [
+  [["{ ", ""], ['"kind"', "key"], [": ", ""], ['"timeseries"', "str"], [",", ""]],
+  [["  ", ""], ['"time"', "key"], [": { ", ""], ['"from"', "key"], [": ", ""], ['"-1h"', "str"], [" },", ""]],
+  [["  ", ""], ['"queries"', "key"], [": [{", ""]],
+  [["    ", ""], ['"metric"', "key"], [": ", ""], ['"http_requests_total"', "str"], [",", ""]],
+  [["    ", ""], ['"fn"', "key"], [": { ", ""], ['"op"', "key"], [": ", ""], ['"rate"', "str"], [" },", ""]],
+  [["    ", ""], ['"agg"', "key"], [": { ", ""], ['"op"', "key"], [": ", ""], ['"sum"', "str"], [",", ""]],
+  [["      ", ""], ['"by"', "key"], [": [", ""], ['"route"', "str"], ["] } }] }", ""]],
+];
+const tqsLines = TQS.map((parts, i) => {
+  const t = el("text", { x: 60, y: 448 + i * 17 }, $("tqs"));
+  return parts.map(([s, cls]) => ({ span: el("tspan", cls ? { class: cls } : {}, t, ""), s }));
+});
+const tqsTotal = TQS.flat().reduce((n, [s]) => n + s.length, 0);
+const SQL = ["WITH pts AS (", "  SELECT … FROM lake", "  UNION ALL SELECT … hot", ")", "SELECT step, route,", "  sum(rate(…)) … ASOF JOIN"];
+const sqlLines = SQL.map((s, i) => el("text", { x: 490, y: 448 + i * 18, opacity: 0 }, $("sql"), s.replace(/ /g, "\u00a0")));
+
+// chart
+const CH = { x: 800, y: 436, w: 340, h: 112 };
+el("line", { x1: CH.x, y1: CH.y + CH.h, x2: CH.x + CH.w, y2: CH.y + CH.h, stroke: "#262c39" }, $("chart"));
+for (let g = 1; g < 4; g++) el("line", { x1: CH.x, y1: CH.y + g * CH.h / 4, x2: CH.x + CH.w, y2: CH.y + g * CH.h / 4, stroke: "#1a1f2a" }, $("chart"));
+const SERIES = [
+  { name: "/products", c: "var(--m)", base: .62, amp: .12, f: 1.3 },
+  { name: "/checkout", c: "var(--t)", base: .38, amp: .09, f: 2.1 },
+  { name: "/search", c: "var(--l)", base: .2, amp: .06, f: 3.2 },
+];
+const seriesEls = SERIES.map((s, si) => {
+  const pts = [];
+  for (let i = 0; i <= 40; i++) {
+    const x = CH.x + (i / 40) * CH.w;
+    const v = s.base + s.amp * Math.sin(i / 40 * Math.PI * s.f + si) + .03 * Math.sin(i * 1.7 + si * 3);
+    pts.push(`${x.toFixed(1)},${(CH.y + CH.h - v * CH.h).toFixed(1)}`);
+  }
+  const p = el("polyline", { points: pts.join(" "), fill: "none", stroke: s.c, "stroke-width": 2, "stroke-linejoin": "round" }, $("chart"));
+  const len = p.getTotalLength();
+  p.setAttribute("stroke-dasharray", len);
+  el("rect", { x: 800 + si * 112, y: 554, width: 10, height: 3, rx: 1.5, fill: s.c }, $("chart"));
+  el("text", { x: 815 + si * 112, y: 558, class: "small mono" }, $("chart"), s.name);
+  return { p, len };
+});
+
+// movers: three parquet blocks + envelope
+const blocks = [0, 1, 2].map((c) => el("rect", { width: 44, height: 22, rx: 5, fill: COLORS[c], opacity: 0 }, $("movers")));
+const env = el("g", { opacity: 0 }, $("movers"));
+el("rect", { x: -34, y: -13, width: 68, height: 26, rx: 6, fill: "#1d2330", stroke: "var(--accent)" }, env);
+el("text", { x: 0, y: 4, "text-anchor": "middle", class: "mono", style: "fill:var(--accent);font-size:11px" }, env, "commit.json");
+
+const CAPS = [
+  [0, "1 · Ingest", "Each write is acknowledged after the WAL fsync, and is queryable at once from the hot tail."],
+  [FLUSH, "2 · Flush", "Every interval, each table's rows become one sorted, ZSTD-compressed Parquet file per hour."],
+  [COMMIT, "3 · Commit", "A create-only envelope is checkpointed into DuckLake: one atomic snapshot, never a partial file."],
+  [Q0, "4 · Query", "A TQS document is validated, then compiled to bound SQL over the lake plus the hot tail."],
+  [Q0 + 3.6, "5 · Answer", "DuckDB reads only the Parquet row groups it needs; the newest seconds come from memory."],
+];
+
+function render(T) {
+  const t = ((T % L) + L) % L;
+  $("all").setAttribute("opacity", Math.min(seg(t, 0, .35), 1 - seg(t, L - .35, L)).toFixed(3));
+
+  // ingest dots
+  let arrived = 0, sinceFlush = 0;
+  arrivals.forEach((a, i) => {
+    const k = (t - a.s) / TRAVEL, e = dotEls[i];
+    if (k < 0 || k > 1) { e.setAttribute("opacity", 0); }
+    else {
+      const sy = SENDERS[a.k].y + 28, ty = 120 + a.k * 22;
+      const kk = ease(k);
+      e.setAttribute("cx", lerp(240, 318, kk).toFixed(1));
+      e.setAttribute("cy", lerp(sy, ty, kk).toFixed(1));
+      e.setAttribute("opacity", (k < .1 ? k * 10 : k > .9 ? (1 - k) * 10 : 1).toFixed(2));
+    }
+    if (t >= a.s + TRAVEL) { arrived++; if (a.s + TRAVEL > FLUSH) sinceFlush++; }
+  });
+  const preFlush = t < FLUSH;
+  const rows = preFlush ? arrived : sinceFlush;
+  $("acked").textContent = `${(12840 + arrived * 25).toLocaleString("en-US")} acked`;
+  $("rows").textContent = `${(rows * 25).toLocaleString("en-US")} rows`;
+  $("walfill").setAttribute("width", (212 * ((arrived % 18) / 18)).toFixed(1));
+  // which cells are lit (each cell keeps the colour of its arrival)
+  const lit = [];
+  arrivals.forEach((a) => { if (t >= a.s + TRAVEL && (preFlush || a.s + TRAVEL > FLUSH)) lit.push(a.k); });
+  const drain = seg(t, FLUSH, FLUSH + .35);
+  cells.forEach((c, i) => {
+    const on = i < lit.length && i < cells.length;
+    c.setAttribute("fill", on ? COLORS[lit[i]] : "#0e1118");
+    c.setAttribute("opacity", on ? (t > FLUSH - .01 && t < FLUSH + .35 ? 1 - drain : .9) : 1);
+  });
+
+  // flush: three blocks fly from hot tail to new slots
+  [0, 1, 2].forEach((c) => {
+    const b = blocks[c], k = seg(t, FLUSH + c * .12, FLUSH + .9 + c * .12);
+    const to = slot(3 + c);
+    if (k <= 0 || k >= 1) b.setAttribute("opacity", 0);
+    else {
+      const kk = ease(k);
+      b.setAttribute("x", lerp(420, to.x + 37, kk).toFixed(1));
+      b.setAttribute("y", (lerp(260, to.y + 18, kk) - Math.sin(kk * Math.PI) * 40).toFixed(1));
+      b.setAttribute("opacity", 1);
+    }
+  });
+  fileEls.forEach((g, i) => {
+    const f = FILES[i];
+    const show = f.pre ? 1 : seg(t, FLUSH + 0.85 + (i - 3) * .12, FLUSH + 1.1 + (i - 3) * .12);
+    g.setAttribute("opacity", show.toFixed(2));
+  });
+
+  // commit envelope
+  const ek = seg(t, COMMIT, COMMIT + .9);
+  if (ek <= 0 || ek >= 1) env.setAttribute("opacity", 0);
+  else {
+    const kk = ease(ek);
+    env.setAttribute("transform", `translate(${lerp(850, 1075, kk).toFixed(1)},${(lerp(318, 130, kk)).toFixed(1)})`);
+    env.setAttribute("opacity", 1);
+  }
+  const snapped = t >= COMMIT + .9;
+  $("snap").textContent = snapped ? "#42" : "#41";
+  $("snap").setAttribute("filter", t > COMMIT + .9 && t < COMMIT + 1.6 ? "url(#glow)" : "");
+
+  // query
+  const typed = Math.floor(tqsTotal * seg(t, Q0, Q0 + 1.8));
+  let left = typed;
+  tqsLines.forEach((parts) => parts.forEach((p) => { const n = clamp(left, 0, p.s.length); p.span.textContent = p.s.slice(0, n).replace(/ /g, "\u00a0"); left -= p.s.length; }));
+  const comp = seg(t, Q0 + 1.9, Q0 + 2.9);
+  sqlLines.forEach((e, i) => e.setAttribute("opacity", clamp(comp * SQL.length - i).toFixed(2)));
+  $("compbox").setAttribute("stroke", comp > 0 && comp < 1 ? "var(--accent)" : "#262c39");
+  const read = seg(t, Q0 + 3.0, Q0 + 4.2);
+  const reading = read > 0 && t < Q0 + 5.6;
+  ["f1", "f2", "f3"].forEach((id) => {
+    $(id).setAttribute("opacity", reading ? 1 : 0);
+    $(id).setAttribute("stroke-dashoffset", (-t * 60).toFixed(1));
+  });
+  $("duckbox").setAttribute("stroke", reading ? "var(--accent)" : "#262c39");
+  $("duckstat").textContent = reading ? "6 row groups · 41 ms" : t > Q0 + 5.6 ? "41 ms" : "";
+  const draw = seg(t, Q0 + 3.6, Q0 + 5.4);
+  seriesEls.forEach(({ p, len }, i) => p.setAttribute("stroke-dashoffset", (len * (1 - ease(clamp(draw * 1.15 - i * .07)))).toFixed(1)));
+
+  // caption
+  let cap = CAPS[0];
+  for (const c of CAPS) if (t >= c[0]) cap = c;
+  $("cap").textContent = `${cap[1]} — ${cap[2]}`;
+  $("capstep").textContent = `${CAPS.indexOf(cap) + 1}/${CAPS.length}`;
+}
+window.render = render;
+window.LOOP_SECONDS = L;
+if (!new URLSearchParams(location.search).has("still")) {
+  const t0 = performance.now();
+  const tick = () => { render((performance.now() - t0) / 1000); requestAnimationFrame(tick); };
+  document.fonts.ready.then(tick);
+} else render(0);
+</script>
+</body>
+</html>

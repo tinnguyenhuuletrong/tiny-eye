@@ -14,6 +14,20 @@ fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// What to do next, printed once the node is listening.
+fn banner(listen: &str) -> String {
+    let url = format!("http://{}", listen.replace("0.0.0.0", "127.0.0.1").replace("[::]", "127.0.0.1"));
+    format!(
+        "\n  tiny-eye {} is ready\n\n  \
+         Web UI        {url}\n  \
+         OTLP/HTTP     OTEL_EXPORTER_OTLP_ENDPOINT={url}\n  \
+         Remote-write  {url}/api/v1/write\n  \
+         Query (TQS)   curl {url}/api/v1/query -d @query.json\n  \
+         AI agents     claude mcp add tiny-eye -- tiny-eye mcp --url {url}\n",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -57,6 +71,7 @@ async fn main() -> Result<()> {
     let state = server::AppState::new(node.clone(), dashboards)?;
     let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;
     tracing::info!(%listen, "serving");
+    eprintln!("{}", banner(&listen));
     axum::serve(listener, server::app(state))
         .with_graceful_shutdown(async {
             // SIGINT (Ctrl-C) or SIGTERM (containers, systemd): stop serving, then flush.

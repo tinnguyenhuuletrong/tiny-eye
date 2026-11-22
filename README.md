@@ -1,113 +1,147 @@
 # tiny-eye
 
-Metrics, logs and traces in one Rust binary: stored as Parquet on disk or S3, queried with a
-JSON language that returns the same points as Prometheus.
+**Metrics, logs and traces in one Rust binary, stored as Parquet you own.**
+Send OpenTelemetry, Prometheus remote-write or Loki data; tiny-eye writes it as sorted Parquet to
+disk or S3 and answers queries that return the same points as Prometheus.
 
-## What it is
+[![CI](https://github.com/tinnguyenhuuletrong/tiny-eye/actions/workflows/ci.yml/badge.svg)](https://github.com/tinnguyenhuuletrong/tiny-eye/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-tinnguyenhuuletrong.github.io%2Ftiny--eye-14b8a6)](https://tinnguyenhuuletrong.github.io/tiny-eye/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Conformance](https://img.shields.io/badge/Prometheus%20conformance-104%2F104-3ccf91)](docs/deep-dive/evidence/tqs-coverage.md)
 
-- **One binary, one process.** Ingests Prometheus remote-write 1.0, OTLP/HTTP (protobuf and JSON)
-  and Loki push (JSON). Single-node mode today.
-- **Open storage.** Sorted, ZSTD-compressed Parquet in local disk or S3, tracked by a DuckLake
-  catalog and read by embedded DuckDB 2.0.1.
-- **TQS 3 queries.** A closed JSON schema compiled to DuckDB SQL, tested point by point against
-  Prometheus 3.16. Covers metrics, span and log aggregates, trace search, waterfalls, log search
-  and log patterns.
-- **Dashboards as YAML in git**, a web UI embedded in the binary (dashboards with drag-and-resize
-  layout editing, Explore with a Builder | TQS switch, traces, logs), and an MCP bridge for AI agents.
+<a href="https://tinnguyenhuuletrong.github.io/tiny-eye/docs/getting-started/quickstart">
+  <img src="docs/assets/getting-started.gif" alt="Starting tiny-eye and the demo shop, then the web UI: a live dashboard, layout editing, Explore, a trace waterfall and log patterns" width="100%">
+</a>
 
-![The Shop overview dashboard of the demo, in tiny-eye's web UI](docs/assets/ui-dashboard.jpg)
+> **Pre-release.** Single-node mode works end to end and is tested against Prometheus. APIs may
+> still change; cluster mode is not built yet. See [Status](#status).
+
+- **One binary.** Ingest, storage, query engine, web UI and an MCP server for AI agents, in one
+  process with one YAML config.
+- **Open storage.** Sorted, ZSTD-compressed Parquet on local disk or any S3 store with conditional
+  writes, cataloged by DuckLake. Any DuckDB, Spark or pandas can read it.
+- **Prometheus-exact queries.** TQS is a JSON query language compiled to DuckDB SQL and checked
+  point by point against Prometheus 3.16: 104/104 conformance cases.
+- **All three signals.** Rates, quantiles and formulas over metrics; trace search and waterfalls;
+  log search and log patterns.
+- **Dashboards as code.** YAML files in git, editable in the UI (drag, resize, add a panel), saved
+  back to the same file.
 
 ## Quick start
 
+Needs Rust stable, a C/C++ compiler, Node.js 20+ and Docker (for the k6 load generator).
+
 ```bash
-make tools      # once: pinned DuckDB extensions + Prometheus (for tests) into .tools/
-make run        # builds the UI and binary, serves 127.0.0.1:7070 with config/dev.yaml
+git clone https://github.com/tinnguyenhuuletrong/tiny-eye && cd tiny-eye
+make demo        # terminal 1: build and start tiny-eye on http://127.0.0.1:7070
+make demo-app    # terminal 2: a Node.js shop instrumented with OpenTelemetry
+make demo-load   # terminal 3: k6 traffic for 3 minutes
+```
 
-curl -s localhost:7070/api/v1/query -d '{"tqs":"3","id":"rps","kind":"timeseries",
-  "time":{"from":"-1h","step":"1m"},
-  "queries":[{"name":"r","metric":"http_requests_total","fn":{"op":"rate","window":"5m"},"agg":{"op":"sum","by":["job"]}}]}'
+Open **http://127.0.0.1:7070**. The first build compiles DuckDB and takes a few minutes; later
+starts take a second. The [demo shop guide](docs/examples/demo-shop.md) walks through what to
+look at.
 
+**Send your own telemetry.** Any OpenTelemetry SDK or Collector:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:7070
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+Prometheus and Grafana Alloy remote-write to `http://127.0.0.1:7070/api/v1/write`; Loki clients
+push JSON to `/loki/api/v1/push`. More in [Sending data](docs/examples/sending-data.md).
+
+**Query over HTTP.** A query is a JSON document:
+
+```bash
+curl -s localhost:7070/api/v1/query -d '{
+  "tqs": "3", "id": "rps", "kind": "timeseries", "time": {"from": "-15m", "step": "30s"},
+  "queries": [{"name": "r", "metric": "http_server_request_duration_count",
+               "fn": {"op": "rate", "window": "1m"}, "agg": {"op": "sum", "by": ["http_route"]}}]}'
+```
+
+`POST /api/v1/validate` returns every problem with its JSON path. The
+[query cookbook](docs/examples/query-cookbook.md) has recipes for every kind of query.
+
+**Connect an AI agent.** The binary is also an MCP server:
+
+```bash
 claude mcp add tiny-eye -- "$PWD/target/release/tiny-eye" mcp --url http://127.0.0.1:7070
 ```
 
-Needs Rust stable, a C/C++ compiler and Node.js 20+. Send data from any OpenTelemetry SDK
-(`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:7070`, `http/protobuf`), Prometheus remote-write
-(`/api/v1/write`) or Loki push (`/loki/api/v1/push`). Open http://127.0.0.1:7070 for the UI.
+Then ask "which route has the worst p99 right now, and why?". Setup for other clients:
+[AI agents over MCP](docs/examples/ai-agents-mcp.md).
 
-Or in a container: `make docker` then `docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev`.
+**Run it in a container.**
 
-For a full walkthrough with a real app, run the demo shop: `make demo`, `make demo-app`,
-`make demo-load` ([guide](docs/examples/demo-shop.md)).
+```bash
+make docker
+docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev
+```
 
 ## How it works
 
-```mermaid
-flowchart LR
-  A[remote-write / OTLP / Loki] --> W[WAL + hot tail in RAM]
-  W -->|flush every 60 s or 64 MB| P[sorted Parquet on disk or S3]
-  P -->|checkpoint every 5 s| L[DuckLake catalog]
-  Q[TQS JSON] --> E[validate, compile to SQL]
-  E --> D[DuckDB: lake + hot rows]
-  L --> D
-  W --> D
-```
+<img src="docs/assets/how-it-works.gif" alt="Animated diagram: writes are acknowledged after the WAL fsync and queryable from the in-memory hot tail; each flush writes one sorted Parquet file per table and hour; a commit envelope is checkpointed into DuckLake; a TQS query is compiled to SQL that DuckDB runs over the lake plus the hot tail" width="100%">
 
-A write is acknowledged once it is in the write-ahead log and the hot tail, so it is queryable
-immediately. Hourly compaction and retention run in the same process.
+A write is acknowledged once it is in the write-ahead log and the in-memory hot tail, so it is
+queryable at once. Every flush interval, each table's rows become sorted Parquet files in object
+storage, and a create-only commit envelope adds them to the DuckLake catalog in one snapshot.
+Queries run on embedded DuckDB over the lake plus the hot tail. Compaction and retention run
+hourly in the same process. Details: [Architecture](docs/deep-dive/architecture.md).
 
 ## Documentation
 
-The docs site (published from `docs/` by GitHub Pages, at `https://<owner>.github.io/tiny-eye/`)
-renders the pages in [`docs/`](docs). Start with:
+The full docs are at **[tinnguyenhuuletrong.github.io/tiny-eye](https://tinnguyenhuuletrong.github.io/tiny-eye/)**
+(sources in [`docs/`](docs)).
 
-- [What is tiny-eye](docs/intro.md)
-- [Quickstart](docs/getting-started/quickstart.md)
-- [Demo shop](docs/examples/demo-shop.md)
-- [Architecture](docs/deep-dive/architecture.md)
+| | |
+| --- | --- |
+| Get started | [Quickstart](docs/getting-started/quickstart.md) · [Installation](docs/getting-started/installation.mdx) · [Concepts](docs/getting-started/concepts.md) |
+| Guides | [Demo shop](docs/examples/demo-shop.md) · [Sending data](docs/examples/sending-data.md) · [Query cookbook](docs/examples/query-cookbook.md) · [Dashboards as code](docs/examples/dashboards-as-code.md) · [AI agents (MCP)](docs/examples/ai-agents-mcp.md) |
+| Concepts | [Architecture](docs/deep-dive/architecture.md) · [Write path](docs/deep-dive/write-path.md) · [Storage format](docs/deep-dive/storage-format.md) · [Query engine](docs/deep-dive/query-engine.md) · [TQS reference](docs/deep-dive/tqs-reference.md) · [Configuration](docs/deep-dive/configuration.md) · [Operations](docs/deep-dive/operations.md) · [Security](docs/deep-dive/security.md) |
+| Reference | [HTTP API](docs/reference/http-api.md) · [MCP tools](docs/reference/mcp-tools.md) · [Editor grammars](docs/reference/editor-grammars.md) |
 
 ## Status
 
-Built (single node):
+**Works today (single node):** Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs
+(protobuf and JSON), Loki JSON push; WAL durability with replay; flush, checkpoint, compaction and
+retention; TQS 3 with Prometheus staleness semantics; YAML dashboards with save from the UI; the
+web UI; MCP; bearer-token scopes; self-metrics.
 
-- Ingest: Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs (protobuf and JSON,
-  gzip), Loki push (JSON); sample-age bounds; secret attribute redaction; arena limit with 429.
-- Durability `wal` (group-committed fsync, replay on restart) and `memory`.
-- Flush per (table, hour): sorted, ZSTD, page statistics, delta and byte-stream-split encodings,
-  `trace_id` bloom filters; envelopes written with a create-only PUT.
-- Idempotent checkpointer, hot tail with a per-node watermark, hourly compaction, series dedup,
-  retention through DuckLake.
-- TQS 3 with Prometheus staleness; HTTP API with every validation problem code; catalog
-  discovery; YAML dashboards with save from the UI; MCP stdio bridge; bearer-token scopes;
-  self-metrics.
-- Web UI served by the binary: dashboards (live panels, edit layout, add panel, save to YAML),
-  Explore (Builder | TQS, validated by the engine), trace search with waterfalls, log search and
-  patterns.
-
-Not built yet:
-
-- Cluster mode (roles, lease and fencing, hot-tail RPC, `replicated` durability), OTLP gRPC,
-  Loki protobuf push.
-- Alert evaluation and Alertmanager, materialized panels, a Grafana data source.
-- Snapshot export, multi-region buckets, native histograms, a trace index.
-- Span events and links are not stored. OTLP delta temporality and exponential histograms are
-  skipped. Response `freshness_s` is always 0 and `partial_regions` always empty.
-
-Details: [Limitations and roadmap](docs/deep-dive/limitations-and-roadmap.md).
+**Not built yet:** cluster mode, OTLP gRPC, Loki protobuf push, alerting, a Grafana data source,
+native histograms, span events and links. Full list:
+[Limitations and roadmap](docs/deep-dive/limitations-and-roadmap.md).
 
 ## Evidence
 
-Every result below comes from a test that can fail. Reports are generated into
+Every claim comes from a test that can fail; reports are generated into
 [`docs/deep-dive/evidence/`](docs/deep-dive/evidence).
 
 | Claim | How | Result |
 | --- | --- | --- |
-| TQS returns what Prometheus returns | `make conformance`: 33 metric functions, real panel shapes, spans/logs/traces, validation and injection cases, a mutation check | [104/104 cases, 15/15 mutants caught](docs/deep-dive/evidence/tqs-coverage.md) |
+| TQS returns what Prometheus returns | `make conformance`: 33 metric functions, real panel shapes, spans, logs, traces, validation and injection cases, a mutation check | [104/104 cases, 15/15 mutants caught](docs/deep-dive/evidence/tqs-coverage.md) |
 | The whole binary returns what Prometheus returns | `make e2e`: the same remote-written samples in Prometheus 3.16 and tiny-eye, spread over Parquet, a pending envelope and RAM | [20/20 panels equal](docs/deep-dive/evidence/e2e.md) |
 | Acknowledged data survives a crash | `crates/engine/tests/node.rs`: crash without flush, WAL replay, retried flushes, no double counting | pass |
-| Ingest and query speed (8-core laptop, 2,620 series x 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
+| Ingest and query speed (8-core laptop, 2,620 series × 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
 | Trace lookups on S3 stay cheap | `make bench-s3` (MinIO) | absent trace id: [22 GETs before compaction, 2 after](docs/deep-dive/evidence/bench-s3.md) |
 
-## Repository layout
+## Development
+
+```bash
+make tools     # once: pinned DuckDB extensions + Prometheus (for the tests) into .tools/
+make run       # build the UI and the binary, serve 127.0.0.1:7070 with config/dev.yaml
+make fmt lint test
+make check     # everything CI runs: lint, UI build, tests, end-to-end, conformance
+make help      # every target
+```
+
+The API (`api/openapi.yaml`), the stored tables (`schema/tables.yaml`) and the defaults
+(`config/default.yaml`) are each defined once in YAML; the router, Arrow schemas, DDL, UI types,
+MCP tools and editor grammars are generated from them. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+<details>
+<summary>Repository layout</summary>
 
 | Path | Contents |
 | --- | --- |
@@ -118,17 +152,14 @@ Every result below comes from a test that can fail. Reports are generated into
 | `crates/server` | The binary: HTTP handlers, receivers, auth, MCP bridge, embedded UI, benchmark |
 | `dashboards/` | Dashboards as YAML |
 | `deploy/` | Docker Compose for a local MinIO (the image itself is built by `Dockerfile`) |
-| `docs/` | Documentation and generated evidence reports |
+| `docs/` | Documentation, generated evidence reports, and `assets/media/` (sources of the GIFs) |
 | `examples/` | The demo shop: Node.js app, k6 load, dashboard, queries |
 | `research/` | The specification and the research it is based on |
 | `schema/` | `tables.yaml` (stored tables) and `generated/` (JSON Schemas, MCP tools, grammar) |
 | `ui/` | Web UI (Preact + Vite, embedded in the binary) and `prototype/` (the design prototype) |
 | `website/` | Docusaurus site that publishes `docs/` |
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). `make help` lists every task; the daily loop is
-`make fmt lint test`, and `make check` runs everything CI runs before a pull request.
+</details>
 
 ## License
 

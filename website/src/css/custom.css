@@ -1,60 +1,96 @@
 /*
- * tiny-eye docs theme: a clean, Geist-like look with system fonts only
- * (no external font CDNs). Infima variables: https://infima.dev
+ * tiny-eye docs theme: Geist type, a neutral grey scale and one accent colour (teal).
+ * Fonts are self-hosted from npm (no font CDN). Infima variables: https://infima.dev
  */
 
-:root {
-  --ifm-color-primary: #1d4ed8;
-  --ifm-color-primary-dark: #1a46c2;
-  --ifm-color-primary-darker: #1942b8;
-  --ifm-color-primary-darkest: #143697;
-  --ifm-color-primary-light: #2e5ce5;
-  --ifm-color-primary-lighter: #3964e6;
-  --ifm-color-primary-lightest: #5a7eea;
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 
-  --ifm-font-family-base: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
-    "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-  --ifm-font-family-monospace: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
-    monospace;
+:root {
+  /* Neutral grey scale, used for text, borders and surfaces. */
+  --te-gray-50: #fafafa;
+  --te-gray-100: #f4f4f5;
+  --te-gray-200: #e4e4e7;
+  --te-gray-300: #d4d4d8;
+  --te-gray-500: #71717a;
+  --te-gray-600: #52525b;
+  --te-gray-700: #3f3f46;
+  --te-gray-800: #27272a;
+  --te-gray-900: #18181b;
+
+  /* The one accent. teal-700 on white is 5.5:1, so links pass WCAG AA. */
+  --ifm-color-primary: #0f766e;
+  --ifm-color-primary-dark: #0d6a63;
+  --ifm-color-primary-darker: #0d645e;
+  --ifm-color-primary-darkest: #0a534d;
+  --ifm-color-primary-light: #108279;
+  --ifm-color-primary-lighter: #11887e;
+  --ifm-color-primary-lightest: #13998f;
+
+  --ifm-font-family-base: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ifm-font-family-monospace: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --ifm-font-size-base: 16px;
   --ifm-line-height-base: 1.65;
   --ifm-heading-font-weight: 600;
   --ifm-font-weight-semibold: 600;
+  --ifm-font-color-base: var(--te-gray-900);
+  --ifm-color-emphasis-600: var(--te-gray-600);
 
-  --ifm-code-font-size: 90%;
+  --ifm-code-font-size: 88%;
   --ifm-code-border-radius: 6px;
+  --ifm-code-background: var(--te-gray-100);
   --ifm-global-radius: 8px;
   --ifm-pre-padding: 1rem;
 
   --ifm-navbar-shadow: none;
-  --ifm-toc-border-color: #eaeaea;
-  --ifm-hr-border-color: #eaeaea;
-  --ifm-table-border-color: #eaeaea;
+  --ifm-toc-border-color: var(--te-gray-200);
+  --ifm-hr-border-color: var(--te-gray-200);
+  --ifm-table-border-color: var(--te-gray-200);
   --ifm-table-stripe-background: transparent;
+  --ifm-menu-color-background-active: var(--te-gray-100);
+  --ifm-menu-color-background-hover: var(--te-gray-100);
 
-  --docusaurus-highlighted-code-line-bg: rgba(29, 78, 216, 0.08);
+  --te-border: var(--te-gray-200);
+  --te-surface: var(--te-gray-50);
+  --te-muted: var(--te-gray-600);
+  --te-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px -6px rgba(0, 0, 0, 0.1);
+
+  --docusaurus-highlighted-code-line-bg: rgba(15, 118, 110, 0.08);
 }
 
 [data-theme="dark"] {
-  --ifm-color-primary: #7aa2ff;
-  --ifm-color-primary-dark: #5a8bff;
-  --ifm-color-primary-darker: #4a80ff;
-  --ifm-color-primary-darkest: #1a5fff;
-  --ifm-color-primary-light: #9ab9ff;
-  --ifm-color-primary-lighter: #aac4ff;
-  --ifm-color-primary-lightest: #dae5ff;
+  --ifm-color-primary: #2dd4bf;
+  --ifm-color-primary-dark: #27c0ad;
+  --ifm-color-primary-darker: #25b5a3;
+  --ifm-color-primary-darkest: #1f9586;
+  --ifm-color-primary-light: #42d8c6;
+  --ifm-color-primary-lighter: #4ddbc9;
+  --ifm-color-primary-lightest: #6de1d3;
 
   --ifm-background-color: #0a0a0a;
-  --ifm-background-surface-color: #111111;
-  --ifm-toc-border-color: #262626;
-  --ifm-hr-border-color: #262626;
-  --ifm-table-border-color: #262626;
+  --ifm-background-surface-color: #0a0a0a;
+  --ifm-font-color-base: #ededed;
+  --ifm-color-emphasis-600: #a1a1aa;
+  --ifm-code-background: #18181b;
+  --ifm-toc-border-color: #27272a;
+  --ifm-hr-border-color: #27272a;
+  --ifm-table-border-color: #27272a;
+  --ifm-menu-color-background-active: #18181b;
+  --ifm-menu-color-background-hover: #18181b;
 
-  --docusaurus-highlighted-code-line-bg: rgba(122, 162, 255, 0.12);
+  --te-border: #27272a;
+  --te-surface: #111113;
+  --te-muted: #a1a1aa;
+  --te-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+
+  --docusaurus-highlighted-code-line-bg: rgba(45, 212, 191, 0.12);
 }
 
-/* Headings: tight tracking, like Geist. */
-h1,
+/* Headings: tight tracking; H1 tightest. */
+h1 {
+  letter-spacing: -0.03em;
+}
+
 h2,
 h3 {
   letter-spacing: -0.02em;
@@ -62,18 +98,47 @@ h3 {
 
 /* Navbar and footer: flat with a hairline border. */
 .navbar {
-  border-bottom: 1px solid var(--ifm-toc-border-color);
+  border-bottom: 1px solid var(--te-border);
+}
+
+.navbar__link {
+  font-size: 0.925rem;
+  font-weight: 500;
 }
 
 .footer--light {
   background-color: var(--ifm-background-color);
-  border-top: 1px solid var(--ifm-toc-border-color);
+  border-top: 1px solid var(--te-border);
+}
+
+/* GitHub icon link in the navbar (masked so it takes the text colour in both themes). */
+.navbar-github {
+  display: flex;
+  align-items: center;
+}
+
+.navbar-github::before {
+  content: "";
+  width: 22px;
+  height: 22px;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8 0 3.2.9.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1 .9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+}
+
+/* Screenshots: one frame everywhere (landing page and Markdown images). */
+.screenshot,
+.markdown img {
+  display: block;
+  border: 1px solid var(--te-border);
+  border-radius: 8px;
+  box-shadow: var(--te-shadow);
 }
 
 /* Code blocks: comfortable size, hairline border. */
 .theme-code-block {
   font-size: 0.875rem;
-  border: 1px solid var(--ifm-toc-border-color);
+  border: 1px solid var(--te-border);
   box-shadow: none;
 }
 
@@ -97,6 +162,13 @@ code {
 .markdown table th,
 .markdown table td {
   padding: 0.5rem 0.75rem;
+}
+
+/* Admonitions: hairline border instead of a thick left bar. */
+.alert {
+  --ifm-alert-border-width: 1px;
+  --ifm-alert-border-left-width: 1px;
+  box-shadow: none;
 }
 
 /* Mermaid diagrams: centered. */

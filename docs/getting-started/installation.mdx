@@ -1,8 +1,11 @@
 ---
 title: Installation
-description: Build tiny-eye from source, run it with a config file, and store data on local disk or S3.
+description: Build tiny-eye from source, with Docker or with Cargo alone, then configure it and store data on disk or S3.
 sidebar_position: 2
 ---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
 
 tiny-eye is built from source with Cargo. Every developer task is a `make` target; `make help`
 lists them. This page covers the build, the configuration layers, where data lives, and how to
@@ -18,18 +21,25 @@ run against S3.
 | Node.js 20+ and npm | Builds the web UI, which `make build` and `make run` embed. Also needed for the demo shop and the docs site. Not needed if you build with `cargo` directly. |
 | Docker (optional) | For the container image (`make docker`), MinIO (`make s3-up`) and the demo load test (`make demo-load`). |
 
-## Build from source
+## Install
+
+<Tabs groupId="install" queryString>
+<TabItem value="source" label="From source" default>
 
 ```bash
-git clone https://github.com/OWNER/tiny-eye.git
+git clone https://github.com/tinnguyenhuuletrong/tiny-eye.git
 cd tiny-eye
 make tools    # once: pinned DuckDB extensions + Prometheus into .tools/
 make build    # web UI (ui/dist), then the release binary: target/release/tiny-eye
 ```
 
-Replace `OWNER` with the GitHub owner of the repository you clone from.
+`make build` first runs `make ui` (`npm ci` and `npm run build` in `ui/`, output in `ui/dist`),
+then `cargo build --release --bin tiny-eye`. The build embeds `ui/dist` into the binary, so the
+binary is all you need to deploy. DuckDB must be a release build in every profile (its debug
+build aborts when release-built extensions free memory), which `Cargo.toml` already arranges.
 
-## Run with Docker
+</TabItem>
+<TabItem value="docker" label="Docker">
 
 The `Dockerfile` builds the binary with the web UI embedded and the pinned DuckDB extensions, in a
 slim non-root image:
@@ -40,8 +50,39 @@ docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev
 ```
 
 Data, catalog and WAL live in the `/data` volume. Configure it with `-e TINY_EYE__SECTION__KEY=value`
-(see [Configuration](../deep-dive/configuration.md)). The build compiles DuckDB, so give Docker at
-least 8 GB of memory. More in [Operations](../deep-dive/operations.md).
+(see [Configuration](../deep-dive/configuration.md)). More in [Operations](../deep-dive/operations.md).
+
+:::note[Give Docker 8 GB]
+The build compiles DuckDB, so give Docker at least 8 GB of memory.
+:::
+
+:::info[Prebuilt image]
+On every version tag (`v*`), the release workflow (`.github/workflows/release.yml`) publishes a
+prebuilt amd64 and arm64 image as `ghcr.io/tinnguyenhuuletrong/tiny-eye:<version>` and `:latest`.
+Use it in place of `tiny-eye:dev` once a release exists.
+:::
+
+</TabItem>
+<TabItem value="cargo" label="Cargo only (no Node)">
+
+Without Node.js, build the binary alone:
+
+```bash
+git clone https://github.com/tinnguyenhuuletrong/tiny-eye.git
+cd tiny-eye
+cargo build --release --bin tiny-eye    # target/release/tiny-eye
+```
+
+:::note[No web UI in this build]
+If `ui/dist` does not exist, that binary serves a short page at `/` that points to the API
+instead of the web UI. Everything else works the same.
+:::
+
+`make tools` (no Node.js needed) still fetches the pinned DuckDB extensions for offline use; see
+the note under [Run](#run).
+
+</TabItem>
+</Tabs>
 
 ## What `make tools` downloads
 
@@ -59,22 +100,6 @@ depend on what is installed on your machine:
 `make run`, `make test` and the other targets that need these files depend on `make tools`, so
 the download happens once.
 
-### Release build
-
-`make build` first runs `make ui` (`npm ci` and `npm run build` in `ui/`, output in `ui/dist`),
-then `cargo build --release --bin tiny-eye`. The build embeds `ui/dist` into the binary, so the
-binary is all you need to deploy. DuckDB must be a release build in every profile (its debug
-build aborts when release-built extensions free memory), which `Cargo.toml` already arranges.
-
-Without Node.js, build the binary alone:
-
-```bash
-cargo build --release --bin tiny-eye
-```
-
-If `ui/dist` does not exist, that binary serves a short page at `/` that points to the API
-instead of the web UI. Everything else works the same.
-
 ## Run
 
 ```bash
@@ -89,7 +114,7 @@ the DuckDB extensions from `.tools/duckdb_ext`. Relative paths in a config file 
 relative to the working directory, so start the binary from the repository root or use absolute
 paths.
 
-:::note
+:::note[Offline extensions]
 The default `duckdb.extension_dir` is empty. In that case DuckDB installs extensions from its
 extension host into `~/.duckdb/extensions` on first start, which needs network access. Point
 `duckdb.extension_dir` at a copy of `.tools/duckdb_ext` to run offline.
@@ -116,7 +141,7 @@ Values are parsed as YAML, so numbers and booleans keep their type. An unknown k
 start with an error naming it. The effective configuration is logged at start with secrets
 redacted. Every key is described in [Configuration](../deep-dive/configuration.md).
 
-:::tip
+:::tip[Editor support]
 Editors autocomplete and validate config files through the
 `# yaml-language-server: $schema=../schema/generated/config.schema.json` header at the top of
 `config/*.yaml`.
@@ -167,7 +192,7 @@ For AWS S3, leave `storage.s3.endpoint` empty, set `storage.s3.region`, and pass
 through `TINY_EYE__STORAGE__S3__ACCESS_KEY_ID` and `TINY_EYE__STORAGE__S3__SECRET_ACCESS_KEY`.
 Keep credentials out of config files. `make s3-down` stops MinIO and drops its volume.
 
-:::info
+:::info[Conditional writes required]
 tiny-eye writes flush envelopes with a create-only PUT (`If-None-Match`), so a retried flush can
 never overwrite a commit. Your S3-compatible store must support conditional writes. MinIO does,
 and `make bench-s3` measures the S3 path on it.

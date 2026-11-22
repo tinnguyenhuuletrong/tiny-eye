@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: The few ideas behind tiny-eye - signals and tables, TQS documents, panels and dashboards, freshness, and where things live in the repository.
+description: Signals and tables, TQS documents, panels and dashboards, and freshness, the few ideas behind tiny-eye.
 sidebar_position: 3
 ---
 

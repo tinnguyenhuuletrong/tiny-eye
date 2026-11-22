@@ -1,0 +1,271 @@
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1.5rem 5rem;
+}
+
+/* Hero: text left, video right; stacks on narrow screens. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 3rem;
+  align-items: center;
+  padding: 5rem 0 3rem;
+}
+
+.hero h1 {
+  font-size: clamp(2.1rem, 3.5vw, 3rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin-bottom: 1.25rem;
+}
+
+.lead {
+  color: var(--te-muted);
+  font-size: 1.125rem;
+  max-width: 36rem;
+  text-wrap: pretty;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.buttons :global(.button) {
+  font-weight: 500;
+}
+
+.heroMedia {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--te-surface);
+}
+
+/* Proof strip: four short claims, each linking to its evidence. */
+.proof {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+  margin: 0 0 5rem;
+  padding: 0;
+  border-top: 1px solid var(--te-border);
+  border-bottom: 1px solid var(--te-border);
+}
+
+.proof li + li {
+  border-left: 1px solid var(--te-border);
+}
+
+.proof a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 1.25rem 1.25rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.proof a:hover strong {
+  color: var(--ifm-color-primary);
+}
+
+.proof span {
+  color: var(--te-muted);
+  font-size: 0.925rem;
+}
+
+/* Feature rows, alternating sides. */
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 4rem;
+  align-items: center;
+  padding: 3.5rem 0;
+}
+
+.flip .featureText {
+  order: 2;
+}
+
+.eyebrow {
+  color: var(--ifm-color-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.featureText h2 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.featureText p:not(.eyebrow) {
+  color: var(--te-muted);
+}
+
+.featureText a {
+  font-weight: 500;
+}
+
+.featureMedia img {
+  width: 100%;
+  height: auto;
+}
+
+/* Terminal card for the MCP command: dark in both themes. */
+.terminal {
+  border: 1px solid var(--te-border);
+  border-radius: 8px;
+  box-shadow: var(--te-shadow);
+  background: #0a0a0a;
+  color: #ededed;
+  overflow: hidden;
+}
+
+.terminalBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid #27272a;
+}
+
+.terminalBar > span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3f3f46;
+}
+
+.terminalBar .copy {
+  margin-left: auto;
+}
+
+.terminal pre {
+  margin: 0;
+  padding: 1.25rem;
+  background: transparent;
+  color: inherit;
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminal code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.prompt {
+  color: #2dd4bf;
+  user-select: none;
+}
+
+.comment {
+  color: #a1a1aa;
+}
+
+.copy {
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  background: transparent;
+  color: #d4d4d8;
+  cursor: pointer;
+}
+
+.copy:hover {
+  border-color: #71717a;
+  color: #fff;
+}
+
+/* Closing call to action. */
+.cta {
+  display: grid;
+  gap: 1.25rem;
+  margin-top: 3.5rem;
+  padding: 2.5rem;
+  border: 1px solid var(--te-border);
+  border-radius: 12px;
+  background: var(--te-surface);
+}
+
+.cta h2 {
+  margin-bottom: 0.25rem;
+}
+
+.cta p {
+  color: var(--te-muted);
+  margin: 0;
+}
+
+.ctaCode {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #0a0a0a;
+  color: #ededed;
+  overflow-x: auto;
+}
+
+.ctaCode code {
+  flex: 1;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.ctaLinks {
+  display: flex;
+  gap: 1.5rem;
+  font-weight: 500;
+}
+
+@media (max-width: 996px) {
+  .hero,
+  .feature {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2rem;
+  }
+
+  .hero {
+    padding-top: 3rem;
+  }
+
+  .flip .featureText {
+    order: 0;
+  }
+
+  .proof {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .proof li:nth-child(3) {
+    border-left: none;
+  }
+
+  .proof li:nth-child(n + 3) {
+    border-top: 1px solid var(--te-border);
+  }
+
+  .cta {
+    padding: 1.5rem;
+  }
+}

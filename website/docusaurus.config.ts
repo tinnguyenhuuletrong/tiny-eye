@@ -4,9 +4,10 @@ import { themes as prismThemes } from "prism-react-renderer";
 
 // Derived from the environment so the site builds for any fork on GitHub Pages.
 // GITHUB_REPOSITORY is set by GitHub Actions ("owner/name"). Locally: BASE_URL=/ npm start
-const repo = process.env.GITHUB_REPOSITORY ?? "OWNER/tiny-eye";
+const repo = process.env.GITHUB_REPOSITORY ?? "tinnguyenhuuletrong/tiny-eye";
 const [owner, name] = repo.split("/");
 const repoUrl = `https://github.com/${repo}`;
+const baseUrl = process.env.BASE_URL ?? `/${name}/`;
 
 const config: Config = {
   title: "tiny-eye",
@@ -14,7 +15,7 @@ const config: Config = {
   favicon: "img/favicon.svg",
 
   url: `https://${owner}.github.io`,
-  baseUrl: process.env.BASE_URL ?? `/${name}/`,
+  baseUrl,
   organizationName: owner,
   projectName: name,
   trailingSlash: false,
@@ -27,7 +28,16 @@ const config: Config = {
       onBrokenMarkdownLinks: "throw",
     },
   },
-  themes: ["@docusaurus/theme-mermaid"],
+  // docs/assets holds the screenshots and the how-it-works video: the docs embed them relatively,
+  // the landing page serves them from the site root.
+  staticDirectories: ["static", "../docs/assets"],
+  themes: [
+    "@docusaurus/theme-mermaid",
+    [
+      "@easyops-cn/docusaurus-search-local",
+      { hashed: true, docsDir: "../docs", docsRouteBasePath: "/docs", indexBlog: false },
+    ],
+  ],
 
   i18n: { defaultLocale: "en", locales: ["en"] },
 
@@ -35,13 +45,13 @@ const config: Config = {
     [
       "classic",
       {
-        // The docs are the whole site: no blog, no separate landing page (docs/intro.md has slug: /).
+        // Landing page: src/pages/index.tsx. Docs live under /docs, no blog.
         docs: {
           path: "../docs",
-          routeBasePath: "/",
+          routeBasePath: "/docs",
           sidebarPath: "./sidebars.ts",
           editUrl: ({ docPath }) => `${repoUrl}/tree/main/docs/${docPath}`,
-          showLastUpdateTime: false,
+          showLastUpdateTime: true,
         },
         blog: false,
         theme: { customCss: "./src/css/custom.css" },
@@ -50,16 +60,24 @@ const config: Config = {
   ],
 
   themeConfig: {
+    image: "ui-dashboard.jpg",
     colorMode: { respectPrefersColorScheme: true },
+    announcementBar: {
+      id: "pre-release",
+      content: `tiny-eye is pre-release: single node, APIs may change. <a href="${baseUrl}docs/deep-dive/limitations-and-roadmap">Limitations</a>`,
+      backgroundColor: "var(--te-surface)",
+      textColor: "var(--ifm-font-color-base)",
+      isCloseable: true,
+    },
     navbar: {
       title: "tiny-eye",
       logo: { alt: "tiny-eye", src: "img/logo.svg" },
       items: [
-        { to: "/category/getting-started", label: "Getting started", position: "left" },
-        { to: "/category/examples", label: "Examples", position: "left" },
-        { to: "/category/deep-dive", label: "Deep dive", position: "left" },
-        { to: "/category/reference", label: "Reference", position: "left" },
-        { href: repoUrl, label: "GitHub", position: "right" },
+        { type: "doc", docId: "intro", label: "Docs", position: "left" },
+        { to: "/docs/category/guides", label: "Guides", position: "left" },
+        { to: "/docs/category/concepts", label: "Concepts", position: "left" },
+        { to: "/docs/category/reference", label: "Reference", position: "left" },
+        { href: repoUrl, position: "right", className: "navbar-github", "aria-label": "GitHub repository" },
       ],
     },
     footer: {
@@ -68,10 +86,10 @@ const config: Config = {
         {
           title: "Docs",
           items: [
-            { label: "Getting started", to: "/category/getting-started" },
-            { label: "Examples", to: "/category/examples" },
-            { label: "Deep dive", to: "/category/deep-dive" },
-            { label: "Reference", to: "/category/reference" },
+            { label: "Get started", to: "/docs/category/get-started" },
+            { label: "Guides", to: "/docs/category/guides" },
+            { label: "Concepts", to: "/docs/category/concepts" },
+            { label: "Reference", to: "/docs/category/reference" },
           ],
         },
         {
@@ -88,7 +106,7 @@ const config: Config = {
     },
     prism: {
       theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      darkTheme: prismThemes.vsDark,
       additionalLanguages: ["rust", "bash", "json", "yaml", "toml"],
     },
     mermaid: {

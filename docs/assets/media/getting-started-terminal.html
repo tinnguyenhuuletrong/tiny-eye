@@ -1,0 +1,141 @@
+<!doctype html>
+<!--
+  Terminal half of docs/assets/getting-started.{gif,mp4}: node docs/assets/media/record.mjs getting-started
+  The commands and outputs are the real ones from examples/demo (outputs trimmed).
+  render(t) is a pure function of time; open the file in a browser to watch it live.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tiny-eye: getting started</title>
+<style>
+  @font-face { font-family: Geist; src: url(../../../ui/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2) format("woff2"); font-weight: 100 900; }
+  @font-face { font-family: "Geist Mono"; src: url(../../../ui/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2) format("woff2"); font-weight: 100 900; }
+  :root { --bg: #0b0d12; --win: #10131a; --bar: #171b24; --line: #252b38; --ink: #e8eaf0; --muted: #8b93a5; --dim: #5a6275; --ok: #3ccf91; --accent: #5eead4; --key: #7dd3fc; --str: #fcd34d; }
+  html, body { margin: 0; background: radial-gradient(1200px 700px at 30% 0%, #141a26 0%, var(--bg) 60%); width: 1440px; height: 900px; overflow: hidden; font-family: Geist, -apple-system, sans-serif; color: var(--ink); }
+  header { position: absolute; left: 60px; top: 40px; }
+  header h1 { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: 16px; }
+  .win { position: absolute; top: 140px; height: 640px; background: var(--win); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 24px 60px rgba(0,0,0,.45); overflow: hidden; }
+  .bar { height: 38px; background: var(--bar); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; padding: 0 14px; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; background: #2b3140; display: inline-block; }
+  .bar span { margin-left: 10px; color: var(--muted); font-size: 13px; }
+  pre { margin: 0; padding: 16px 18px; font: 13px/1.6 "Geist Mono", ui-monospace, Menlo, monospace; white-space: pre; }
+  .p { color: var(--accent); } .d { color: var(--dim); } .o { color: #c9d1e3; } .g { color: var(--ok); } .b { color: var(--ink); font-weight: 600; }
+  .k { color: var(--key); } .s { color: var(--str); }
+  .cur { display: inline-block; width: 8px; height: 15px; background: var(--accent); vertical-align: -2px; }
+  #left { left: 60px; width: 660px; } #right { left: 740px; width: 640px; }
+  .cap { position: absolute; left: 60px; right: 60px; bottom: 36px; height: 44px; border-radius: 10px; background: #10131a; border: 1px solid #1f2430; display: flex; align-items: center; gap: 12px; padding: 0 18px; font-size: 16px; }
+  .cap b { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .cap em { margin-left: auto; font-style: normal; color: var(--dim); font: 13px "Geist Mono", monospace; }
+  #end { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(11,13,18,.82); opacity: 0; }
+  #end div { text-align: center; }
+  #end h2 { margin: 0; font-size: 44px; font-weight: 600; letter-spacing: -0.02em; }
+  #end p { margin: 14px 0 0; font: 22px "Geist Mono", monospace; color: var(--accent); }
+</style>
+</head>
+<body>
+<header><h1>tiny-eye in three commands</h1><p>a demo shop sends traces, metrics and logs over OpenTelemetry; k6 adds traffic</p></header>
+<div class="win" id="left"><div class="bar"><i></i><i></i><i></i><span>terminal 1 · tiny-eye</span></div><pre id="L"></pre></div>
+<div class="win" id="right"><div class="bar"><i></i><i></i><i></i><span>terminal 2 · demo shop and load</span></div><pre id="R"></pre></div>
+<div class="cap"><b></b><span id="cap"></span><em id="step"></em></div>
+<div id="end"><div><h2>Open the web UI</h2><p>http://127.0.0.1:7070</p></div></div>
+<script>
+const URL_ = "http://127.0.0.1:7070";
+// [time, kind, text, typing-duration]   kind: c = command (typed), anything else = css class of an output line
+const LEFT = [
+  [0.3, "c", "git clone https://github.com/tinnguyenhuuletrong/tiny-eye", 1.4],
+  [1.9, "d", "Cloning into 'tiny-eye'... done."],
+  [2.3, "c", "cd tiny-eye && make demo", 0.9],
+  [3.4, "d", "   Compiling duckdb v1.20001.0"],
+  [3.7, "d", "   Compiling engine v0.1.0"],
+  [4.0, "d", "   Compiling server v0.1.0"],
+  [4.3, "d", "    Finished `release` profile [optimized] target(s)"],
+  [4.7, "o", ""],
+  [4.7, "g", "  tiny-eye 0.1.0 is ready"],
+  [4.8, "o", ""],
+  [4.9, "o", `  <span class="b">Web UI</span>        ${URL_}`],
+  [5.0, "o", `  <span class="b">OTLP/HTTP</span>     OTEL_EXPORTER_OTLP_ENDPOINT=${URL_}`],
+  [5.1, "o", `  <span class="b">Remote-write</span>  ${URL_}/api/v1/write`],
+  [5.2, "o", `  <span class="b">Query (TQS)</span>   curl ${URL_}/api/v1/query -d @query.json`],
+  [5.3, "o", `  <span class="b">AI agents</span>     claude mcp add tiny-eye -- tiny-eye mcp \\`],
+  [5.3, "o", `                  --url ${URL_}`],
+];
+const RIGHT = [
+  [6.0, "c", "make demo-app", 0.6],
+  [6.8, "o", "shop-api listening on :3000"],
+  [6.9, "o", "payments listening on :3001"],
+  [7.4, "c", "make demo-load", 0.6],
+  [8.2, "k6", ""],
+  [10.0, "c", "curl -s localhost:7070/api/v1/query \\", 1.0],
+  [11.0, "c+", "  -d @examples/demo/queries/failed-checkout-traces.json \\", 1.0],
+  [12.0, "c+", "  | jq '.rows[0]'", 0.4],
+  [12.7, "o", "{"],
+  [12.75, "o", `  <span class="k">"root_span"</span>: <span class="s">"POST /checkout"</span>,`],
+  [12.8, "o", `  <span class="k">"services"</span>: <span class="s">"payments,shop-api"</span>,`],
+  [12.85, "o", `  <span class="k">"duration_ms"</span>: <span class="s">"2721.771"</span>,`],
+  [12.9, "o", `  <span class="k">"has_error"</span>: <span class="s">"true"</span>,`],
+  [12.95, "o", `  <span class="k">"span_count"</span>: <span class="s">"5"</span>,`],
+  [13.0, "o", `  <span class="k">"trace_id"</span>: <span class="s">"d3fddafbbf3bd11260ea701861e8ff7c"</span>`],
+  [13.05, "o", "}"],
+];
+const CAPS = [
+  [0, "1 · Clone and start tiny-eye: one binary, UI included"],
+  [6.0, "2 · Start the instrumented demo shop and put k6 load on it"],
+  [10.0, "3 · Ask a question in TQS: failed checkouts, slowest first"],
+  [14.2, "4 · Explore it in the browser"],
+];
+const L = 16;
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const pad = (n, w) => String(n).padStart(w, "0");
+function k6(t) {
+  const s = Math.max(0, t - 8.2) * 6 + 4;                 // fast-forwarded k6 clock
+  const mm = pad(Math.floor(s / 60), 2) + "m" + pad((s % 60).toFixed(1), 4) + "s";
+  const it = Math.floor(s * 48);
+  const pct = String(Math.floor(s / 180 * 100)).padStart(3);
+  return [
+    `<span class="d">  scenarios: browse 20 VUs, shop 20 VUs, 3m</span>`,
+    ``,
+    `running (${mm}), 07/40 VUs, ${it} complete and 0 interrupted iterations`,
+    `browse   [ ${pct}% ] 02/20 VUs  ${mm}/03m0s  40.00 iters/s`,
+    `shop     [ ${pct}% ] 05/20 VUs  ${mm}/03m0s   8.00 iters/s`,
+  ];
+}
+function pane(events, t) {
+  const out = [];
+  let typing = false;
+  for (const [at, kind, text, dur] of events) {
+    if (t < at) break;
+    if (kind === "c" || kind === "c+") {
+      const n = Math.min(text.length, Math.floor(((t - at) / dur) * text.length));
+      typing = n < text.length;
+      out.push((kind === "c" ? `<span class="p">$</span> ` : "") + esc(text.slice(0, n)) + (typing ? '<span class="cur"></span>' : ""));
+    } else if (kind === "k6") {
+      out.push(...k6(Math.min(t, 10.0)));
+    } else out.push(`<span class="${kind}">${text}</span>`);
+  }
+  if (!typing && out.length) out.push(`<span class="p">$</span> ${Math.floor(t * 2) % 2 ? "" : '<span class="cur"></span>'}`);
+  return out.join("\n");
+}
+function render(T) {
+  const t = ((T % L) + L) % L;
+  document.getElementById("L").innerHTML = pane(LEFT, t);
+  // terminal 1 keeps the server running: no prompt after the banner
+  if (t >= 4.7) document.getElementById("L").innerHTML = document.getElementById("L").innerHTML.replace(/\n<span class="p">\$<\/span> .*$/, "");
+  document.getElementById("R").innerHTML = pane(RIGHT, t);
+  let cap = CAPS[0];
+  for (const c of CAPS) if (t >= c[0]) cap = c;
+  document.getElementById("cap").textContent = cap[1];
+  document.getElementById("step").textContent = `${CAPS.indexOf(cap) + 1}/${CAPS.length}`;
+  document.getElementById("end").style.opacity = Math.max(0, Math.min(1, (t - 14.2) / 0.5));
+}
+window.render = render;
+window.LOOP_SECONDS = L;
+if (!new URLSearchParams(location.search).has("still")) {
+  const t0 = performance.now();
+  const tick = () => { render((performance.now() - t0) / 1000); requestAnimationFrame(tick); };
+  document.fonts.ready.then(tick);
+} else render(0);
+</script>
+</body>
+</html>

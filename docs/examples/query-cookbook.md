@@ -1,6 +1,6 @@
 ---
 title: Query cookbook
-description: Twenty TQS recipes for metrics, spans, logs and traces, each with its PromQL equivalent and a note on semantics.
+description: Twenty TQS recipes for metrics, spans, logs and traces, each next to its PromQL equivalent.
 sidebar_position: 2
 ---
 

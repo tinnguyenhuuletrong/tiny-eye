@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://github.com/OWNER/tiny-eye#readme
+    url: https://github.com/tinnguyenhuuletrong/tiny-eye#readme
     about: Read the docs (docs/ in the repository, published to GitHub Pages) before opening an issue.
   - name: Report a security vulnerability
-    url: https://github.com/OWNER/tiny-eye/security/advisories/new
+    url: https://github.com/tinnguyenhuuletrong/tiny-eye/security/advisories/new
     about: Please report vulnerabilities privately, not as a public issue (see SECURITY.md).

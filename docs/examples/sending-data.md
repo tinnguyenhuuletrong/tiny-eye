@@ -1,6 +1,6 @@
 ---
 title: Sending data
-description: Point OpenTelemetry SDKs, the OTel Collector, Prometheus, Grafana Alloy and Loki clients at tiny-eye, and learn how incoming data is mapped.
+description: Point OpenTelemetry SDKs, the OTel Collector, Prometheus, Grafana Alloy or a Loki client at tiny-eye, and see how data is mapped.
 sidebar_position: 3
 ---
 

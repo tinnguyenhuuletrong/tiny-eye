@@ -11,6 +11,7 @@ import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchLogRecordProcessor } from "@opentelemetry/sdk-logs";
 
 process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||= "http://127.0.0.1:7070";
+process.env.OTEL_METRIC_EXPORT_INTERVAL ||= "10000"; // the SDK default is 60 s
 
 const sdk = new NodeSDK({
   traceExporter: new OTLPTraceExporter(),
