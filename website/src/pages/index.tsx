@@ -10,8 +10,39 @@ const QUICKSTART = "/docs/getting-started/quickstart";
 const MCP_GUIDE = "/docs/examples/ai-agents-mcp";
 const MCP_ADD = "claude mcp add tiny-eye -- tiny-eye mcp --url http://127.0.0.1:7070";
 
+const WHY = "/docs/getting-started/why-tiny-eye";
+// "What makes it different": built items only, plus planned ones labelled as such (see the docs page).
+const DIFFERENT = [
+  {
+    title: "Files that outlive the engine",
+    text: "Plain Parquet and a DuckLake catalog in your bucket. Any Parquet reader opens them.",
+    anchor: "your-telemetry-is-open-parquet-you-own",
+  },
+  {
+    title: "Queryable once acknowledged",
+    text: "Queries read the lake and the in-memory hot tail together, each row counted once.",
+    anchor: "acknowledged-means-queryable",
+  },
+  {
+    title: "Rate panels in one pass",
+    text: "Running sums and ASOF joins: a 6 h, 2,000-series rate panel went from 3.7 s to 0.58 s.",
+    anchor: "panel-cost-grows-with-series-and-steps-not-window-size",
+  },
+  {
+    title: "Maintenance scoped to new data",
+    text: "Checkpoints apply only new flushes; compaction rewrites only hours with new files.",
+    anchor: "maintenance-only-rewrites-what-changed",
+  },
+  {
+    title: "Materialized panels",
+    text: "Panels kept up to date incrementally, so load cost does not grow with the range.",
+    anchor: "designed-not-built-yet-materialized-panels",
+    planned: true,
+  },
+];
+
 const PROOF = [
-  { title: "Prometheus-exact", text: "104/104 conformance cases", to: "/docs/deep-dive/evidence/tqs-coverage" },
+  { title: "Prometheus-exact", text: "105/105 conformance cases", to: "/docs/deep-dive/evidence/tqs-coverage" },
   { title: "Parquet you own", text: "on local disk or S3", to: "/docs/deep-dive/storage-format" },
   { title: "One binary", text: "UI, API, MCP built in", to: "/docs/deep-dive/architecture" },
   { title: "Query as data", text: "TQS JSON, validated", to: "/docs/deep-dive/tqs-reference" },
@@ -90,6 +121,26 @@ export default function Home(): ReactNode {
             </li>
           ))}
         </ul>
+
+        <section className={styles.different}>
+          <div className={styles.differentHead}>
+            <h2>What makes it different</h2>
+            <Link to={WHY}>Read the details and the evidence →</Link>
+          </div>
+          <ul>
+            {DIFFERENT.map((d) => (
+              <li key={d.title}>
+                <Link to={`${WHY}#${d.anchor}`}>
+                  <strong>
+                    {d.title}
+                    {d.planned && <span className={styles.planned}>Planned</span>}
+                  </strong>
+                  <span>{d.text}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
 
         <Feature
           eyebrow="Dashboards"

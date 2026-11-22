@@ -156,6 +156,7 @@ that shape:
 | Gauge | Same name, type gauge. |
 | Monotonic cumulative sum | `<name>_total` (unless the name already ends in `_total`), type counter. |
 | Non-monotonic sum | Same name, type gauge. |
+| Data point with the `NoRecordedValue` flag | A staleness marker, as remote-write's stale NaN: the series ends there instead of repeating its last value for 5 minutes. Send it when a series goes away (a process exits, a pod is deleted). |
 | Explicit-bucket histogram | `<name>_bucket{le="…"}` with cumulative counts (last bucket `le="+Inf"`), `<name>_count`, `<name>_sum`. |
 | Summary | `<name>{quantile="…"}`, `<name>_count`, `<name>_sum`. |
 | Delta temporality (sums, histograms) | Skipped. |

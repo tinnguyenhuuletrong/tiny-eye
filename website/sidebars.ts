@@ -17,6 +17,7 @@ const sidebars: SidebarsConfig = {
   docs: [
     group("Get started", "get-started", "Run tiny-eye on your machine, send it data, query it, and learn the few concepts behind it.", [
       doc("intro", "What is tiny-eye"),
+      doc("getting-started/why-tiny-eye", "What makes it different"),
       doc("getting-started/quickstart", "Quickstart"),
       doc("getting-started/installation", "Install and configure"),
       doc("getting-started/concepts", "Core concepts"),
@@ -31,6 +32,7 @@ const sidebars: SidebarsConfig = {
         doc("examples/query-cookbook", "Write queries (cookbook)"),
         doc("examples/dashboards-as-code", "Build dashboards as code"),
         doc("examples/ai-agents-mcp", "Connect an AI agent"),
+        doc("examples/assistant-machine", "Let an assistant run your machine"),
       ],
     ),
     group("Concepts", "concepts", "How tiny-eye works inside, for engineers: every mechanism, why it is built that way, and what proves it.", [

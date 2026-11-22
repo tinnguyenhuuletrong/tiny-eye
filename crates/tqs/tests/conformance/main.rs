@@ -1,6 +1,6 @@
 //! TQS conformance suite (SPEC §15.1): every metric case is compared point by point with
 //! Prometheus on the same samples, spans/logs cases with an independent Rust computation,
-//! validation cases with their expected problem code, and 15 mutants must each turn at
+//! validation cases with their expected problem code, and 16 mutants must each turn at
 //! least one case red. Seeded from the research suite; run with `make conformance`.
 
 #![allow(clippy::unwrap_used, clippy::type_complexity, clippy::enum_variant_names, dead_code)]

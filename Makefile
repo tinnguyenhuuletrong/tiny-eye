@@ -111,7 +111,7 @@ docker: ## Build the container image tiny-eye:dev (UI + binary + pinned DuckDB e
 	docker build -t tiny-eye:dev .
 
 ## ---- demo (examples/demo/README.md)
-.PHONY: demo demo-app demo-load
+.PHONY: demo demo-app demo-load machine machine-agent machine-hog
 demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo); UI at http://127.0.0.1:7070
 	./target/release/tiny-eye --config examples/demo/tiny-eye.yaml
 
@@ -121,6 +121,15 @@ demo-app: ## Run the demo shop: shop-api :3000 + payments :3001 (Node.js, OpenTe
 demo-load: ## k6 load against the demo shop via Docker (DURATION=10m for longer)
 	docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:3000 \
 	  -e DURATION=$(or $(DURATION),3m) grafana/k6:1.4.2 run - < examples/demo/k6/load.js
+
+machine: tools build ## Run tiny-eye for the machine example (examples/machine): UI at http://127.0.0.1:7070
+	./target/release/tiny-eye --config examples/machine/tiny-eye.yaml
+
+machine-agent: ## Send this computer's CPU, memory, network, disk and top processes to tiny-eye (Node.js, no deps)
+	node examples/machine/agent.mjs
+
+machine-hog: ## Start a runaway process that pins one CPU core (stop it with: pkill -f runaway-job)
+	sh examples/machine/runaway-job.sh
 
 ## ---- benchmark
 .PHONY: bench

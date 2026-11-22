@@ -238,8 +238,8 @@ For list kinds, `rows_total` is the number of rows returned. `truncated` is true
 
 | Evidence | Result |
 | --- | --- |
-| `make conformance` ([TQS coverage](evidence/tqs-coverage.md)) | 104/104 cases: M01 to M33 equal to Prometheus 3.16 point by point (1e-9 relative), D1 to D2 deliberate divergences, the real-board R cases, S1 to S6 and L1 to L5 and T1 to T3 against an independent Rust computation, V01 to V36 validation codes, A1 to A2 injection |
-| Mutation check (same suite) | 15/15 mutants (`MUTANTS` in `lib.rs`) each turn at least one case red. Eight rules are guarded by a single case, so do not remove those cases |
+| `make conformance` ([TQS coverage](evidence/tqs-coverage.md)) | 105/105 cases: M01 to M34 equal to Prometheus 3.16 point by point (1e-9 relative), D1 to D2 deliberate divergences, the real-board R cases, S1 to S6 and L1 to L5 and T1 to T3 against an independent Rust computation, V01 to V36 validation codes, A1 to A2 injection |
+| Mutation check (same suite) | 16/16 mutants (`MUTANTS` in `lib.rs`) each turn at least one case red. Eight rules are guarded by a single case, so do not remove those cases |
 | `make e2e` ([e2e](evidence/e2e.md)) | 20/20 panels equal to Prometheus on remote-written data spread across compacted files, an unapplied envelope and the hot tail |
 | PoC P5 `p5_tqs_on_lake_views` | The compiler runs unchanged on DuckLake-backed views |
 | `crates/engine/tests/node.rs` | Hot, flushed, committed and lake-only states give the same value. Spans, logs, waterfall, patterns and the catalog round-trip through the lake |
