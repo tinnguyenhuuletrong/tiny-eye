@@ -225,6 +225,49 @@ async fn abandoned_queries_return_their_connection() {
     }
 }
 
+/// A statement that runs for about a minute (2 DuckDB threads) unless interrupted; bounded, so
+/// a regression fails the test instead of hanging it (runtime shutdown waits for blocking jobs).
+const ENDLESS: &str = "SELECT count(*) FROM range(30000000000) a WHERE a.range % 7 = 3";
+
+/// Review finding: a query whose caller went away is interrupted at once, so it cannot run
+/// unbounded and hold its connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandoned_queries_are_interrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Node::open(config(dir.path(), &[("QUERY__WORKERS", "1"), ("QUERY__TIMEOUT", "1h")])).await.unwrap();
+    let n = node.clone();
+    let h = tokio::spawn(async move { n.with_conn(|c| Ok(c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))?)).await });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    h.abort(); // the HTTP client disconnects
+    let t = std::time::Instant::now();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(10), count(&node, "SELECT 1")).await;
+    assert_eq!(next.ok(), Some(1), "the only connection is free again");
+    assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+}
+
+/// Review finding: waiting for a connection and running share one `query.timeout`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pool_wait_and_run_share_one_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Node::open(config(dir.path(), &[("QUERY__WORKERS", "1"), ("QUERY__TIMEOUT", "1500ms")])).await.unwrap();
+    let n = node.clone();
+    let holder = tokio::spawn(async move {
+        n.with_conn(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            Ok(())
+        })
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let t = std::time::Instant::now();
+    let r = node.with_conn(|c| Ok(c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))?)).await;
+    let took = t.elapsed();
+    assert!(format!("{:#}", r.unwrap_err()).contains("exceeded the 1500 ms timeout"));
+    holder.await.unwrap().unwrap();
+    // ~1450 ms with one deadline; ~2450 ms if the run got a fresh 1500 ms after the wait.
+    assert!(took < std::time::Duration::from_millis(2000), "{took:?}");
+}
+
 /// Review findings 5 and 7: a retried request stores each sample once, and a refused request
 /// does not hide its series row from the retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

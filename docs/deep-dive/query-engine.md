@@ -56,14 +56,14 @@ The discovery endpoint (`Node::catalog`, `GET /api/v1/catalog`) does not open an
 
 `Node::open` clones `query.workers` (default 4) connections from the root connection and guards them with a semaphore of the same size. `with_conn(f)`:
 
-1. Acquires a semaphore permit (an owned permit) and pops a connection.
-2. Takes the connection's `interrupt_handle()`.
-3. Spawns a blocking job that wraps connection, pool and permit in a `Lease` and runs `f`.
-4. Awaits the job under `tokio::time::timeout(query.timeout)` (default 30 s). On timeout it calls `interrupt()`, so DuckDB aborts the running statement, and returns "query exceeded the N ms timeout".
+1. Sets one deadline, now + `query.timeout` (default 30 s), for the whole query. It acquires a semaphore permit (an owned permit) under that deadline and pops a connection. If no connection frees up in time, the query fails with "no query connection free within the N ms timeout".
+2. Puts the connection's `interrupt_handle()` in a slot shared by the caller and the job, and arms a drop guard (`InterruptOnDrop`) on the awaiting future.
+3. Spawns a blocking job that wraps connection, pool, slot and permit in a `Lease` and runs `f`.
+4. Awaits the job until the same deadline, so the job gets only the time the pool wait left over. On timeout it returns "query exceeded the N ms timeout". Dropping the future fires the guard, which calls `interrupt()`, so DuckDB aborts the running statement.
 
-`Lease::drop` runs `ROLLBACK`, because an interrupt or panic can leave a transaction open, and then pushes the connection back. The permit is released after that. The connection always comes back, whether the job finished, was interrupted, panicked, or was abandoned because the HTTP client went away (which drops the awaiting future, not the blocking job). Test `abandoned_queries_return_their_connection` aborts four queries on a two-connection pool and then runs four more (review finding 2).
+The guard also fires when the HTTP client goes away. A disconnect drops the awaiting future but not the blocking job, so without the guard an abandoned query would keep running with no limit and hold its connection. `Lease::drop` first takes the interrupt handle out of the slot, so an interrupt that arrives late can never hit the next query on that connection. Then it runs `ROLLBACK`, because an interrupt or panic can leave a transaction open, and pushes the connection back. The permit is released after that. The connection always comes back, whether the job finished, was interrupted or panicked. Tests: `abandoned_queries_return_their_connection` aborts four queries on a two-connection pool and then runs four more (review finding 2). `abandoned_queries_are_interrupted` abandons a statement that would run for minutes and gets the single connection back at once. `pool_wait_and_run_share_one_deadline` checks that a query that waited for the pool is interrupted at the deadline, not a full timeout later.
 
-Waiting for a permit happens before the timeout starts. Under saturation a request can wait longer than `query.timeout` before its statement begins. DuckDB's own parallelism per statement is `duckdb.threads`, shared by all connections of the database, within `duckdb.memory_limit`.
+Under saturation a request fails once `query.timeout` has passed since it arrived, whether it was waiting or running. DuckDB's own parallelism per statement is `duckdb.threads`, shared by all connections of the database, within `duckdb.memory_limit`.
 
 ## Validation
 

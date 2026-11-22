@@ -42,10 +42,10 @@ A **panel** is data plus presentation:
 | Field | Required | Meaning |
 | :--- | :--- | :--- |
 | `query` | yes | A complete TQS 3 document (see the [TQS reference](tqs-reference.md)), kept as JSON so the API returns exactly what the file says. |
-| `ui.display` | no | `timeseries`, `stat`, `table`, `bar`, `traces` or `logs`. Default: `timeseries` for timeseries queries, `table` otherwise. |
+| `ui.display` | no | `timeseries`, `stat`, `table`, `bar`, `traces` or `logs`. Default by query `kind`: `timeseries` → `timeseries`; `trace_search` and `trace` → `traces`; `log_search` and `log_patterns` → `logs`; `table` → `stat` when the result has one series, `table` when it has more (`displayOf` in `ui/src/tqs.ts`). |
 | `ui.unit` | no | Unit shown next to values, for example `req/s`, `s`, `%`, `bytes`. |
-| `ui.w` | no | Width in columns of a **12-column grid**, 1 to 12. Default 3 for `stat`, 6 otherwise. |
-| `ui.h` | no | Height in fixed-height rows, 1 to 8. Default 2 for `stat`, 4 otherwise. |
+| `ui.w` | no | Width in columns of a **12-column grid**, 1 to 12. Default 3 for `stat` (including a `kind: table` query without `display`, which is sized before its result is known), 6 otherwise. |
+| `ui.h` | no | Height in fixed-height rows, 1 to 8. Default 2 for `stat` (same rule), 4 otherwise. |
 
 Unknown keys anywhere in a dashboard are refused. Panels flow in list order over the grid; there are no x/y coordinates, so reordering the list moves panels.
 
@@ -76,16 +76,21 @@ The UI sends the **whole new state** of the dashboard: panels in order, each wit
 1. parses the body (an unknown key or wrong type gives a `schema` problem);
 2. checks that the body `id` equals the URL id (`id` problem otherwise);
 3. validates it exactly like a file loaded at start;
-4. picks the file: the YAML file in the directory that already holds this id, or `<id>.yaml` for a new dashboard;
-5. writes it **atomically**: to `<file>.yaml.tmp`, then renames over the target;
-6. replaces the dashboard in memory and serves it from then on.
+4. picks the file: the YAML file in the directory that already holds this id, or `<id>.yaml` for a new dashboard. If `<id>.yaml` exists but holds another dashboard or does not parse, the save is refused with an `id` problem and the file is left alone;
+5. checks that the text it is about to write parses back to exactly this dashboard;
+6. writes it **atomically and durably**: to a uniquely named hidden temp file (`.<file>.<ulid>.tmp`), fsync, rename over the target, fsync of the directory;
+7. replaces the dashboard in memory and serves it from then on.
 
-Any problem returns `400` with every problem and its path, and nothing is written. A write failure is reported as an `io` problem. The written file starts with a `yaml-language-server` schema header and a comment saying it was saved by tiny-eye.
+Steps 3 to 7 run under the dashboards write lock, so concurrent saves are serialised and memory always matches the files. Any problem returns `400` with every problem and its path, and nothing is written. A write failure returns `500` with the error as plain text.
+
+An existing file keeps its leading comment block (every line starting with `#` before the first YAML line, such as its `yaml-language-server` schema line). A new file gets a two-line header instead: a comment saying it was saved by tiny-eye, with the dashboard title, and a reminder of the panel fields. Every control or line-separator character in the title becomes a space, so the title cannot end the comment line. The new header has no `yaml-language-server` line, because the relative path to `schema/generated/dashboard.schema.json` depends on where the directory lives. Add one by hand if you want editor completion.
+
+Query keys are written in the order they were sent (serde_json's `preserve_order`), so a first save from the UI does not reorder a hand-written file.
 
 Saving needs the `admin` scope because it writes a file on the server. See [Security](security.md).
 
 :::note
-A save rewrites the file from the parsed model, so comments in a hand-written file are replaced by the generated header. Keep long explanations in panel `title` fields or in git history.
+A save rewrites the file from the parsed model. The leading comment block survives; comments anywhere else in a hand-written file (between panels, after a key) are lost. Put notes for readers in the leading block, or keep them in git history.
 :::
 
 ## Web UI
@@ -113,12 +118,12 @@ flowchart LR
 - **Stack.** Preact 11 with TypeScript, built by Vite, charts with uPlot, fonts Geist and Geist Mono. Sources in `ui/src/`: `api.ts` (typed client), `tqs.ts` (effective query, display inference, Explore builder), `board.tsx` (a dashboard page with layout editing and an Add panel drawer), `panels.tsx` (runs any panel's query and draws it per its `ui`), `charts.tsx` (time-series charts with a crosshair shared across the page), `format.ts`, `ui.tsx`.
 - **Typed API.** `npm run gen` regenerates `ui/src/api.gen.ts` from `api/openapi.yaml`; every build runs it, so the UI cannot drift from the contract. See [API and code generation](api-and-codegen.md).
 - **Build.** `make ui` (`npm ci` and `npm run build` in `ui/`) type-checks and writes `ui/dist`. The next `cargo build` embeds every file of `ui/dist` into the binary. A binary built without `ui/dist` serves a short page at `/` that explains how to build the UI, and the API keeps working.
-- **Serving.** Any path outside `/api/`, `/v1/` and `/loki/` belongs to the UI. A known file is served with its content type; files under `/assets/` (hashed names) get `Cache-Control: public, max-age=31536000, immutable`, others `no-cache`. Every other UI path returns `index.html` (SPA fallback), so client-side routes survive a reload. An unknown path under `/api/`, `/v1/` or `/loki/` returns `404` with a pointer to `/openapi.yaml`.
+- **Serving.** Any path outside `/api/`, `/v1/` and `/loki/` belongs to the UI. A known file is served with its content type; files under `/assets/` (hashed names) get `Cache-Control: public, max-age=31536000, immutable`, others `no-cache`. A missing file under `/assets/` returns `404`, so a stale tab fails visibly instead of loading HTML as a script. Every other UI path returns `index.html` (SPA fallback), so client-side routes survive a reload. An unknown path under `/api/`, `/v1/` or `/loki/` returns `404` with a pointer to `/openapi.yaml`.
 - **Development.** `npm run dev` serves the UI on port 5173 and proxies `/api` and `/openapi.yaml` to a running node (`TINY_EYE_URL`, default `http://127.0.0.1:7070`).
 
 ### Auth in the UI
 
-The UI's static files are public: they hold no data. Every data call goes to the API and needs a bearer token when auth is enabled. The client sends `Authorization: Bearer <token>` with the token kept in the browser's `localStorage` (key `tiny-eye-token`); on a `401` it raises an event so the app can ask for a token. Viewing needs a `query` token; saving a dashboard needs an `admin` token.
+The UI's static files are public: they hold no data. Every data call goes to the API and needs a bearer token when auth is enabled. The client sends `Authorization: Bearer <token>` with the token kept in the browser's `localStorage` (key `tiny-eye-token`); on a `401` it raises an event so the app can ask for a token. Viewing needs a `query` token; saving a dashboard needs an `admin` token, and a known token without it gets `403`.
 
 ### Prototype
 

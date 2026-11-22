@@ -60,6 +60,7 @@ Fields that do not apply to a kind are ignored, not refused. For example, `queri
 Rules:
 
 - `from` must be before `to` (`time_order`). A `table` document may have `from` equal to `to`.
+- Every time point must resolve to between 1970 and 9999 (epoch ms `0` to `253402300799999`), and every duration (`step`, `window`, `offset`, `-<duration>`) is at most that many milliseconds. Larger values are refused (`time`, `step`, `window`, `offset`) rather than overflowing.
 - A `timeseries` document may have at most **11,000 points per series**: `(to - from) / step + 1 <= 11000`. More gives `too_many_points` at `time.step`.
 - `timeseries` evaluates at `from, from + step, ...` up to `to`.
 - `table` evaluates once, at `to`. Metrics functions read their window ending at `to`; spans and logs aggregate over `(from, to]`.
@@ -76,7 +77,8 @@ The JSON Schema allows `step` to be a variable (`"$name"`, `"$__interval"`). The
 - Variable names match `^[a-z][a-z0-9_]{0,31}$`, may not start with `__`, and values are at most 256 characters. Otherwise: `var`.
 - Where substitution happens: metric matcher values (`match[].value`), spans/logs query condition values, and `fn.window`.
 - An undefined `"$name"` in a matcher value or condition value gives `var`; in `fn.window` it gives `window`.
-- A regex matcher whose value is a variable is checked as the regex the variable resolves to.
+- A regex matcher or condition (`=~`, `!~`) whose value is a variable is checked as the regex the variable resolves to.
+- To write a literal value that starts with `$`, double the dollar: `"$$HOME"` is the text `$HOME`, not a variable. Only a leading `$` is special (`"a$b"` is literal). The rule is one function (`resolve_var`), so it applies wherever variables do: matcher values, condition values and `fn.window`. `search.trace` values are never resolved, so `$` there is always literal.
 
 Built-in variables (not definable by users):
 
@@ -158,7 +160,7 @@ The point at time `t` reads samples in the left-open window `(t - offset - windo
 - the first bucket interpolates from 0 (or returns its bound when the bound is `<= 0`).
 
 :::note Implementation detail
-For `histogram_quantile` the per-bucket aggregation is always a sum; `agg.op` is still required when `agg` is present but does not change the result. `then` is ignored on a `histogram_quantile` query.
+For `histogram_quantile` the per-bucket aggregation is always a sum; `agg.op` is still required when `agg` is present but does not change the result. `then` is refused on a `histogram_quantile` query (`then`); `having` without `then` filters the quantiles.
 :::
 
 ### Aggregation: `agg`
@@ -182,7 +184,7 @@ For `histogram_quantile` the per-bucket aggregation is always a sum; `agg.op` is
 "agg": { "op": "max", "by": ["queue", "workspace"] }, "then": { "op": "sum", "by": ["queue"] }
 ```
 
-Rules (`then`): `agg` must be present; `then.op` is required and is not `absent`; `then.without` is not allowed; when `agg.by` is set, every `then.by` label must be in it.
+Rules (`then`): `agg` must be present; `then.op` is required and is not `absent`; `then.without` is not allowed; when `agg.by` is set, every `then.by` label must be in it; not on `histogram_quantile`.
 
 ### Derived labels: `derive`
 
@@ -326,7 +328,7 @@ func  = abs | round | least | greatest | clamp | coalesce ;
 - **`time`** is the evaluation time in **seconds** (PromQL `time()`). `time` is reserved: no query or formula may be named `time`.
 - **Division by zero yields no value** (a gap), not `+Inf` or `NaN` (spec question Q2). Any formula point whose value is missing is dropped.
 - **`join: "inner"`** (default): a point exists where every vector operand has one, matched on step and key.
-- **`join: "outer"`**: the union of the vector operands' points; a missing operand is NULL, so the expression decides. `coalesce(a, b * 0, c * 0)` is PromQL `a or b * 0 or c * 0`.
+- **`join: "outer"`**: the union of the vector operands' points; a missing operand is NULL, so the expression decides. `coalesce(a, b * 0, c * 0)` is PromQL `a or b * 0 or c * 0`. When every operand is a scalar, the steps are the union of all operands' steps, keyed like the first operand present at that step, so `coalesce(errors, total * 0)` is `0` where `errors` has no point yet (conformance case M34).
 - A `fill: "zero"` operand counts as `0` where it has no point, with either join.
 - A query that aggregates to **one series** is a scalar: it broadcasts to every key at the same step.
 - Vector operands must be grouped the same way (same `by` set, or the same `without` set). Two ungrouped queries (no `agg`) cannot be combined with each other, because different queries never share label sets reliably. Otherwise: `formula_join`.
@@ -454,7 +456,7 @@ Each problem has `code`, `path` (JSON path of the offending value, such as `quer
 | `schema` | The JSON does not parse, a field has the wrong type, a field is unknown, an enum value is unknown (`kind`, `fn.op`, `agg.op`, `measure.op`, `fill`), or a required field is missing. Only the first shape error is reported, at path `$`. Dashboards also use it for an empty title or an invalid `ui.display`, `ui.w` or `ui.h`. |
 | `version` | `tqs` is not `"3"`. |
 | `id` | The document `id` does not match `^[a-z][a-z0-9_-]{0,31}$`. Dashboards: the dashboard id is invalid, or the body id differs from the URL id on save. |
-| `time` | `time` is missing for a kind other than `trace`, or `from`/`to` is not epoch ms, `"now"` or `"-<duration>"`. |
+| `time` | `time` is missing for a kind other than `trace`, or `from`/`to` is not epoch ms, `"now"` or `"-<duration>"`, or resolves outside 1970 to 9999. |
 | `time_order` | `from` is not before `to` (`table` allows equal). |
 | `step` | `step` is not a positive literal duration. |
 | `too_many_points` | A `timeseries` would have more than 11,000 points per series. |
@@ -466,12 +468,12 @@ Each problem has `code`, `path` (JSON path of the offending value, such as `quer
 | `fn` | A metrics query has no `fn`, or a spans/logs query has `fn` or `match`. |
 | `window` | A window is missing (any function but `last`), invalid, an undefined variable, or set on `last`. |
 | `q` | `histogram_quantile` or `quantile` without `q` in `[0, 1]`, or `q` on any other function or measure. |
-| `label` | A matcher label, `derive.label` or `derive.from` is not a label name, or an `agg.by`/`agg.without` entry cannot be grouped on. |
+| `label` | A matcher label, `derive.label` or `derive.from` is not a label name, an `agg.by`/`agg.without` entry cannot be grouped on, or a label is listed twice in `agg.by`, `agg.without` or `then.by`. |
 | `op` | A matcher op is not `=`, `!=`, `=~` or `!~`. |
 | `regex` | A regex is longer than 256 characters or is not valid RE2 (matchers, conditions, `derive.regex`). |
 | `derive` | A `derive.replacement` contains a backslash, a named group reference, or is longer than 256 characters. |
 | `agg` | `by` and `without` together; metrics `agg` without `op`; `absent` with `by`, `without` or `then`; spans/logs `agg` with `op` or `without`. |
-| `then` | `then` without `agg`, without `op`, with `without` or `absent`, or a `then.by` label not in `agg.by`; `then` or `derive` on a spans/logs query. |
+| `then` | `then` without `agg`, without `op`, with `without` or `absent`, a `then.by` label not in `agg.by`, or `then` on `histogram_quantile`; `then` or `derive` on a spans/logs query. |
 | `having` | `having.op` is not one of the six comparisons, or the value is not finite. |
 | `offset` | `offset` is not a positive literal duration. |
 | `measure` | A spans/logs query has no `measure`; a metrics query has one; `quantile`/`avg`/`min`/`max`/`sum` without `field: "duration_ms"` or on logs; any other `field`. |

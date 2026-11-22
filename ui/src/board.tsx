@@ -56,7 +56,7 @@ export function DashboardPage({ id, range, tick, catalog, onSaved }: { id: strin
         {shown.panels.length === 0 && <Empty>This dashboard has no panels yet. Use “+ Add panel”.</Empty>}
       </section>
       {adding && <AddPanel catalog={catalog} range={range} vars={vars} onClose={() => setAdding(false)}
-        onAdd={async p => { if (await save({ ...saved, panels: [...saved.panels, p] }, `Added “${p.query.title ?? p.query.id}” to ${saved.id}.yaml`)) setAdding(false); }} />}
+        onAdd={async p => { const base = draft ?? saved; if (await save({ ...base, panels: [...base.panels, p] }, `Added “${p.query.title ?? p.query.id}” to ${saved.id}.yaml`)) setAdding(false); }} />}
     </>
   );
 }
@@ -66,13 +66,17 @@ function Board({ dash, editing, onChange, vars, range, tick, onAdd }: { dash: Da
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dropAt, setDropAt] = useState<{ i: number; before: boolean } | null>(null);
   const panels = dash.panels;
-  const update = (ps: Panel[]) => onChange({ ...dash, panels: ps });
+  // Pointer handlers outlive the render that created them: read the current state through a ref.
+  const current = useRef(dash);
+  current.current = dash;
+  const update = (ps: Panel[]) => onChange({ ...current.current, panels: ps });
   const move = (from: number, to: number) => { const ps = [...panels]; const [p] = ps.splice(from, 1); ps.splice(Math.max(0, Math.min(ps.length, to)), 0, p); update(ps); };
   const resize = (i: number, w: number, h: number) => {
     w = Math.max(1, Math.min(12, w)); h = Math.max(1, Math.min(8, h));
-    const cur = sizeOf(panels[i]);
+    const ps = current.current.panels;
+    const cur = sizeOf(ps[i]);
     if (cur.w === w && cur.h === h) return;
-    update(panels.map((p, k) => (k === i ? { ...p, ui: { ...p.ui, w, h } } : p)));
+    update(ps.map((p, k) => (k === i ? { ...p, ui: { ...p.ui, w, h } } : p)));
   };
   const startResize = (i: number, e: PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -81,8 +85,8 @@ function Board({ dash, editing, onChange, vars, range, tick, onAdd }: { dash: Da
     const handle = e.target as HTMLElement;
     handle.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => resize(i, Math.round((ev.clientX - cell.left + gap) / (colW + gap)), Math.round((ev.clientY - cell.top + gap) / (rowH + gap)));
-    const onUp = () => { handle.removeEventListener("pointermove", onMove); handle.removeEventListener("pointerup", onUp); };
-    handle.addEventListener("pointermove", onMove); handle.addEventListener("pointerup", onUp);
+    const onUp = () => { handle.removeEventListener("pointermove", onMove); handle.removeEventListener("pointerup", onUp); handle.removeEventListener("pointercancel", onUp); };
+    handle.addEventListener("pointermove", onMove); handle.addEventListener("pointerup", onUp); handle.addEventListener("pointercancel", onUp);
   };
   return (
     <div class={`grid board${editing ? " editing" : ""}`} ref={grid}>
@@ -142,10 +146,11 @@ function AddPanel({ catalog, range, vars, onClose, onAdd }: { catalog?: Catalog;
   const [display, setDisplay] = useState<"timeseries" | "bar" | "stat">("timeseries");
   const [w, setW] = useState(6);
   const [pid] = useState(() => `panel-${Date.now().toString(36)}`);
-  const m = metrics.find(x => x.name === b.metric);
+  // The catalog may arrive after the drawer opened: fall back to the first metric until one is picked.
+  const m = metrics.find(x => x.name === (b.metric || metrics[0]?.name));
   const fns = m ? FNS[m.type] : [];
   const fn = fns.some(([f]) => f === b.fn) ? b.fn : fns[0]?.[0] ?? "last";
-  const builder = { ...b, fn, by: b.by.filter(l => m?.labels.includes(l)) };
+  const builder = { ...b, metric: m?.name ?? "", fn, by: b.by.filter(l => m?.labels.includes(l)) };
   const auto = m ? `${fn} ${m.name}${builder.by.length ? " by " + builder.by.join(", ") : ""}` : "";
   const panel: Panel | null = m ? {
     query: { ...docFor(builder, m, range, display === "stat" ? "table" : "timeseries"), id: pid, title: title.trim() || auto } as Panel["query"],

@@ -31,21 +31,24 @@ export function ExplorePage({ catalog, range, dashboards, onSaved }: { catalog?:
 
   // TQS editor: validate as you type, run when valid, sync back to the builder when it can show it.
   const timer = useRef<number | undefined>(undefined);
+  const seq = useRef(0);
   const onText = (t: string) => {
     setText(t);
     clearTimeout(timer.current);
+    const mine = ++seq.current;
     timer.current = window.setTimeout(async () => {
       let parsed: Tqs;
       try { parsed = JSON.parse(t); } catch (e) { setProblems([{ code: "schema", path: "$", message: `not JSON: ${(e as Error).message}` }]); return; }
       try {
         const v = await api.validate(t);
+        if (mine !== seq.current) return; // a newer edit is being validated
         setProblems(v.problems);
         if (v.valid) {
           setTextDoc(parsed);
           const r = builderFor(parsed as Tqs & Record<string, unknown>, metrics);
           if (r.state) { setB(r.state); setReason(null); } else setReason(r.reason ?? null);
         }
-      } catch (e) { setProblems(e instanceof ApiError ? e.problems : [{ code: "error", path: "$", message: String(e) }]); }
+      } catch (e) { if (mine === seq.current) setProblems(e instanceof ApiError ? e.problems : [{ code: "error", path: "$", message: String(e) }]); }
     }, 300);
   };
   const switchMode = (next: "builder" | "tqs") => {
@@ -164,7 +167,7 @@ function Preview({ doc, viz, setViz, unit }: { doc: Tqs; viz: Viz; setViz: (v: V
       <div class="body" style={{ minHeight: "320px", display: "flex", flexDirection: "column" }}>
         {res.error ? <Problems error={res.error} /> : !res.data ? <Empty>Running…</Empty> : !series.length ? <Empty>No data in this range.</Empty>
           : viz === "stat" ? <div class="stat-grid">{series.map((s, i) => <div class="stat-card"><div class="hint mono">{s.key || s.output}</div><div class="num big">{fmtVal(s.points[s.points.length - 1]?.[1] as number, unit)}</div><i style={{ background: seriesColor(i) }} /></div>)}</div>
-          : <div style={{ height: "300px", display: "flex", flexDirection: "column" }}><TimeChart lines={lines} unit={unit} bars={viz === "bar"} sync="explore" /></div>}
+          : <div style={{ height: "300px", display: "flex", flexDirection: "column" }}><TimeChart key={[...hidden].join(",")} lines={lines} unit={unit} bars={viz === "bar"} sync="explore" /></div>}
       </div>
       {series.length > 0 && <div class="ex-table scroll-x"><table>
         <thead><tr><th>Series</th><th class="r">Last</th><th class="r">Min</th><th class="r">Max</th><th class="r">Avg</th></tr></thead>

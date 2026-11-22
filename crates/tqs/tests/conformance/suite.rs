@@ -314,6 +314,26 @@ fn metric_cases() -> Vec<MetricCase> {
             "pct",
             "sum by (provider) (rate(margince_ai_calls_total{outcome=\"error\"}[5m])) / sum by (provider) (rate(margince_ai_calls_total[5m])) * 100",
         ),
+        c(
+            "M34",
+            "outer join of scalars: steps missing in the first operand",
+            ts(
+                json!([
+                    // openai/draft errors start late (fixtures): `e` is empty for the first steps.
+                    mq(
+                        "e",
+                        CALLS,
+                        json!([m("provider", "=", "openai"), m("task", "=", "draft"), m("outcome", "=", "error")]),
+                        rate5.clone(),
+                        json!({"op": "sum"})
+                    ),
+                    mq("all", CALLS, json!([m("provider", "=", "openai"), m("task", "=", "draft")]), rate5.clone(), json!({"op": "sum"}))
+                ]),
+                json!([{"name": "errs", "expr": "coalesce(e, all * 0)", "join": "outer"}]),
+            ),
+            "errs",
+            "sum(rate(margince_ai_calls_total{provider=\"openai\",task=\"draft\",outcome=\"error\"}[5m])) or sum(rate(margince_ai_calls_total{provider=\"openai\",task=\"draft\"}[5m])) * 0",
+        ),
     ];
     v.retain(|c| !c.promql.is_empty());
     v

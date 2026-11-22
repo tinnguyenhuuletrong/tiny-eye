@@ -216,7 +216,13 @@ fn main() {
 /// Embeds the built web UI (`ui/dist`, from `make ui`) as a static table; empty when not built.
 fn ui_assets() {
     let dist = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/dist"));
-    println!("cargo:rerun-if-changed={}", dist.display());
+    // Watching a path that does not exist reruns this script on every build, so without a built
+    // UI watch `ui/` instead (Cargo scans a directory recursively): `make ui` creating `ui/dist`
+    // still triggers the re-embedding.
+    let watch = if dist.exists() { dist.to_path_buf() } else { dist.with_file_name("") };
+    if watch.exists() {
+        println!("cargo:rerun-if-changed={}", watch.display());
+    }
     fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, std::path::PathBuf)>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.flatten() {

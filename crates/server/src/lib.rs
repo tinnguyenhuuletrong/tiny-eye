@@ -83,14 +83,18 @@ pub async fn auth(State(st): State<AppState>, req: Request, next: Next) -> Respo
     if need == Scope::Public {
         return next.run(req).await;
     }
-    let granted = req
+    let scopes = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
-        .and_then(|t| st.tokens.get(t))
-        .is_some_and(|scopes| scopes.contains(&need) || scopes.contains(&Scope::Admin));
-    if granted { next.run(req).await } else { (StatusCode::UNAUTHORIZED, "missing or insufficient bearer token\n").into_response() }
+        .and_then(|t| st.tokens.get(t));
+    match scopes {
+        None => (StatusCode::UNAUTHORIZED, "missing or unknown bearer token\n").into_response(),
+        Some(s) if s.contains(&need) || s.contains(&Scope::Admin) => next.run(req).await,
+        // A known token without the scope: asking again with the same token will not help.
+        Some(_) => (StatusCode::FORBIDDEN, format!("this token lacks the {need:?} scope\n").to_lowercase()).into_response(),
+    }
 }
 
 /// The full HTTP app: generated routes + auth + body limit.

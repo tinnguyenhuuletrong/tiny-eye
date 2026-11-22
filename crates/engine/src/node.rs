@@ -137,21 +137,41 @@ fn with_seq(batch: &RecordBatch, seq: i64) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), cols)?)
 }
 
+/// The interrupt handle of a leased connection, shared by the lease and its caller. Whoever
+/// takes it first wins: the caller to interrupt, the lease to disarm it before the connection
+/// goes back to the pool (so a late interrupt can never hit the next query on it).
+type InterruptSlot = Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>;
+
 /// A pooled query connection on loan; returned to the pool on drop (then the permit is freed).
 struct Lease {
     conn: Option<Connection>,
     pool: Arc<Mutex<Vec<Connection>>>,
+    interrupt: InterruptSlot,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
+        if let Ok(mut h) = self.interrupt.lock() {
+            h.take();
+        }
         if let Some(c) = self.conn.take() {
             // A panic or interrupt can leave a transaction open; the next user must start clean.
             let _ = c.execute_batch("ROLLBACK");
             if let Ok(mut p) = self.pool.lock() {
                 p.push(c);
             }
+        }
+    }
+}
+
+/// See [`Node::with_conn`].
+struct InterruptOnDrop(InterruptSlot);
+
+impl Drop for InterruptOnDrop {
+    fn drop(&mut self) {
+        if let Some(h) = self.0.lock().ok().and_then(|mut h| h.take()) {
+            h.interrupt();
         }
     }
 }
@@ -776,30 +796,30 @@ impl Node {
 
     // ------------------------------------------------------------------ query
 
-    /// Run `f` on a pooled query connection on a blocking thread, with the query timeout.
+    /// Run `f` on a pooled query connection on a blocking thread, within the query timeout.
     pub async fn with_conn<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> Result<T> + Send + 'static) -> Result<T> {
         let timeout = self.cfg.query.timeout.0;
-        // Waiting for a free connection counts against the query timeout too.
-        let permit = tokio::time::timeout(timeout, self.pool_gate.clone().acquire_owned())
+        // One deadline per query: waiting for a free connection and running share it.
+        let deadline = tokio::time::Instant::now() + timeout;
+        let permit = tokio::time::timeout_at(deadline, self.pool_gate.clone().acquire_owned())
             .await
             .map_err(|_| anyhow!("no query connection free within the {} ms timeout", timeout.as_millis()))??;
         let conn = self.pool.lock().map_err(|_| anyhow!("pool lock poisoned"))?.pop().context("query pool empty")?;
-        let interrupt = conn.interrupt_handle();
+        let interrupt: InterruptSlot = Arc::new(Mutex::new(Some(conn.interrupt_handle())));
+        // Interrupts the query when this future ends before the job: past the deadline, or
+        // dropped because the HTTP client went away. The blocking job itself cannot be
+        // cancelled, so without this an abandoned query would run unbounded on its connection.
+        let _guard = InterruptOnDrop(interrupt.clone());
         let pool = self.pool.clone();
         // The blocking job owns the connection and the permit and gives both back when it ends,
-        // however it ends: finished, interrupted by the timeout, panicked, or abandoned because
-        // the HTTP client went away (which drops this future, not the blocking job).
+        // however it ends: finished, interrupted, or panicked.
         let job = tokio::task::spawn_blocking(move || {
-            let lease = Lease { conn: Some(conn), pool, _permit: permit };
+            let lease = Lease { conn: Some(conn), pool, interrupt, _permit: permit };
             f(lease.conn.as_ref().expect("leased connection"))
         });
-
-        match tokio::time::timeout(timeout, job).await {
+        match tokio::time::timeout_at(deadline, job).await {
             Ok(joined) => joined.map_err(|e| anyhow!("query task failed: {e}"))?,
-            Err(_) => {
-                interrupt.interrupt();
-                bail!("query exceeded the {} ms timeout", timeout.as_millis());
-            }
+            Err(_) => bail!("query exceeded the {} ms timeout", timeout.as_millis()),
         }
     }
 

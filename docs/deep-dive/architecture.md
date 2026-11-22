@@ -23,6 +23,8 @@ Shutdown is graceful. On SIGINT or SIGTERM the HTTP server stops accepting reque
 
 ## Data flow
 
+![Animated overview: ingest into the WAL and hot tail, flush to Parquet, commit into DuckLake, then a TQS query compiled to SQL over the lake plus the hot tail](../assets/how-it-works.gif)
+
 ```mermaid
 flowchart LR
   C["Clients: remote-write, OTLP, Loki"] --> R["receivers.rs: decode to rows"]

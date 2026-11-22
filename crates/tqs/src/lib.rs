@@ -18,6 +18,9 @@ pub const MAX_QUERIES: usize = 10;
 pub const MAX_POINTS: i64 = 11_000;
 pub const MAX_REGEX_LEN: usize = 256;
 pub const LOOKBACK_MS: i64 = 300_000;
+/// Bound of every time point (epoch ms, 9999-12-31) and duration: sums and differences of a few
+/// of them, as the compiler forms (`from - offset - window`), can never overflow an i64.
+pub const MAX_MS: i64 = 253_402_300_799_999;
 
 /// Mutation switch for the conformance suite only (`--features mutants`): each named mutant
 /// breaks one semantic rule on purpose, to prove the suite turns red when that rule is wrong.
@@ -49,6 +52,7 @@ pub const MUTANTS: &[(&str, &str)] = &[
     ("derive_ignored", "derive (label_replace) rules are not applied"),
     ("then_ignored", "the second aggregation (then) is skipped"),
     ("outer_as_inner", "formula join outer behaves like inner"),
+    ("outer_scalar_base_first", "formula join outer of scalars keeps only the first operand's steps"),
     ("top_query_ignored", "top.query does not restrict the output"),
     ("absent_unlabelled", "absent() returns no labels"),
     ("time_in_ms", "formula `time` is in milliseconds, not seconds"),
@@ -80,7 +84,8 @@ pub struct Tqs {
     pub limit: Option<u32>,
     /// Dashboard variables. A string value `"$name"` anywhere a value is accepted is
     /// replaced by `vars.name` and bound as a parameter. Built-ins: `$__range`
-    /// (to − from) and `$__interval` (step), usable as windows.
+    /// (to − from) and `$__interval` (step), usable as windows. `"$$text"` is the literal
+    /// `"$text"` (see [`resolve_var`]).
     #[serde(default)]
     pub vars: std::collections::BTreeMap<String, String>,
 }
@@ -357,7 +362,7 @@ pub const SPAN_GROUP_FIELDS: &[&str] = &["service_name", "span_name", "span_kind
 pub const LOG_GROUP_FIELDS: &[&str] = &["service_name", "severity_number", "severity_text", "pattern_hash", "region"];
 pub const TRACE_FIELDS: &[&str] = &["duration_ms", "has_error", "span_count", "root.service_name", "root.span_name", "service"];
 
-/// Parses `30s`, `5m`, `2h`, `7d` (positive whole units only).
+/// Parses `30s`, `5m`, `2h`, `7d` (positive whole units only, at most [`MAX_MS`]).
 pub fn parse_duration_ms(s: &str) -> Option<i64> {
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit())?);
     let n: i64 = num.parse().ok()?;
@@ -370,29 +375,41 @@ pub fn parse_duration_ms(s: &str) -> Option<i64> {
         "w" => 604_800_000,
         _ => return None,
     };
-    (n > 0).then_some(n * mult)
+    n.checked_mul(mult).filter(|ms| n > 0 && *ms <= MAX_MS)
 }
 
 /// `${name}` / `$name` group references are refused in derive replacements (only `$1`..`$9`).
 static NAMED_GROUP_REF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$(\{|[a-zA-Z_])").expect("static regex"));
 static VAR_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9_]{0,31}$").expect("static regex"));
 
-/// `"$name"` → the variable's value; anything else unchanged. Built-ins resolve to durations.
+/// `"$name"` → the variable's value; `"$$text"` → the literal `"$text"`; anything else
+/// unchanged. Built-ins resolve to durations. `None`: an undefined variable.
 pub fn resolve_var(v: &str, vars: &std::collections::BTreeMap<String, String>, r: &Resolved) -> Option<String> {
     match v.strip_prefix('$') {
         None => Some(v.to_string()),
+        Some(lit) if lit.starts_with('$') => Some(lit.to_string()),
         Some("__range") => Some(format!("{}ms", r.to_ms - r.from_ms)),
         Some("__interval") => Some(format!("{}ms", r.step_ms)),
         Some(name) => vars.get(name).cloned(),
     }
 }
 
-fn resolve_point(p: &TimePoint, now_ms: i64) -> Option<i64> {
-    match p {
-        TimePoint::EpochMs(ms) => Some(*ms),
-        TimePoint::Text(t) if t == "now" => Some(now_ms),
-        TimePoint::Text(t) => t.strip_prefix('-').and_then(parse_duration_ms).map(|d| now_ms - d),
+/// A condition with a string `"$name"` value resolved (see [`resolve_var`]); `None`: an
+/// undefined variable. Applies to spans/logs conditions, not to `search.trace`.
+pub fn resolve_cond(c: &Cond, vars: &std::collections::BTreeMap<String, String>, r: &Resolved) -> Option<Cond> {
+    match c.value.as_str() {
+        Some(v) => Some(Cond { value: serde_json::Value::String(resolve_var(v, vars, r)?), ..c.clone() }),
+        None => Some(c.clone()),
     }
+}
+
+fn resolve_point(p: &TimePoint, now_ms: i64) -> Option<i64> {
+    let ms = match p {
+        TimePoint::EpochMs(ms) => *ms,
+        TimePoint::Text(t) if t == "now" => now_ms,
+        TimePoint::Text(t) => now_ms.checked_sub(t.strip_prefix('-').and_then(parse_duration_ms)?)?,
+    };
+    (0..=MAX_MS).contains(&ms).then_some(ms)
 }
 
 impl Tqs {
@@ -437,7 +454,11 @@ impl Tqs {
                     }
                 }
                 (Some(_), Some(_)) => push("time_order", "time".into(), "from must be before to".into()),
-                _ => push("time", "time".into(), "from/to must be epoch ms, \"now\" or \"-<duration>\" like \"-2h\"".into()),
+                _ => push(
+                    "time",
+                    "time".into(),
+                    "from/to must be epoch ms, \"now\" or \"-<duration>\" like \"-2h\", between 1970 and 9999".into(),
+                ),
             },
             _ => {}
         }
@@ -459,10 +480,7 @@ impl Tqs {
                     _ => (s.logs.iter().collect(), LOG_FIELDS, "search.logs"),
                 };
                 for (i, c) in conds.iter().enumerate() {
-                    validate_cond(c, fields, &format!("{path}[{i}]"), &mut push);
-                    if c.value.as_str().is_some_and(|v| resolve_var(v, &self.vars, &resolved).is_none()) {
-                        push("var", format!("{path}[{i}].value"), format!("{} is not a defined variable", c.value));
-                    }
+                    validate_var_cond(c, fields, &format!("{path}[{i}]"), &self.vars, &resolved, &mut push);
                 }
                 let orders: &[&str] = if self.kind == Kind::TraceSearch { &["duration_desc", "start_desc"] } else { &["desc", "asc"] };
                 if let Some(o) = s.order.as_deref().filter(|o| !orders.contains(o)) {
@@ -578,6 +596,17 @@ impl Tqs {
                     if q.agg.is_none() || t.op.is_none() || t.without.is_some() || t.op == Some(AggOp::Absent) {
                         push("then", format!("{path}.then"), "then needs agg first, an op (not absent) and optionally by".into());
                     }
+                    if f.op == FnOp::HistogramQuantile {
+                        push(
+                            "then",
+                            format!("{path}.then"),
+                            "then does not apply after histogram_quantile: group the quantile with agg.by (having works without then)"
+                                .into(),
+                        );
+                    }
+                    if let Some(l) = duplicate(t.by.iter().flatten()) {
+                        push("label", format!("{path}.then.by"), format!("{l:?} is listed twice"));
+                    }
                     let first: Vec<String> = q.agg.as_ref().and_then(|a| a.by.clone()).unwrap_or_default();
                     for l in t.by.iter().flatten() {
                         if q.agg.as_ref().is_some_and(|a| a.by.is_some()) && !first.contains(l) {
@@ -592,10 +621,7 @@ impl Tqs {
                     _ => unreachable!("one source checked above"),
                 };
                 for (j, c) in conds.iter().enumerate() {
-                    validate_cond(c, fields, &format!("{path}.{key}[{j}]"), push);
-                    if c.value.as_str().is_some_and(|v| !var_ok(v)) {
-                        push("var", format!("{path}.{key}[{j}].value"), format!("{} is not a defined variable", c.value));
-                    }
+                    validate_var_cond(c, fields, &format!("{path}.{key}[{j}]"), &self.vars, r, push);
                 }
                 if q.then.is_some() || !q.derive.is_empty() {
                     push("then", path.clone(), "then and derive are for metrics".into());
@@ -636,6 +662,9 @@ impl Tqs {
                 }
                 if q.metric.is_some() && a.op.is_none() {
                     push("agg", format!("{path}.agg.op"), "agg.op is required for metrics".into());
+                }
+                if let Some(l) = duplicate(a.by.iter().flatten()).or_else(|| duplicate(a.without.iter().flatten())) {
+                    push("label", format!("{path}.agg"), format!("{l:?} is listed twice"));
                 }
                 for l in a.by.iter().chain(a.without.iter()).flatten() {
                     let ok = if q.metric.is_some() {
@@ -703,11 +732,33 @@ impl Tqs {
     }
 }
 
+/// The first value that occurs twice.
+fn duplicate<'a>(it: impl Iterator<Item = &'a String>) -> Option<&'a String> {
+    let mut seen = HashSet::new();
+    it.into_iter().find(|l| !seen.insert(*l))
+}
+
 fn validate_regex(r: &str, path: &str, push: &mut impl FnMut(&'static str, String, String)) {
     if r.len() > MAX_REGEX_LEN {
         push("regex", path.into(), format!("regex longer than {MAX_REGEX_LEN}"));
     } else if let Err(e) = Regex::new(r) {
         push("regex", path.into(), format!("invalid RE2 regex: {e}"));
+    }
+}
+
+/// A spans/logs condition, checked as the value its `$var` resolves to (a regex variable is
+/// checked as the regex it holds).
+fn validate_var_cond(
+    c: &Cond,
+    fields: &[&str],
+    path: &str,
+    vars: &std::collections::BTreeMap<String, String>,
+    r: &Resolved,
+    push: &mut impl FnMut(&'static str, String, String),
+) {
+    match resolve_cond(c, vars, r) {
+        Some(resolved) => validate_cond(&resolved, fields, path, push),
+        None => push("var", format!("{path}.value"), format!("{} is not a defined variable", c.value)),
     }
 }
 
@@ -800,5 +851,102 @@ mod tests {
             !codes(doc(serde_json::json!({"field": "root.span_name", "op": "contains", "value": "x"}))).is_empty(),
             "contains never matched a root field"
         );
+    }
+
+    fn metric_doc(q: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"}, "queries": [q]})
+    }
+
+    #[test]
+    fn condition_regex_variables_are_checked_resolved() {
+        let doc = |re: &str| {
+            serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"}, "vars": {"re": re},
+                "queries": [{"name": "a", "logs": [{"field": "body", "op": "=~", "value": "$re"}], "measure": {"op": "count"}}]})
+        };
+        assert_eq!(codes(doc("(unclosed")), vec!["regex"], "a query condition");
+        assert!(codes(doc("time.*")).is_empty());
+        let search = serde_json::json!({"tqs": "3", "id": "x", "kind": "log_search", "time": {"from": "-1h"}, "vars": {"re": "(unclosed"},
+            "search": {"logs": [{"field": "body", "op": "!~", "value": "$re"}]}});
+        assert_eq!(codes(search), vec!["regex"], "a search condition");
+    }
+
+    #[test]
+    fn double_dollar_is_a_literal_dollar() {
+        let r = Resolved { from_ms: 0, to_ms: 60_000, step_ms: 1_000 };
+        let vars = [("home".to_string(), "/root".to_string())].into();
+        assert_eq!(resolve_var("$home", &vars, &r).as_deref(), Some("/root"));
+        assert_eq!(resolve_var("$$home", &vars, &r).as_deref(), Some("$home"));
+        assert_eq!(resolve_var("$$", &vars, &r).as_deref(), Some("$"));
+        assert_eq!(resolve_var("a$b", &vars, &r).as_deref(), Some("a$b"), "only a leading $ is special");
+        // Undefined `$HOME` is refused; `$$HOME` searches for the text `$HOME`.
+        let search = |v: &str| {
+            serde_json::json!({"tqs": "3", "id": "x", "kind": "log_search", "time": {"from": "-1h"},
+            "search": {"logs": [{"field": "body", "op": "contains", "value": v}]}})
+        };
+        assert_eq!(codes(search("$HOME")), vec!["var"]);
+        assert!(codes(search("$$HOME")).is_empty());
+        let doc = metric_doc(
+            serde_json::json!({"name": "a", "metric": "m", "fn": {"op": "last"}, "match": [{"label": "l", "op": "=", "value": "$$x"}]}),
+        );
+        let t = Tqs::parse(&doc.to_string()).expect("parses");
+        let r = t.validate(1_000_000_000).expect("valid");
+        let (_, params) = compile::timeseries_sql(&t, &r).expect("compiles");
+        assert!(params.contains(&duckdb::types::Value::Text("$x".into())), "bound as the literal $x: {params:?}");
+    }
+
+    #[test]
+    fn huge_times_and_durations_are_problems_not_panics() {
+        let base = |time: serde_json::Value, window: &str| {
+            serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": time,
+                "queries": [{"name": "a", "metric": "m", "fn": {"op": "rate", "window": window}}]})
+        };
+        let ok = serde_json::json!({"from": "-1h"});
+        assert_eq!(codes(base(serde_json::json!({"from": i64::MIN, "to": i64::MAX}), "5m")), vec!["time"]);
+        assert_eq!(codes(base(serde_json::json!({"from": "-106751991167301d"}), "5m")), vec!["time"], "n * unit overflows");
+        assert_eq!(codes(base(serde_json::json!({"from": "-9223372036854775807ms"}), "5m")), vec!["time"]);
+        assert_eq!(
+            codes(base(serde_json::json!({"from": "-1h", "step": "18014398509481984w"}), "5m")),
+            vec!["step"],
+            "n * unit wraps to 0"
+        );
+        assert_eq!(codes(base(serde_json::json!({"from": "-1h", "step": "9223372036854775807ms"}), "5m")), vec!["step"]);
+        assert_eq!(codes(base(ok.clone(), "106751991167301d")), vec!["window"]);
+        assert_eq!(parse_duration_ms("18014398509481984w"), None);
+        assert_eq!(parse_duration_ms("7d"), Some(604_800_000));
+        let mut off = base(ok, "5m");
+        off["queries"][0]["offset"] = serde_json::json!("106751991167301d");
+        assert_eq!(codes(off), vec!["offset"]);
+    }
+
+    #[test]
+    fn duplicate_group_labels_are_refused() {
+        let q = |agg: serde_json::Value| metric_doc(serde_json::json!({"name": "a", "metric": "m", "fn": {"op": "last"}, "agg": agg}));
+        assert_eq!(codes(q(serde_json::json!({"op": "sum", "by": ["job", "job"]}))), vec!["label"]);
+        assert_eq!(codes(q(serde_json::json!({"op": "sum", "without": ["job", "job"]}))), vec!["label"]);
+        assert!(codes(q(serde_json::json!({"op": "sum", "by": ["job", "instance"]}))).is_empty());
+        let mut then = q(serde_json::json!({"op": "sum", "by": ["job", "instance"]}));
+        then["queries"][0]["then"] = serde_json::json!({"op": "max", "by": ["job", "job"]});
+        assert_eq!(codes(then), vec!["label"]);
+        let events = serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"},
+            "queries": [{"name": "a", "spans": [], "measure": {"op": "count"}, "agg": {"by": ["service_name", "service_name"]}}]});
+        assert_eq!(codes(events), vec!["label"]);
+    }
+
+    #[test]
+    fn then_is_refused_after_histogram_quantile() {
+        let hist = |then: Option<serde_json::Value>, having: Option<serde_json::Value>| {
+            let mut q = serde_json::json!({"name": "a", "metric": "lat", "fn": {"op": "histogram_quantile", "q": 0.99, "window": "5m"},
+                "agg": {"op": "sum", "by": ["service"]}});
+            if let Some(t) = then {
+                q["then"] = t;
+            }
+            if let Some(h) = having {
+                q["having"] = h;
+            }
+            metric_doc(q)
+        };
+        assert_eq!(codes(hist(Some(serde_json::json!({"op": "max"})), None)), vec!["then"]);
+        assert_eq!(codes(hist(Some(serde_json::json!({"op": "max"})), Some(serde_json::json!({"op": ">", "value": 1.0})))), vec!["then"]);
+        assert!(codes(hist(None, Some(serde_json::json!({"op": ">", "value": 1.0})))).is_empty(), "having alone filters the quantiles");
     }
 }

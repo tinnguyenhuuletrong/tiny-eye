@@ -142,7 +142,7 @@ pub struct Coordinator {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Query {
-    /// A query running longer is interrupted.
+    /// A query taking longer from arrival (waiting for a free connection included) is interrupted.
     pub timeout: Dur,
     /// DuckDB connections serving queries in parallel.
     pub workers: usize,

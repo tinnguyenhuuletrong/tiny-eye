@@ -21,8 +21,12 @@ ENV CARGO_BUILD_JOBS=${BUILD_JOBS} CARGO_PROFILE_RELEASE_DEBUG=false
 WORKDIR /src
 COPY . .
 COPY --from=ui /src/ui/dist ./ui/dist
+# One target cache per architecture (amd64 and arm64 build in parallel). Touching build.rs makes
+# it run again, so the UI just copied in is embedded even when the cached target looks fresh.
+ARG TARGETARCH
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target,id=tiny-eye-target \
+    --mount=type=cache,target=/src/target,id=tiny-eye-target-${TARGETARCH} \
+    touch crates/server/build.rs && \
     cargo build --release --bin tiny-eye && cp target/release/tiny-eye /tiny-eye
 
 # DuckDB extensions pinned to the bundled DuckDB version (D12: shipped, never auto-installed).

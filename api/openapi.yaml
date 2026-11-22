@@ -16,6 +16,10 @@ info:
   description: |
     Blob-first observability engine: metrics, logs and traces stored as Parquet in object
     storage, tracked by DuckLake, queried with TQS 3 (a closed JSON query schema).
+
+    When auth is enabled, every operation that is not `x-scope: public` needs
+    `Authorization: Bearer <token>`. A missing or unknown token gets 401; a known token that
+    lacks the operation's scope (and is not `admin`) gets 403.
   license: { name: Apache-2.0 }
 
 paths:
@@ -113,8 +117,9 @@ paths:
       description: |
         The UI sends the whole new state of the dashboard (panels in order, each with its `query`
         and `ui`). The engine validates it like a file loaded at start (shape, id, every panel's
-        TQS), writes it to the dashboards directory as `<id>.yaml` (replacing the file that holds
-        this id), and serves it from then on. The YAML file stays the source of truth: commit it.
+        TQS), writes it to the dashboards directory (into the file that holds this id, or a new
+        `<id>.yaml`, refused if that name holds another dashboard), and serves it from then on.
+        The YAML file stays the source of truth: commit it.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -123,6 +128,7 @@ paths:
       responses:
         "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/Dashboard" } } } }
         "400": { description: invalid dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/ProblemResponse" } } } }
+        "500": { description: writing the file failed, content: { text/plain: { schema: { type: string } } } }
 
   /api/v1/write:
     post:
@@ -326,10 +332,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        display: { type: string, enum: [timeseries, stat, table, bar, traces, logs], description: "how to draw the result (default: timeseries for timeseries queries, table otherwise)" }
+        display: { type: string, enum: [timeseries, stat, table, bar, traces, logs], description: "how to draw the result (default by query kind: timeseries → timeseries, trace_search and trace → traces, log_search and log_patterns → logs, table → stat for one series, table for more)" }
         unit: { type: string, description: "unit shown next to values, e.g. req/s, s, %" }
-        w: { type: integer, minimum: 1, maximum: 12, description: "width in columns of the 12-column grid (default: 3 for stat, 6 otherwise)" }
-        h: { type: integer, minimum: 1, maximum: 8, description: "height in rows (default: 2 for stat, 4 otherwise)" }
+        w: { type: integer, minimum: 1, maximum: 12, description: "width in columns of the 12-column grid (default: 3 for stat or a table-kind query without display, 6 otherwise)" }
+        h: { type: integer, minimum: 1, maximum: 8, description: "height in rows (default: 2 for stat or a table-kind query without display, 4 otherwise)" }
 
     LokiPush:
       x-codegen: false   # decoded by receivers::loki_push
@@ -363,7 +369,7 @@ components:
         title: { type: string }
         kind: { type: string, enum: [timeseries, table, trace_search, trace, log_search, log_patterns] }
         time: { $ref: "#/components/schemas/TqsTime" }
-        vars: { type: object, additionalProperties: { type: string, maxLength: 256 } }
+        vars: { type: object, additionalProperties: { type: string, maxLength: 256 }, description: 'variables: a string "$name" in a matcher value, condition value or fn.window is replaced by vars.name; "$$text" is the literal "$text"' }
         queries: { type: array, minItems: 1, maxItems: 10, items: { $ref: "#/components/schemas/TqsQuery" } }
         formulas: { type: array, items: { $ref: "#/components/schemas/TqsFormula" } }
         top: { $ref: "#/components/schemas/TqsTop" }

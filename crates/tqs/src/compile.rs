@@ -409,12 +409,12 @@ fn ms_of(col: &str) -> String {
 
 fn cond_sql_vars(sql: &mut Sql, c: &Cond, signal: &str, vars: &Vars, r: Option<&Resolved>) -> String {
     let resolved;
-    let c = match (c.value.as_str(), r) {
-        (Some(v), Some(r)) if v.starts_with('$') => {
-            resolved = Cond { value: serde_json::Value::String(resolve_var(v, vars, r).unwrap_or_default()), ..c.clone() };
+    let c = match r {
+        Some(r) => {
+            resolved = resolve_cond(c, vars, r).unwrap_or_else(|| c.clone()); // validated: defined
             &resolved
         }
-        _ => c,
+        None => c,
     };
     let attrs = if signal == "spans" { "span_attrs" } else { "log_attrs" };
     // `exists` binds the key itself; compute (and bind) the column only for the other operators,
@@ -611,6 +611,7 @@ pub fn timeseries_sql(tqs: &Tqs, r: &Resolved) -> Result<(String, Vec<Value>)> {
         let strict: Vec<&&String> = vectors.iter().filter(|n| !fill_of(n)).collect();
         let filled: Vec<&&String> = vectors.iter().filter(|n| fill_of(n)).collect();
         let scalars: Vec<&String> = refs.iter().filter(|n| shape_of_ref(n) == Shape::Scalar).collect();
+        let scalar_union = outer && scalars.len() > 1 && !mutant("outer_scalar_base_first");
         let mut from = String::new();
         if let Some(first) = strict.first() {
             from.push_str(&format!("(SELECT t, key, value AS v_{first} FROM {}) base", src(first)));
@@ -620,13 +621,19 @@ pub fn timeseries_sql(tqs: &Tqs, r: &Resolved) -> Result<(String, Vec<Value>)> {
         } else if !filled.is_empty() {
             let keys: Vec<String> = filled.iter().map(|n| format!("SELECT t, key FROM {}", src(n))).collect();
             from.push_str(&format!("({}) base", keys.join(" UNION ")));
+        } else if scalar_union {
+            // Outer join of scalars: every step any operand has, keyed like the first operand
+            // present (`coalesce(errors, total * 0)` keeps the steps where only `total` exists).
+            let steps: Vec<String> = scalars.iter().enumerate().map(|(i, n)| format!("SELECT t, key, {i} AS o FROM {}", src(n))).collect();
+            from.push_str(&format!("(SELECT t, arg_min(key, o) AS key FROM ({}) GROUP BY t) base", steps.join(" UNION ALL ")));
         } else if let Some(first) = scalars.first() {
             from.push_str(&format!("(SELECT t, key, value AS v_{first} FROM {}) base", src(first)));
         }
         for n in &filled {
             from.push_str(&format!(" LEFT JOIN (SELECT t, key, value AS v_{n} FROM {}) USING (t, key)", src(n)));
         }
-        for n in scalars.iter().skip(if strict.is_empty() && filled.is_empty() { 1 } else { 0 }) {
+        let scalar_base = strict.is_empty() && filled.is_empty() && !scalar_union;
+        for n in scalars.iter().skip(if scalar_base { 1 } else { 0 }) {
             let join = if fill_of(n) { "LEFT JOIN" } else { "JOIN" };
             from.push_str(&format!(" {join} (SELECT t, value AS v_{n} FROM {}) USING (t)", src(n)));
         }

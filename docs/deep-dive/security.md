@@ -15,7 +15,7 @@ When at least one token is configured, every request is checked by the `auth` mi
 1. The required scope is looked up in the generated `OPERATIONS` table, which comes from `x-scope` on each operation in `api/openapi.yaml`.
 2. `public` operations pass without a token.
 3. Otherwise the request needs `Authorization: Bearer <token>`, and the token must grant the required scope or `admin`.
-4. Anything else gets `401` with the plain-text body `missing or insufficient bearer token`.
+4. A missing or unknown token gets `401` (`missing or unknown bearer token`). A known token that lacks the scope gets `403` (`this token lacks the <scope> scope`).
 
 | Scope | Operations |
 | :--- | :--- |
@@ -28,7 +28,7 @@ Rules:
 
 - **`admin` grants every scope.**
 - **HEAD needs GET's scope**, since GET handlers serve HEAD.
-- **Unknown API routes fail closed.** A method or path that is not in the spec needs `admin`, so a non-admin token gets `401` rather than a hint about which routes exist. Paths under `/api/`, `/v1/` and `/loki/` are never treated as UI paths.
+- **Unknown API routes fail closed.** A method or path that is not in the spec needs `admin`, so a non-admin token gets `403` for every such route, with no hint about which routes exist. Paths under `/api/`, `/v1/` and `/loki/` are never treated as UI paths.
 - **UI static files are public.** A GET for any other path (the UI shell, `/assets/*`, client-side routes) needs no token: those files hold no data. Every data call the UI makes goes to the API and needs a token. A non-GET request to a UI path needs `admin`.
 - `/metrics` is public. It exposes counters (rows, flushes, queries) but no telemetry content; restrict it at the proxy if that matters to you.
 
@@ -82,7 +82,7 @@ Dashboard ids double as file names; they must match `^[a-z0-9][a-z0-9_-]{0,63}$`
 | `in` values | 100 | TQS validator |
 | Formula | 512 characters, 128 nodes | formula parser |
 | Variable value | 256 characters | TQS validator |
-| Query time | `query.timeout` (default 30 s), then the query is interrupted | node |
+| Query time | `query.timeout` (default 30 s) from arrival, pool wait included; then the query is interrupted (also when the client disconnects) | node |
 | Parallel queries | `query.workers` (default 4) connections | node |
 | Ingest buffer | `ingest.arena_limit` (default 1 GB), then `429` | node |
 | DuckDB memory | `duckdb.memory_limit` (default 4 GB) | DuckDB |
@@ -116,13 +116,15 @@ Any `</data` inside the body is escaped as `<\/data`, so telemetry cannot close 
 | Situation | Status | Body |
 | :--- | :--- | :--- |
 | Invalid TQS document or dashboard | 400 | JSON `{"valid": false, "problems": [{code, path, message}]}` |
+| Missing asset under `/assets/` | 404 | `no such asset` |
 | Undecodable ingest payload | 400 | plain text with the decoder's error |
-| Missing or insufficient token | 401 | `missing or insufficient bearer token` |
+| Missing or unknown token | 401 | `missing or unknown bearer token` |
+| Known token without the operation's scope | 403 | `this token lacks the <scope> scope` |
 | Unknown dashboard | 404 | `unknown dashboard` |
 | Unknown API route (with sufficient token) | 404 | `no such API route; see GET /openapi.yaml` |
 | Body over 64 MB | 413 | from the HTTP layer |
 | Ingest arena full | 429 | `ingest arena full; retry later` |
-| Query failure or timeout, internal error | 500 | plain text with the engine's error message |
+| Query failure or timeout, dashboard write failure, internal error | 500 | plain text with the engine's error message |
 
 :::warning
 `500` responses carry the engine's error text, which can include file paths and SQL details. That helps locally; put a reverse proxy in front before exposing the API.

@@ -132,40 +132,92 @@ pub fn load(dir: &str) -> Result<Vec<Dashboard>> {
     Ok(out)
 }
 
-/// Validate and write `d` to `dir`: into the file that already holds this id, or `<id>.yaml`.
-/// The write is atomic (temp file + rename). Returns the path written.
-pub fn save(dir: &str, d: &Dashboard) -> Result<PathBuf, Vec<Problem>> {
+/// Why a save was refused.
+#[derive(Debug)]
+pub enum SaveError {
+    /// The state does not validate, or its file name is taken by another file: every problem.
+    Invalid(Vec<Problem>),
+    /// Writing the file failed.
+    Io(anyhow::Error),
+}
+
+/// Validate and write `d` to `dir`: into the file that already holds this id, or `<id>.yaml`
+/// (refused if that name holds another dashboard or does not parse). The write is atomic and
+/// durable: a uniquely named temp file, fsync, rename, fsync of the directory. Callers that save
+/// concurrently must serialise (the server holds its dashboards write lock). Returns the path.
+pub fn save(dir: &str, d: &Dashboard) -> Result<PathBuf, SaveError> {
     let problems = d.validate(crate::node::now_ms());
     if !problems.is_empty() {
-        return Err(problems);
+        return Err(SaveError::Invalid(problems));
     }
-    let io = |e: std::io::Error| vec![Problem { code: "io", path: "$".into(), message: e.to_string() }];
     let dir = Path::new(dir);
-    std::fs::create_dir_all(dir).map_err(io)?;
-    let existing = yaml_files(dir)
-        .into_iter()
-        .find(|p| std::fs::read_to_string(p).ok().and_then(|t| serde_norway::from_str::<Dashboard>(&t).ok()).is_some_and(|x| x.id == d.id));
-    let body = serde_norway::to_string(d).map_err(|e| vec![Problem { code: "io", path: "$".into(), message: e.to_string() }])?;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display())).map_err(SaveError::Io)?;
+    let mut existing = None;
+    for p in yaml_files(dir) {
+        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        if serde_norway::from_str::<Dashboard>(&text).is_ok_and(|x| x.id == d.id) {
+            existing = Some((p, text));
+            break;
+        }
+    }
     // Keep the file's own leading comment block (its `$schema` line, notes for readers); a new
     // file gets a short header.
-    let header = existing
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|t| t.lines().take_while(|l| l.starts_with('#')).map(|l| format!("{l}\n")).collect::<String>())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "# Dashboard \"{}\": saved by tiny-eye. This file is the source of truth; commit it.\n\
-                 # Each panel: `ui` (display, unit, w of 12 columns, h rows) and `query` (TQS).\n",
-                d.title.replace('\n', " ")
-            )
-        });
-    let path = existing.unwrap_or_else(|| dir.join(format!("{}.yaml", d.id)));
+    let (path, header) = match existing {
+        Some((p, text)) => {
+            let h: String = text.lines().take_while(|l| l.starts_with('#')).map(|l| format!("{l}\n")).collect();
+            (p, h)
+        }
+        None => {
+            let p = dir.join(format!("{}.yaml", d.id));
+            if p.exists() {
+                return Err(SaveError::Invalid(vec![Problem {
+                    code: "id",
+                    path: "id".into(),
+                    message: format!("{} exists but holds another dashboard or does not parse; pick another id", p.display()),
+                }]));
+            }
+            (p, new_header(&d.title))
+        }
+    };
+    let body = serde_norway::to_string(d).context("serialising the dashboard").map_err(SaveError::Io)?;
     let text = format!("{header}{body}");
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, text).map_err(io)?;
-    std::fs::rename(&tmp, &path).map_err(io)?;
+    // Safety net: never replace a file with one that would not load back as this dashboard.
+    if serde_norway::from_str::<Dashboard>(&text).ok().as_ref() != Some(d) {
+        return Err(SaveError::Io(anyhow::anyhow!("the YAML written for {:?} would not load back as the same dashboard", d.id)));
+    }
+    write_atomic(dir, &path, &text).with_context(|| format!("writing {}", path.display())).map_err(SaveError::Io)?;
     Ok(path)
+}
+
+/// The comment header of a new file. The title is the only user text in it: every control and
+/// line-separator character becomes a space, so it cannot end the comment line.
+fn new_header(title: &str) -> String {
+    let title: String = title.chars().map(|c| if c.is_control() || c == '\u{2028}' || c == '\u{2029}' { ' ' } else { c }).collect();
+    format!(
+        "# Dashboard \"{title}\": saved by tiny-eye. This file is the source of truth; commit it.\n\
+         # Each panel: `ui` (display, unit, w of 12 columns, h rows) and `query` (TQS).\n"
+    )
+}
+
+fn write_atomic(dir: &Path, path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    let tmp = dir.join(format!(".{}.{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("dashboard"), ulid::Ulid::new()));
+    let written = (|| -> Result<()> {
+        let mut f = std::fs::File::create_new(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written?;
+    // Make the rename itself durable (best effort: not every platform can open a directory).
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -217,10 +269,61 @@ panels:
         bad.id = "../etc".into();
         bad.panels[0].ui.as_mut().expect("ui").w = Some(13);
         bad.panels[0].query["queries"][0]["fn"]["window"] = serde_json::json!("soon");
-        let codes: Vec<(String, &str)> = save(d, &bad).expect_err("invalid").into_iter().map(|p| (p.path, p.code)).collect();
+        let Err(SaveError::Invalid(ps)) = save(d, &bad) else { panic!("invalid") };
+        let codes: Vec<(String, &str)> = ps.into_iter().map(|p| (p.path, p.code)).collect();
         assert!(codes.contains(&("id".into(), "id")), "{codes:?}");
         assert!(codes.contains(&("panels[0].ui.w".into(), "schema")), "{codes:?}");
         assert!(codes.iter().any(|(p, c)| p.starts_with("panels[0].query.") && *c == "window"), "{codes:?}");
         assert!(yaml_files(dir.path()).is_empty(), "nothing written");
+    }
+
+    #[test]
+    fn a_title_cannot_break_out_of_the_header_comment() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let d = dir.path().to_str().expect("utf8");
+        for (i, sep) in ["\n", "\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}", "\t\u{1b}"].iter().enumerate() {
+            let mut x = dash();
+            x.id = format!("t{i}");
+            x.title = format!("evil{sep}id: other{sep}");
+            let path = save(d, &x).expect("valid");
+            let text = std::fs::read_to_string(&path).expect("read");
+            let back: Dashboard = serde_norway::from_str(&text).expect("the file parses");
+            assert_eq!(back, x, "{sep:?}: the title is stored as data, not as YAML");
+            let header: Vec<&str> = text.lines().take_while(|l| l.starts_with('#')).collect();
+            assert_eq!(header.len(), 2, "{sep:?}: {text}");
+        }
+        assert_eq!(load(d).expect("a restart loads every file").len(), 7);
+    }
+
+    #[test]
+    fn a_new_id_never_overwrites_another_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let d = dir.path().to_str().expect("utf8");
+        let mut other = dash();
+        other.id = "other".into();
+        save(d, &other).expect("valid");
+        std::fs::rename(dir.path().join("other.yaml"), dir.path().join("shop.yaml")).expect("mv");
+        std::fs::write(dir.path().join("broken.yaml"), "id: [").expect("write");
+        let before = std::fs::read_to_string(dir.path().join("shop.yaml")).expect("read");
+        for (id, file) in [("shop", "shop.yaml"), ("broken", "broken.yaml")] {
+            let mut x = dash();
+            x.id = id.into();
+            let Err(SaveError::Invalid(ps)) = save(d, &x) else { panic!("{id}: must be refused") };
+            assert_eq!((ps[0].code, ps[0].path.as_str()), ("id", "id"), "{id}");
+            assert!(ps[0].message.contains(file), "{}", ps[0].message);
+        }
+        assert_eq!(std::fs::read_to_string(dir.path().join("shop.yaml")).expect("read"), before, "untouched");
+        assert_eq!(std::fs::read_dir(dir.path()).expect("ls").count(), 2, "no temp files left");
+    }
+
+    #[test]
+    fn query_keys_keep_their_order() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let d = dir.path().to_str().expect("utf8");
+        let text = std::fs::read_to_string(save(d, &dash()).expect("valid")).expect("read");
+        let at = |k: &str| text.find(k).unwrap_or_else(|| panic!("{k}"));
+        // As written in the fixture, not alphabetical (serde_json `preserve_order`).
+        assert!(at("tqs:") < at("id: requests") && at("id: requests") < at("kind:") && at("kind:") < at("time:"), "{text}");
+        assert!(at("name: r") < at("metric:") && at("metric:") < at("match:") && at("match:") < at("fn:"), "{text}");
     }
 }

@@ -9,6 +9,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use engine::dashboards::SaveError;
 use engine::query::QueryError;
 use engine::{IngestError, Rows};
 
@@ -130,19 +131,26 @@ pub async fn save_dashboard(State(st): State<AppState>, Path(id): Path<String>, 
         }]);
     }
     let dir = st.node.cfg.dashboards.dir.clone();
-    let d2 = d.clone();
-    match tokio::task::spawn_blocking(move || engine::dashboards::save(&dir, &d2)).await {
+    let (ds, d2) = (st.dashboards.clone(), d.clone());
+    // One write lock across the file write and the in-memory replace: concurrent saves are
+    // serialised and readers never see memory and file disagree.
+    let saved = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, SaveError> {
+        let mut ds = ds.write().unwrap_or_else(|e| e.into_inner());
+        let path = engine::dashboards::save(&dir, &d2)?;
+        match ds.iter_mut().find(|x| x.id == d2.id) {
+            Some(slot) => *slot = d2,
+            None => ds.push(d2),
+        }
+        Ok(path)
+    })
+    .await;
+    match saved {
         Ok(Ok(path)) => {
             tracing::info!(dashboard = %d.id, file = %path.display(), "dashboard saved");
-            if let Ok(mut ds) = st.dashboards.write() {
-                match ds.iter_mut().find(|x| x.id == d.id) {
-                    Some(slot) => *slot = d.clone(),
-                    None => ds.push(d.clone()),
-                }
-            }
             Json(to_api(&d)).into_response()
         }
-        Ok(Err(ps)) => bad(ps),
+        Ok(Err(SaveError::Invalid(ps))) => bad(ps),
+        Ok(Err(SaveError::Io(e))) => (StatusCode::INTERNAL_SERVER_ERROR, format!("saving the dashboard failed: {e:#}\n")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")).into_response(),
     }
 }

@@ -46,7 +46,7 @@ Schemas marked `x-codegen: false` (the `Tqs*` schemas and `LokiPush`) are refere
 
 ### Embedded UI table
 
-The same build script walks `ui/dist` (the built web UI) and writes `ui_assets.rs`: a static table of `(path, content type, bytes)` with every file embedded through `include_bytes!`. When `ui/dist` does not exist, the table is empty and `/` serves a short page that explains how to build the UI. See [Dashboards and the web UI](dashboards-and-ui.md).
+The same build script walks `ui/dist` (the built web UI) and writes `ui_assets.rs`: a static table of `(path, content type, bytes)` with every file embedded through `include_bytes!`. When `ui/dist` does not exist, the table is empty and `/` serves a short page that explains how to build the UI. The script watches `ui/dist` when it exists and `ui/` otherwise. Watching a path that does not exist would rerun the script on every build, and watching `ui/` means a later `make ui` still triggers the embedding. See [Dashboards and the web UI](dashboards-and-ui.md).
 
 ## What `crates/engine/build.rs` generates
 

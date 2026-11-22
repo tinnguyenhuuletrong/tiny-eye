@@ -107,7 +107,7 @@ The S3 keys apply only when `storage.url` starts with `s3://`. DuckDB reads S3 o
 
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
-| `query.timeout` | duration | `30s` | A query running longer is interrupted and answered with `500`. |
+| `query.timeout` | duration | `30s` | A query taking longer from arrival (waiting for a free connection included) is interrupted and answered with `500`. |
 | `query.workers` | integer > 0 | `4` | DuckDB connections serving queries in parallel; further queries wait for a free connection. |
 
 ### `auth`

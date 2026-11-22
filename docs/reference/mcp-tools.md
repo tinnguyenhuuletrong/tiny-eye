@@ -12,8 +12,8 @@ Server: `tiny-eye mcp --url http://<node>:7070 [--token-env VAR]` (stdio). Each 
 
 | Tool | HTTP | Description | Input |
 | :--- | :--- | :--- | :--- |
+| `run_tqs` | `POST /api/v1/query` | Run a TQS 3 query (metrics timeseries/table, spans/logs aggregates, trace search, trace waterfall, log search, log patterns). Invalid documents return every problem with a code and JSON path so all can be fixed in one round trip. | `tqs`*, `id`*, `title`, `kind`*, `time`, `vars`, `queries`, `formulas`, `top`, `search`, `trace_id`, `limit` |
+| `validate_tqs` | `POST /api/v1/validate` | Validate a TQS 3 document; returns every problem with code, JSON path and message. | `tqs`*, `id`*, `title`, `kind`*, `time`, `vars`, `queries`, `formulas`, `top`, `search`, `trace_id`, `limit` |
 | `discover_telemetry_catalog` | `GET /api/v1/catalog` | List metric names (with label keys), services and span names seen in the last 24 h. Bounded. | none |
-| `run_tqs` | `POST /api/v1/query` | Run a TQS 3 query (metrics timeseries/table, spans/logs aggregates, trace search, trace waterfall, log search, log patterns). Invalid documents return every problem with a code and JSON path so all can be fixed in one round trip. | `formulas`, `id`*, `kind`*, `limit`, `queries`, `search`, `time`, `title`, `top`, `tqs`*, `trace_id`, `vars` |
-| `validate_tqs` | `POST /api/v1/validate` | Validate a TQS 3 document; returns every problem with code, JSON path and message. | `formulas`, `id`*, `kind`*, `limit`, `queries`, `search`, `time`, `title`, `top`, `tqs`*, `trace_id`, `vars` |
 
 `*` required. Full input schemas: `schema/generated/mcp-tools.json` (the exact `tools/list` result).

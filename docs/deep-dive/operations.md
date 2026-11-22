@@ -58,7 +58,7 @@ WantedBy=multi-user.target
 
 The repository's `Dockerfile` builds one image with the web UI embedded and the pinned DuckDB
 extensions inside (`make docker`, tag `tiny-eye:dev`). The release workflow publishes it to
-`ghcr.io/<owner>/tiny-eye` for amd64 and arm64 on version tags.
+`ghcr.io/tinnguyenhuuletrong/tiny-eye` for amd64 and arm64 on version tags.
 
 ```bash
 docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev
@@ -208,7 +208,8 @@ The catalog references data files by URL, so the catalog and the objects must ma
 | Start fails with `binding 127.0.0.1:7070` | Port in use | Change `server.listen` |
 | Ingest answers `429` | Arena full: flushes are slow or failing | Check logs for `flush failed`, object-store reachability, `tiny_eye_hot_bytes`; raise `arena_limit` only with RAM to match |
 | Samples missing, `rejected_rows_total{reason="out_of_bounds"}` rising | Clock skew or backfill older than `max_sample_age` | Fix clocks; raise `ingest.max_sample_age` for backfills |
-| `401 missing or insufficient bearer token` | No token, wrong token, or wrong scope | Check `Authorization: Bearer`, and the scope table in [Security](security.md) |
+| `401 missing or unknown bearer token` | No token, or a token not in `auth.tokens` | Check `Authorization: Bearer` and the token's environment variable |
+| `403 this token lacks the ... scope` | A known token without the operation's scope | Use a token with that scope or `admin`; see the scope table in [Security](security.md) |
 | Query answers `500 ... exceeded the 30000 ms timeout` | Heavy panel over a long range | Raise `step`, narrow the range or the selection, or raise `query.timeout` |
 | Query answers `400` | Invalid TQS | Read `problems`; each has a code and path ([TQS reference](tqs-reference.md#problem-codes)) |
 | Logs show `checkpoint failed; will retry` with `has format N` | Envelope written by a different binary version | Run the matching binary, or move the envelope aside after checking it |
