@@ -80,6 +80,77 @@
   font-size: 0.925rem;
 }
 
+/* What makes it different: short cards linking to the docs page anchors. */
+.different {
+  margin: 0 0 3rem;
+}
+
+.differentHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.differentHead h2 {
+  font-size: 1.75rem;
+  margin: 0;
+}
+
+.differentHead a {
+  font-weight: 500;
+}
+
+.different ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.different li a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  height: 100%;
+  padding: 1.1rem 1.15rem;
+  border: 1px solid var(--te-border);
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.different li a:hover {
+  border-color: var(--ifm-color-primary);
+}
+
+.different li a:hover strong {
+  color: var(--ifm-color-primary);
+}
+
+.different li a > span {
+  color: var(--te-muted);
+  font-size: 0.925rem;
+}
+
+.planned {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--te-border);
+  border-radius: 999px;
+  color: var(--te-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
 /* Feature rows, alternating sides. */
 .feature {
   display: grid;

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tiny-eye": {
+      "command": "sh",
+      "args": ["tiny-eye-mcp.sh"]
+    }
+  }
+}

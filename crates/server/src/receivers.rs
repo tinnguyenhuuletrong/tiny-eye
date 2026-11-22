@@ -21,6 +21,8 @@ pub const TYPE_SUMMARY: u8 = 4;
 
 /// Prometheus' staleness marker (a specific NaN payload).
 const STALE_NAN: u64 = 0x7ff0_0000_0000_0002;
+/// OTLP `DataPointFlags.FLAG_NO_RECORDED_VALUE`.
+const NO_RECORDED_VALUE: u32 = 1;
 
 /// Attribute keys whose values are replaced at ingest (SPEC §11).
 const SECRET_KEYS: &[&str] = &["authorization", "cookie", "set-cookie", "password", "passwd", "token", "api_key", "apikey", "secret"];
@@ -251,7 +253,12 @@ pub fn otlp_metrics(content_type: Option<&str>, body: &[u8], tenant: &str, regio
                     }
                     l
                 };
-                let num = |v: &Option<number_data_point::Value>| match v {
+                // OTLP's "no recorded value" flag is the push-side staleness marker: the series ended
+                // (a process exited, a pod went away). It becomes the same marker remote-write uses,
+                // so queries stop carrying the last value forward.
+                let stale = |flags: u32| flags & NO_RECORDED_VALUE != 0;
+                let num = |flags: u32, v: &Option<number_data_point::Value>| match v {
+                    _ if stale(flags) => f64::from_bits(STALE_NAN),
                     Some(number_data_point::Value::AsDouble(d)) => *d,
                     Some(number_data_point::Value::AsInt(i)) => *i as f64,
                     None => f64::NAN,
@@ -260,7 +267,7 @@ pub fn otlp_metrics(content_type: Option<&str>, body: &[u8], tenant: &str, regio
                 match &m.data {
                     Some(Data::Gauge(g)) => {
                         for p in &g.data_points {
-                            sink.push(&name, TYPE_GAUGE, unit, labels_of(&p.attributes), ms(p.time_unix_nano), num(&p.value));
+                            sink.push(&name, TYPE_GAUGE, unit, labels_of(&p.attributes), ms(p.time_unix_nano), num(p.flags, &p.value));
                         }
                     }
                     Some(Data::Sum(s)) => {
@@ -274,7 +281,7 @@ pub fn otlp_metrics(content_type: Option<&str>, body: &[u8], tenant: &str, regio
                             (name.clone(), TYPE_GAUGE)
                         };
                         for p in &s.data_points {
-                            sink.push(&n, ty, unit, labels_of(&p.attributes), ms(p.time_unix_nano), num(&p.value));
+                            sink.push(&n, ty, unit, labels_of(&p.attributes), ms(p.time_unix_nano), num(p.flags, &p.value));
                         }
                     }
                     Some(Data::Histogram(h)) => {
@@ -285,6 +292,17 @@ pub fn otlp_metrics(content_type: Option<&str>, body: &[u8], tenant: &str, regio
                         for p in &h.data_points {
                             let l = labels_of(&p.attributes);
                             let t = ms(p.time_unix_nano);
+                            if stale(p.flags) {
+                                let marker = f64::from_bits(STALE_NAN);
+                                for le in p.explicit_bounds.iter().map(|b| fmt_le(*b)).chain(["+Inf".to_string()]) {
+                                    let mut lb = l.clone();
+                                    lb.insert("le".into(), le);
+                                    sink.push(&format!("{name}_bucket"), TYPE_HISTOGRAM, unit, lb, t, marker);
+                                }
+                                sink.push(&format!("{name}_count"), TYPE_HISTOGRAM, unit, l.clone(), t, marker);
+                                sink.push(&format!("{name}_sum"), TYPE_HISTOGRAM, unit, l, t, marker);
+                                continue;
+                            }
                             let mut cum = 0u64;
                             for (i, c) in p.bucket_counts.iter().enumerate() {
                                 cum += c;
@@ -496,6 +514,24 @@ mod tests {
         assert!(rows.points[1].is_stale && !rows.points[0].is_stale);
         assert_eq!(rows.series[0].labels.len(), 1, "empty label dropped");
         assert_eq!(rows.series[0].metric_name, "up");
+    }
+
+    #[test]
+    fn otlp_no_recorded_value_is_a_staleness_marker() {
+        // A pusher marks a series as ended (the process exited) with FLAG_NO_RECORDED_VALUE.
+        let body = serde_json::json!({"resourceMetrics": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "machine"}}]},
+            "scopeMetrics": [{"metrics": [
+              {"name": "process.cpu.utilization", "gauge": {"dataPoints": [
+                {"asDouble": 0.99, "timeUnixNano": "1762740000000000000", "attributes": [{"key": "pid", "value": {"stringValue": "42"}}]},
+                {"flags": 1, "timeUnixNano": "1762740005000000000", "attributes": [{"key": "pid", "value": {"stringValue": "42"}}]}]}},
+              {"name": "latency", "histogram": {"aggregationTemporality": 2, "dataPoints": [
+                {"flags": 1, "timeUnixNano": "1762740005000000000", "explicitBounds": [0.1, 1.0]}]}}]}]}]});
+        let (rows, _) = otlp_metrics(Some("application/json"), body.to_string().as_bytes(), "t", "r").expect("decode");
+        let stale: Vec<bool> = rows.points.iter().map(|p| p.is_stale).collect();
+        assert_eq!(stale[..2], [false, true], "the flagged gauge point is a staleness marker");
+        // histogram: le=0.1, le=1, le=+Inf, _count, _sum
+        assert_eq!(rows.points.len(), 2 + 5);
+        assert!(rows.points[2..].iter().all(|p| p.is_stale && p.value.is_nan()));
     }
 
     #[test]

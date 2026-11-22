@@ -7,7 +7,7 @@ disk or S3 and answers queries that return the same points as Prometheus.
 [![CI](https://github.com/tinnguyenhuuletrong/tiny-eye/actions/workflows/ci.yml/badge.svg)](https://github.com/tinnguyenhuuletrong/tiny-eye/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-tinnguyenhuuletrong.github.io%2Ftiny--eye-14b8a6)](https://tinnguyenhuuletrong.github.io/tiny-eye/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Conformance](https://img.shields.io/badge/Prometheus%20conformance-104%2F104-3ccf91)](docs/deep-dive/evidence/tqs-coverage.md)
+[![Conformance](https://img.shields.io/badge/Prometheus%20conformance-105%2F105-3ccf91)](docs/deep-dive/evidence/tqs-coverage.md)
 
 <a href="https://tinnguyenhuuletrong.github.io/tiny-eye/docs/getting-started/quickstart">
   <img src="docs/assets/getting-started.gif" alt="Starting tiny-eye and the demo shop, then the web UI: a live dashboard, layout editing, Explore, a trace waterfall and log patterns" width="100%">
@@ -21,7 +21,7 @@ disk or S3 and answers queries that return the same points as Prometheus.
 - **Open storage.** Sorted, ZSTD-compressed Parquet on local disk or any S3 store with conditional
   writes, cataloged by DuckLake. Any DuckDB, Spark or pandas can read it.
 - **Prometheus-exact queries.** TQS is a JSON query language compiled to DuckDB SQL and checked
-  point by point against Prometheus 3.16: 104/104 conformance cases.
+  point by point against Prometheus 3.16: 105/105 conformance cases.
 - **All three signals.** Rates, quantiles and formulas over metrics; trace search and waterfalls;
   log search and log patterns.
 - **Dashboards as code.** YAML files in git, editable in the UI (drag, resize, add a panel), saved
@@ -73,6 +73,13 @@ claude mcp add tiny-eye -- "$PWD/target/release/tiny-eye" mcp --url http://127.0
 Then ask "which route has the worst p99 right now, and why?". Setup for other clients:
 [AI agents over MCP](docs/examples/ai-agents-mcp.md).
 
+**Let an assistant run your machine.** In [`examples/machine`](examples/machine), an assistant
+([tiny-assistant](https://github.com/tinnguyenhuuletrong/tiny-assistant) or Claude Code) starts a
+metrics agent for this computer, builds its dashboard in tiny-eye, then finds and stops a runaway
+process ([guide](docs/examples/assistant-machine.md)):
+
+<img src="docs/assets/assistant-machine.gif" alt="tiny-assistant on the left builds a dashboard in tiny-eye on the right, then finds and stops runaway processes" width="100%">
+
 **Run it in a container.**
 
 ```bash
@@ -120,7 +127,7 @@ Every claim comes from a test that can fail; reports are generated into
 
 | Claim | How | Result |
 | --- | --- | --- |
-| TQS returns what Prometheus returns | `make conformance`: 33 metric functions, real panel shapes, spans, logs, traces, validation and injection cases, a mutation check | [104/104 cases, 15/15 mutants caught](docs/deep-dive/evidence/tqs-coverage.md) |
+| TQS returns what Prometheus returns | `make conformance`: 34 metric cases, real panel shapes, spans, logs, traces, validation and injection cases, a mutation check | [105/105 cases, 16/16 mutants caught](docs/deep-dive/evidence/tqs-coverage.md) |
 | The whole binary returns what Prometheus returns | `make e2e`: the same remote-written samples in Prometheus 3.16 and tiny-eye, spread over Parquet, a pending envelope and RAM | [20/20 panels equal](docs/deep-dive/evidence/e2e.md) |
 | Acknowledged data survives a crash | `crates/engine/tests/node.rs`: crash without flush, WAL replay, retried flushes, no double counting | pass |
 | Ingest and query speed (8-core laptop, 2,620 series × 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |

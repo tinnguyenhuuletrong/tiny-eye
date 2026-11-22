@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../schema/generated/config.schema.json
+# tiny-eye config for the machine example: data under ./data/machine, fast flushes, and the
+# dashboards an assistant builds in examples/machine/dashboards. Paths are relative to the repo root.
+duckdb:
+  extension_dir: .tools/duckdb_ext
+storage:
+  url: ./data/machine/objects
+catalog:
+  url: ./data/machine/catalog.ducklake
+ingest:
+  wal_dir: ./data/machine/wal
+  flush_interval: 15s
+coordinator:
+  checkpoint_interval: 2s
+  hot_grace: 10s
+dashboards:
+  dir: examples/machine/dashboards

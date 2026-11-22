@@ -49,6 +49,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
 - Animated "How it works" diagram and a getting-started video, recorded from HTML sources with
   headless Chrome and ffmpeg (`make media`, sources in `docs/assets/media/`).
 - The binary prints a start banner with the UI URL, the ingest endpoints and the MCP command.
+- `examples/machine`: a dependency-free machine agent (CPU, memory, load, network, disk, busiest
+  processes over OTLP) and a project folder (`CLAUDE.md`, `.mcp.json`) that lets an assistant such
+  as tiny-assistant or Claude Code start collecting, build a dashboard and act on the machine;
+  `make machine`, `make machine-agent`, `make machine-hog`; a recorded demo video.
+- "What makes it different" docs page and landing section; materialized panels documented as
+  designed, not built.
+- OTLP data points with the `NoRecordedValue` flag are stored as staleness markers, so a series
+  that ends (a process exits) stops instead of repeating its last value for 5 minutes.
 
 ### Fixed
 

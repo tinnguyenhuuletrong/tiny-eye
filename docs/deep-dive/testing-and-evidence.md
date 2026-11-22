@@ -55,7 +55,7 @@ The suite in `crates/tqs/tests/conformance/` builds deterministic, Margince-shap
 - **Deliberate divergences** D1 (`fill: zero` on a missing operand) and D2 (division by zero is a gap) assert the documented difference.
 - **Spans, logs and traces** compare against an independent Rust computation over the same fixtures.
 - **Validation** cases must be refused with a specific problem code; A1 and A2 check that SQL-looking input is bound as data.
-- **Mutation check:** built with `--features mutants`, the suite re-runs with each of 15 mutants, each breaking one semantic rule in the compiler (for example `closed_window`, `no_extrapolation`, `division_ieee`, `time_in_ms`). Every mutant must turn at least one case red; an uncaught mutant fails the suite.
+- **Mutation check:** built with `--features mutants`, the suite re-runs with each of 16 mutants, each breaking one semantic rule in the compiler (for example `closed_window`, `no_extrapolation`, `division_ieee`, `time_in_ms`). Every mutant must turn at least one case red; an uncaught mutant fails the suite.
 
 `make conformance` writes [TQS coverage](evidence/tqs-coverage.md).
 
@@ -83,7 +83,7 @@ See [API and code generation](api-and-codegen.md).
 
 | Suite | Result | Report |
 | :--- | :--- | :--- |
-| Conformance | 104/104 cases pass: 33 metric cases, 2 deliberate divergences, 17 real-panel cases, 6 spans, 5 logs, 3 traces, 38 validation and injection cases; 15/15 mutants caught | [TQS coverage](evidence/tqs-coverage.md) |
+| Conformance | 105/105 cases pass: 34 metric cases, 2 deliberate divergences, 17 real-panel cases, 6 spans, 5 logs, 3 traces, 38 validation and injection cases; 16/16 mutants caught | [TQS coverage](evidence/tqs-coverage.md) |
 | End to end | 20/20 panels equal to Prometheus | [End to end](evidence/e2e.md) |
 | Benchmark, local disk | about 1.65 M samples/s remote-write; 6 h `sum by (rate)` panel about 0.58 s p50 | [Local disk](evidence/bench-local.md) |
 | Benchmark, MinIO | same ingest rate; absent trace id needs 2 GETs after compaction (22 before) | [MinIO](evidence/bench-s3.md) |

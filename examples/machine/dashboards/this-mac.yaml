@@ -1,0 +1,292 @@
+# Dashboard "This Mac": saved by tiny-eye. This file is the source of truth; commit it.
+# Each panel: `ui` (display, unit, w of 12 columns, h rows) and `query` (TQS).
+id: this-mac
+title: This Mac
+panels:
+- ui:
+    display: stat
+    unit: '%'
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: cpu-now
+    kind: timeseries
+    title: CPU busy
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: busy
+      metric: system_cpu_utilization
+      match:
+      - label: state
+        op: '!='
+        value: idle
+      fn:
+        op: last
+      agg:
+        op: sum
+      hidden: true
+    formulas:
+    - name: pct
+      expr: 100 * busy
+- ui:
+    display: stat
+    unit: '%'
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: mem-now
+    kind: timeseries
+    title: Memory used
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: mem
+      metric: system_memory_utilization
+      fn:
+        op: last
+      agg:
+        op: max
+      hidden: true
+    formulas:
+    - name: pct
+      expr: 100 * mem
+- ui:
+    display: stat
+    unit: ''
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: load-now
+    kind: timeseries
+    title: Load (1m)
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: load
+      metric: system_cpu_load_average_1m
+      fn:
+        op: last
+      agg:
+        op: max
+- ui:
+    display: stat
+    unit: '%'
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: disk-now
+    kind: timeseries
+    title: Disk used
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: disk
+      metric: system_filesystem_utilization
+      fn:
+        op: last
+      agg:
+        op: max
+      hidden: true
+    formulas:
+    - name: pct
+      expr: 100 * disk
+- ui:
+    display: timeseries
+    unit: '%'
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: cpu
+    kind: timeseries
+    title: CPU by state
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: cpu
+      metric: system_cpu_utilization
+      match:
+      - label: state
+        op: '!='
+        value: idle
+      fn:
+        op: last
+      agg:
+        op: max
+        by:
+        - state
+      hidden: true
+    formulas:
+    - name: pct
+      expr: 100 * cpu
+- ui:
+    display: timeseries
+    unit: '%'
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: mem
+    kind: timeseries
+    title: Memory used
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: mem
+      metric: system_memory_utilization
+      fn:
+        op: last
+      agg:
+        op: max
+      hidden: true
+    formulas:
+    - name: pct
+      expr: 100 * mem
+- ui:
+    display: timeseries
+    unit: ''
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: load
+    kind: timeseries
+    title: Load average
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: m1
+      metric: system_cpu_load_average_1m
+      fn:
+        op: last
+      agg:
+        op: max
+    - name: m5
+      metric: system_cpu_load_average_5m
+      fn:
+        op: last
+      agg:
+        op: max
+    - name: m15
+      metric: system_cpu_load_average_15m
+      fn:
+        op: last
+      agg:
+        op: max
+- ui:
+    display: timeseries
+    unit: bytes
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: net
+    kind: timeseries
+    title: Network bytes/s
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: net
+      metric: system_network_io_total
+      match:
+      - label: device
+        op: =
+        value: en0
+      fn:
+        op: rate
+        window: 1m
+      agg:
+        op: sum
+        by:
+        - direction
+- ui:
+    display: timeseries
+    unit: bytes
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: disk
+    kind: timeseries
+    title: Disk usage
+    time:
+      from: -15m
+      step: 15s
+    queries:
+    - name: disk
+      metric: system_filesystem_usage
+      fn:
+        op: last
+      agg:
+        op: max
+        by:
+        - state
+- ui:
+    display: bar
+    unit: '%'
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: proc-cpu
+    kind: timeseries
+    title: Busiest processes (CPU, 1.0 = one core)
+    time:
+      from: -2m
+      step: 10s
+    queries:
+    - name: cpu
+      metric: process_cpu_utilization
+      fn:
+        op: last
+      agg:
+        op: max
+        by:
+        - process_name
+        - pid
+      hidden: true
+    formulas:
+    - name: pct
+      expr: 100 * cpu
+    top:
+      n: 8
+      rank: last
+- ui:
+    display: bar
+    unit: bytes
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: proc-mem
+    kind: timeseries
+    title: Biggest processes (memory)
+    time:
+      from: -2m
+      step: 10s
+    queries:
+    - name: mem
+      metric: process_memory_usage
+      fn:
+        op: last
+      agg:
+        op: max
+        by:
+        - process_name
+        - pid
+    top:
+      n: 8
+      rank: last
