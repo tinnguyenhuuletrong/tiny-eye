@@ -14,7 +14,7 @@ async fn explain_heavy_panel() {
     let ext = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext");
     let d = dir.path().display();
     let yaml = format!(
-        "duckdb: {{ extension_dir: {ext} }}\nstorage: {{ url: {d}/o }}\ncatalog: {{ url: {d}/c.ducklake }}\ningest: {{ wal_dir: {d}/w, max_sample_age: 30d, durability: memory }}\n"
+        "duckdb: {{ extension_dir: {ext} }}\nstorage: {{ url: {d}/o }}\ncatalog: {{ url: {d}/c.ducklake }}\ningest: {{ wal_dir: {d}/w, max_sample_age: 30d, durability: memory }}\nmaterialize: {{ path: \"\" }}\n"
     );
     let node = Node::open(Config::from_layers(Some(&yaml), &[]).unwrap()).await.unwrap();
     let now = now_ms() / 60_000 * 60_000;

@@ -46,6 +46,7 @@ A **panel** is data plus presentation:
 | `ui.unit` | no | Unit shown next to values, for example `req/s`, `s`, `%`, `bytes`. |
 | `ui.w` | no | Width in columns of a **12-column grid**, 1 to 12. Default 3 for `stat` (including a `kind: table` query without `display`, which is sized before its result is known), 6 otherwise. |
 | `ui.h` | no | Height in fixed-height rows, 1 to 8. Default 2 for `stat` (same rule), 4 otherwise. |
+| `materialize` | no | `true` keeps the panel's computed points and extends them as data settles, so a read computes only what is not stored. Only queries whose points depend on their own timestamp qualify (validation reports `panels[i].materialize` otherwise). See [Materialized panels](materialized-panels.md). |
 
 Unknown keys anywhere in a dashboard are refused. Panels flow in list order over the grid; there are no x/y coordinates, so reordering the list moves panels.
 

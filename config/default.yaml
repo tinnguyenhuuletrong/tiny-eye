@@ -68,3 +68,11 @@ auth:
 dashboards:
   # Dashboards live in git as YAML files and are loaded at start (Q12).
   dir: ./dashboards
+
+materialize:
+  # Dashboard panels with `materialize: true` keep their computed points here and extend them as
+  # data settles; a read computes only the steps not stored. No backfill: points start when the
+  # panel is first seen. Empty path = in memory.
+  path: ./data/materialized.duckdb
+  resolution: 15s           # stored step; reads with a step that is a multiple of it use the store
+  settle: 5m                # store a step once it is this old (senders later than this are not reflected)

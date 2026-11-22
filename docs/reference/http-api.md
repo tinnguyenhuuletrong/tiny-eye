@@ -86,6 +86,7 @@ Response `200`: `QueryResponse`.
 | `rows_total` | integer | Points (series kinds) or rows (list kinds) |
 | `truncated` | boolean | List kinds: the row count reached `limit` |
 | `elapsed_ms` | number | Server-side time |
+| `materialized` | object, optional | Present when stored points of a [materialized panel](../deep-dive/materialized-panels.md) answered: `panel`, `resolution_ms`, `stored_points`, `computed_steps`. The series are then on the step-aligned grid. |
 
 Response `400`: `ProblemResponse`, `{"valid": false, "problems": [{"code", "path", "message"}]}` with every problem. Response `500`: plain text, for example a timeout.
 

@@ -494,7 +494,7 @@ async fn tqs_equals_prometheus_on_remote_written_data() {
     let d = dir.path().display();
     let yaml = format!(
         "duckdb: {{ extension_dir: {}, threads: 4 }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\n\
-         ingest: {{ wal_dir: {d}/wal, max_sample_age: 3h }}\ncoordinator: {{ hot_grace: 1ms, compaction_delay: 1ms }}\n",
+         ingest: {{ wal_dir: {d}/wal, max_sample_age: 3h }}\nmaterialize: {{ path: {d}/mat.duckdb }}\ncoordinator: {{ hot_grace: 1ms, compaction_delay: 1ms }}\n",
         tools.join("duckdb_ext").display()
     );
     let node = Node::open(Config::from_layers(Some(&yaml), &[]).unwrap()).await.unwrap();

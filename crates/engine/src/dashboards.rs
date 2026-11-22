@@ -36,6 +36,10 @@ pub struct Panel {
     pub ui: Option<PanelUi>,
     /// A TQS 3 document, kept as JSON so the API returns exactly what the file says.
     pub query: serde_json::Value,
+    /// Keep this panel's computed points and extend them as data arrives, so a dashboard read
+    /// only computes what is not stored (see `materialize.rs`). A data property, not presentation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub materialize: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +74,20 @@ impl Panel {
     }
 }
 
+/// `(dashboard id/query id, effective query)` of every panel marked `materialize: true`.
+pub fn materialized(dashboards: &[Dashboard]) -> Vec<(String, serde_json::Value)> {
+    dashboards
+        .iter()
+        .flat_map(|d| {
+            d.panels.iter().filter(|p| p.materialize).map(move |p| {
+                let q = p.effective_query(&d.vars);
+                let qid = q.get("id").and_then(|v| v.as_str()).unwrap_or("panel").to_string();
+                (format!("{}/{qid}", d.id), q)
+            })
+        })
+        .collect()
+}
+
 impl Dashboard {
     /// Every problem in the dashboard, with JSON paths (`panels[2].query.time.step`, …).
     pub fn validate(&self, now_ms: i64) -> Vec<Problem> {
@@ -95,7 +113,14 @@ impl Dashboard {
             }
             let problems = match tqs::Tqs::parse(&p.effective_query(&self.vars).to_string()) {
                 Err(e) => vec![e],
-                Ok(doc) => doc.validate(now_ms).err().unwrap_or_default(),
+                Ok(doc) => {
+                    if p.materialize
+                        && let Some(why) = tqs::materialize_blocker(&doc)
+                    {
+                        push("materialize", format!("panels[{i}].materialize"), format!("this panel cannot be materialized: {why}"));
+                    }
+                    doc.validate(now_ms).err().unwrap_or_default()
+                }
             };
             for e in problems {
                 push(e.code, format!("panels[{i}].query.{}", e.path.trim_start_matches("$")), e.message);
@@ -223,6 +248,26 @@ fn write_atomic(dir: &Path, path: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn materialize_is_refused_where_points_depend_on_the_range() {
+        let mut d = dash();
+        d.panels[0].materialize = true;
+        // kind: table is an instant query: not materializable.
+        let now = 1_762_740_000_000;
+        let ps = d.validate(now);
+        assert!(ps.iter().any(|p| p.code == "materialize" && p.path == "panels[0].materialize"), "{ps:?}");
+        d.panels[0].query["kind"] = "timeseries".into();
+        assert!(d.validate(now).is_empty(), "{:?}", d.validate(now));
+        let m = materialized(std::slice::from_ref(&d));
+        assert_eq!(m[0].0, "shop/requests");
+        assert_eq!(m[0].1["vars"]["service"], "shop-api", "dashboard vars are part of the registered query");
+        // Round trip: the flag is written only when set.
+        let y = serde_norway::to_string(&d).expect("yaml");
+        assert!(y.contains("materialize: true"));
+        d.panels[0].materialize = false;
+        assert!(!serde_norway::to_string(&d).expect("yaml").contains("materialize"));
+    }
 
     fn dash() -> Dashboard {
         serde_norway::from_str(

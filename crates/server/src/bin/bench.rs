@@ -281,6 +281,82 @@ fn run_panels(base: &str, md: &mut String, title: &str, from: i64, to: i64, step
     }
 }
 
+/// Register the timeseries panels as materialized, catch them up over the whole history (what the
+/// background loop does one step at a time), then read the full range raw and materialized.
+async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) -> Result<String> {
+    let mut md = String::new();
+    let docs: Vec<(&str, serde_json::Value)> = panels(0, 0, "60s").into_iter().filter(|(_, d)| d["kind"] == "timeseries").collect();
+    node.set_materialized(docs.iter().map(|(_, d)| (format!("bench/{}", d["id"].as_str().unwrap_or("q")), d.clone())).collect());
+    let t = Instant::now();
+    let stored = node.materialize_since(t0, now).await?;
+    let catchup_s = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let tick = node.materialize(now + 15_000).await?;
+    let tick_ms = t.elapsed().as_secs_f64() * 1000.0;
+    println!("   catch-up {stored} points in {catchup_s:.1} s; one background tick {tick} points in {tick_ms:.0} ms");
+    let step = default_step(hours);
+    writeln!(
+        md,
+        "\n## Materialized panels\n\nThe {n} timeseries panels above with `materialize: true` (resolution 15 s, settle 5 min). \
+         Reads use the UI's default step for a {hours} h range ({step} s), in process, 10 runs after one warm-up each. \
+         \"Equal\" compares every point with the raw query on the same grid (relative 1e-9).\n\n\
+         | Step | Result |\n| :--- | :--- |\n\
+         | Catch-up over {hours} h (once; the background loop never backfills) | {stored} points in {catchup_s:.1} s |\n\
+         | One background tick (one new 15 s step for every panel) | {tick} points in {tick_ms:.0} ms |\n\n\
+         | Panel | Points | Raw p50 ms | Materialized p50 ms | Faster | Stored / computed steps | Equal |\n\
+         | :--- | ---: | ---: | ---: | ---: | ---: | :--- |",
+        n = docs.len(),
+        step = step / 1000
+    )?;
+    for (name, d) in &docs {
+        let mut q = d.clone();
+        q["time"] = serde_json::json!({"from": now - hours * 3_600_000, "to": now, "step": format!("{step}ms")});
+        let json = q.to_string();
+        let (mut raw_ms, mut mat_ms) = (vec![], vec![]);
+        let _ = node.query_with(&json, false).await;
+        let _ = node.query_with(&json, true).await;
+        let mut mat = None;
+        for _ in 0..10 {
+            let t = Instant::now();
+            let _ = node.query_with(&json, false).await;
+            raw_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            mat = node.query_with(&json, true).await.ok();
+            mat_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        let Some(mat) = mat else { continue };
+        // The raw answer on the aligned grid the materialized read uses.
+        let (f, to) = ((now - hours * 3_600_000 + step - 1) / step * step, now / step * step);
+        q["time"] = serde_json::json!({"from": f, "to": to, "step": format!("{step}ms")});
+        let raw = node.query_with(&q.to_string(), false).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let flat = |o: &engine::query::QueryOutput| -> Vec<(String, String, i64, f64)> {
+            o.series.iter().flat_map(|s| s.points.iter().map(|p| (s.output.clone(), s.key.clone(), p.0, p.1))).collect()
+        };
+        let (a, b) = (flat(&mat), flat(&raw));
+        let equal = a.len() == b.len()
+            && a.iter()
+                .zip(&b)
+                .all(|(x, y)| x.0 == y.0 && x.1 == y.1 && x.2 == y.2 && (x.3 - y.3).abs() <= 1e-9 * x.3.abs().max(y.3.abs()).max(1.0));
+        let (r50, m50) = (pct(&mut raw_ms, 0.5), pct(&mut mat_ms, 0.5));
+        let info =
+            mat.materialized.as_ref().map(|i| format!("{} / {}", i.stored_points, i.computed_steps)).unwrap_or_else(|| "not used".into());
+        println!("  {name:<50} raw {r50:>7.1} ms  materialized {m50:>6.1} ms  equal {equal}");
+        writeln!(
+            md,
+            "| `{name}` | {} | {r50:.1} | {m50:.1} | {:.1}× | {info} | {} |",
+            a.len(),
+            r50 / m50,
+            if equal { "yes" } else { "**no**" }
+        )?;
+    }
+    Ok(md)
+}
+
+/// The step the engine picks when a query gives none (what the dashboard UI sends).
+fn default_step(hours: i64) -> i64 {
+    tqs::default_step_ms(hours * 3_600_000)
+}
+
 fn kv(k: &str, v: &str) -> KeyValue {
     KeyValue { key: k.into(), value: Some(AnyValue { value: Some(any_value::Value::StringValue(v.into())) }), ..Default::default() }
 }
@@ -408,7 +484,7 @@ async fn run(a: Args) -> Result<()> {
     };
     let yaml = format!(
         "duckdb: {{ extension_dir: {}, threads: 4, memory_limit: 8GB }}\n{storage}\ncatalog: {{ url: {d}/catalog.ducklake }}\n\
-         ingest: {{ wal_dir: {d}/wal, max_sample_age: 30d, flush_interval: 1h, arena_limit: 4GB }}\n\
+         ingest: {{ wal_dir: {d}/wal, max_sample_age: 30d, flush_interval: 1h, arena_limit: 4GB }}\nmaterialize: {{ path: {d}/mat.duckdb }}\n\
          coordinator: {{ hot_grace: 1ms, compaction_delay: 1ms, checkpoint_interval: 1h, compaction_interval: 1w, retention_interval: 1w }}\nquery: {{ workers: 4 }}\n",
         root.join(".tools/duckdb_ext").display()
     );
@@ -489,8 +565,12 @@ async fn run(a: Args) -> Result<()> {
     run_panels(&base, &mut qmd, "last 1 h, step 15 s, last 10 min only in the hot tail", now - 3_600_000, now, "15s", 10);
     md.push_str(&qmd);
 
-    // 5. Traces
-    println!("5. traces: {} traces × 6 spans in 11 flushes", a.traces);
+    // 5. Materialized panels: the same timeseries panels, stored and read back.
+    println!("5. materialized panels");
+    md.push_str(&materialized_panels(&node, t0, now, a.hours).await?);
+
+    // 6. Traces
+    println!("6. traces: {} traces × 6 spans in 11 flushes", a.traces);
     let mut rng = StdRng::seed_from_u64(7);
     let mut ids = vec![];
     let hour_start = (now - 3_600_000) / 3_600_000 * 3_600_000;

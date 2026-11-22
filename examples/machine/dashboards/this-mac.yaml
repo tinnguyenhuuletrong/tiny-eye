@@ -104,6 +104,7 @@ panels:
     unit: '%'
     w: 6
     h: 4
+  materialize: true
   query:
     tqs: '3'
     id: cpu
@@ -134,6 +135,7 @@ panels:
     unit: '%'
     w: 6
     h: 4
+  materialize: true
   query:
     tqs: '3'
     id: mem

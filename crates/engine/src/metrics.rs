@@ -17,6 +17,8 @@ pub struct Metrics {
     pub queries: AtomicU64,
     pub query_errors: AtomicU64,
     pub query_ms: AtomicU64,
+    pub materialized_points: AtomicU64,
+    pub materialized_reads: AtomicU64,
 }
 
 impl Metrics {
@@ -56,6 +58,12 @@ impl Metrics {
         counter("queries_total", "TQS queries run.", vec![(String::new(), g(&self.queries))]);
         counter("query_errors_total", "TQS queries that failed.", vec![(String::new(), g(&self.query_errors))]);
         counter("query_milliseconds_total", "Time spent running queries.", vec![(String::new(), g(&self.query_ms))]);
+        counter("materialized_points_total", "Points stored for materialized panels.", vec![(String::new(), g(&self.materialized_points))]);
+        counter(
+            "materialized_reads_total",
+            "Queries answered from materialized panel points.",
+            vec![(String::new(), g(&self.materialized_reads))],
+        );
         let _ = writeln!(
             s,
             "# HELP tiny_eye_hot_bytes Bytes buffered in the ingest arena / hot tail.\n# TYPE tiny_eye_hot_bytes gauge\ntiny_eye_hot_bytes {hot_bytes}"

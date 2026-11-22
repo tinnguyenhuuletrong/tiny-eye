@@ -45,6 +45,7 @@ const sidebars: SidebarsConfig = {
       doc("deep-dive/tqs-reference"),
       doc("deep-dive/api-and-codegen"),
       doc("deep-dive/dashboards-and-ui"),
+      doc("deep-dive/materialized-panels"),
       doc("deep-dive/configuration"),
       doc("deep-dive/security"),
       doc("deep-dive/operations", "Operate a node"),

@@ -12,7 +12,7 @@ use std::sync::Arc;
 fn config(dir: &std::path::Path, env: &[(&str, &str)]) -> Config {
     let ext = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext");
     let yaml = format!(
-        "duckdb: {{ extension_dir: {ext}, threads: 2, memory_limit: 1GB }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\ningest: {{ wal_dir: {d}/wal }}\ncoordinator: {{ hot_grace: 1ms, compaction_delay: 1ms }}\n",
+        "duckdb: {{ extension_dir: {ext}, threads: 2, memory_limit: 1GB }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\ningest: {{ wal_dir: {d}/wal }}\nmaterialize: {{ path: {d}/mat.duckdb }}\ncoordinator: {{ hot_grace: 1ms, compaction_delay: 1ms }}\n",
         d = dir.display()
     );
     let env: Vec<(String, String)> = env.iter().map(|(k, v)| (format!("TINY_EYE__{k}"), v.to_string())).collect();

@@ -4,6 +4,7 @@ pub mod config;
 pub mod dashboards;
 pub mod duck;
 pub mod ids;
+pub mod materialize;
 pub mod metrics;
 pub mod node;
 pub mod parquet;

@@ -12,7 +12,7 @@ const MCP_ADD = "claude mcp add tiny-eye -- tiny-eye mcp --url http://127.0.0.1:
 
 const WHY = "/docs/getting-started/why-tiny-eye";
 // "What makes it different": built items only, plus planned ones labelled as such (see the docs page).
-const DIFFERENT = [
+const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolean }[] = [
   {
     title: "Files that outlive the engine",
     text: "Plain Parquet and a DuckLake catalog in your bucket. Any Parquet reader opens them.",
@@ -35,9 +35,8 @@ const DIFFERENT = [
   },
   {
     title: "Materialized panels",
-    text: "Panels kept up to date incrementally, so load cost does not grow with the range.",
-    anchor: "designed-not-built-yet-materialized-panels",
-    planned: true,
+    text: "Mark a panel materialize: true; reads use stored points, up to 13× faster, same answer.",
+    anchor: "materialized-panels-maintained-incrementally",
   },
 ];
 

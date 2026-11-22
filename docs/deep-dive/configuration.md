@@ -132,6 +132,9 @@ See [Security](security.md) for which scope each operation needs.
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
 | `dashboards.dir` | path | `./dashboards` | Directory of dashboard YAML files, loaded at start and written by dashboard saves. |
+| `materialize.path` | path | `./data/materialized.duckdb` | Node-local DuckDB file for the points of [materialized panels](materialized-panels.md); empty keeps them in memory. Derived data: safe to delete. |
+| `materialize.resolution` | duration | `15s` | Step of the stored points. A read whose step is a multiple of it uses them. |
+| `materialize.settle` | duration | `5m` | A step is stored once it is this old. Samples arriving later than this after their timestamp are not in stored steps (raw reads still see them). |
 
 Relative paths are relative to the process's working directory.
 

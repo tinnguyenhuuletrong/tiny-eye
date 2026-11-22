@@ -225,6 +225,18 @@ components:
         rows_total: { type: integer, format: int64 }
         truncated: { type: boolean }
         elapsed_ms: { type: number, format: double }
+        materialized: { $ref: "#/components/schemas/MaterializedInfo" }
+
+    MaterializedInfo:
+      description: "Present when stored points of a materialized panel answered the query. The answer is on the step-aligned grid; steps not stored were computed from raw rows."
+      type: object
+      additionalProperties: false
+      required: [panel, resolution_ms, stored_points, computed_steps]
+      properties:
+        panel: { type: string, description: "<dashboard id>/<query id>" }
+        resolution_ms: { type: integer, format: int64, description: step of the stored points }
+        stored_points: { type: integer, format: int64, description: points read from the store }
+        computed_steps: { type: integer, format: int64, description: steps computed from raw rows (before the panel's coverage or newer than materialize.settle) }
 
     Series:
       type: object
@@ -326,6 +338,7 @@ components:
       properties:
         query: { $ref: "#/components/schemas/TqsDocument" }
         ui: { $ref: "#/components/schemas/PanelUi" }
+        materialize: { type: boolean, description: "keep the panel's computed points and extend them as data settles, so a read computes only what is not stored (timeseries metric queries whose points depend only on their own timestamp; no backfill)" }
 
     PanelUi:
       description: "Everything the UI needs that is not part of the query. Panels flow in list order over a 12-column grid of fixed-height rows."

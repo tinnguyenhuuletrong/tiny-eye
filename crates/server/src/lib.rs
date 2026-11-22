@@ -35,6 +35,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(node: Arc<Node>, dashboards: Vec<Dashboard>) -> anyhow::Result<AppState> {
         let tokens = load_tokens(&node.cfg)?;
+        node.set_materialized(engine::dashboards::materialized(&dashboards));
         Ok(AppState { node, dashboards: Arc::new(std::sync::RwLock::new(dashboards)), tokens: Arc::new(tokens) })
     }
 }

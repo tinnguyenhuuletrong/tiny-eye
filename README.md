@@ -25,7 +25,8 @@ disk or S3 and answers queries that return the same points as Prometheus.
 - **All three signals.** Rates, quantiles and formulas over metrics; trace search and waterfalls;
   log search and log patterns.
 - **Dashboards as code.** YAML files in git, editable in the UI (drag, resize, add a panel), saved
-  back to the same file.
+  back to the same file. Mark a panel `materialize: true` and tiny-eye keeps its points up to date
+  incrementally: the same answer, up to 13× faster on long ranges.
 
 ## Quick start
 
@@ -106,15 +107,15 @@ The full docs are at **[tinnguyenhuuletrong.github.io/tiny-eye](https://tinnguye
 | --- | --- |
 | Get started | [Quickstart](docs/getting-started/quickstart.md) · [Installation](docs/getting-started/installation.mdx) · [Concepts](docs/getting-started/concepts.md) |
 | Guides | [Demo shop](docs/examples/demo-shop.md) · [Sending data](docs/examples/sending-data.md) · [Query cookbook](docs/examples/query-cookbook.md) · [Dashboards as code](docs/examples/dashboards-as-code.md) · [AI agents (MCP)](docs/examples/ai-agents-mcp.md) |
-| Concepts | [Architecture](docs/deep-dive/architecture.md) · [Write path](docs/deep-dive/write-path.md) · [Storage format](docs/deep-dive/storage-format.md) · [Query engine](docs/deep-dive/query-engine.md) · [TQS reference](docs/deep-dive/tqs-reference.md) · [Configuration](docs/deep-dive/configuration.md) · [Operations](docs/deep-dive/operations.md) · [Security](docs/deep-dive/security.md) |
+| Concepts | [Architecture](docs/deep-dive/architecture.md) · [Write path](docs/deep-dive/write-path.md) · [Storage format](docs/deep-dive/storage-format.md) · [Query engine](docs/deep-dive/query-engine.md) · [Materialized panels](docs/deep-dive/materialized-panels.md) · [TQS reference](docs/deep-dive/tqs-reference.md) · [Configuration](docs/deep-dive/configuration.md) · [Operations](docs/deep-dive/operations.md) · [Security](docs/deep-dive/security.md) |
 | Reference | [HTTP API](docs/reference/http-api.md) · [MCP tools](docs/reference/mcp-tools.md) · [Editor grammars](docs/reference/editor-grammars.md) |
 
 ## Status
 
 **Works today (single node):** Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs
 (protobuf and JSON), Loki JSON push; WAL durability with replay; flush, checkpoint, compaction and
-retention; TQS 3 with Prometheus staleness semantics; YAML dashboards with save from the UI; the
-web UI; MCP; bearer-token scopes; self-metrics.
+retention; TQS 3 with Prometheus staleness semantics; YAML dashboards with save from the UI and
+materialized panels; the web UI; MCP; bearer-token scopes; self-metrics.
 
 **Not built yet:** cluster mode, OTLP gRPC, Loki protobuf push, alerting, a Grafana data source,
 native histograms, span events and links. Full list:
@@ -131,6 +132,7 @@ Every claim comes from a test that can fail; reports are generated into
 | The whole binary returns what Prometheus returns | `make e2e`: the same remote-written samples in Prometheus 3.16 and tiny-eye, spread over Parquet, a pending envelope and RAM | [20/20 panels equal](docs/deep-dive/evidence/e2e.md) |
 | Acknowledged data survives a crash | `crates/engine/tests/node.rs`: crash without flush, WAL replay, retried flushes, no double counting | pass |
 | Ingest and query speed (8-core laptop, 2,620 series × 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
+| Materialized panels answer exactly what raw queries answer, faster | `crates/engine/tests/materialize.rs` (point by point, with a mutation check) and `make bench` | 6 h `sum by (rate)`: [456 ms raw, 35 ms materialized, every point equal](docs/deep-dive/evidence/bench-local.md#materialized-panels) |
 | Trace lookups on S3 stay cheap | `make bench-s3` (MinIO) | absent trace id: [22 GETs before compaction, 2 after](docs/deep-dive/evidence/bench-s3.md) |
 
 ## Development

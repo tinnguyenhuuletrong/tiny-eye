@@ -55,7 +55,7 @@ Fields that do not apply to a kind are ignored, not refused. For example, `queri
 | :--- | :--- | :--- |
 | `from` | epoch milliseconds (integer), `"now"`, or `"-<duration>"` such as `"-2h"` (relative to now) | required |
 | `to` | same forms as `from` | `"now"` |
-| `step` | positive duration: a whole number followed by `ms`, `s`, `m`, `h`, `d` or `w` | about 300 points: `ceil(range / 300)` rounded up to a whole second, at least `1s` |
+| `step` | positive duration: a whole number followed by `ms`, `s`, `m`, `h`, `d` or `w` | the smallest round step giving at most about 300 points: 1s, 2s, 5s, 10s, 15s, 30s, 1m, 2m, 5m, 10m, 15m, 30m, 1h, 2h, 3h, 6h, 12h, 1d, 1w (1h → 15s, 6h → 2m, 24h → 5m, 7d → 1h) |
 
 Rules:
 

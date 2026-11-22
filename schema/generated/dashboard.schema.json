@@ -73,6 +73,10 @@
         },
         "ui": {
           "$ref": "#/$defs/PanelUi"
+        },
+        "materialize": {
+          "type": "boolean",
+          "description": "keep the panel's computed points and extend them as data settles, so a read computes only what is not stored (timeseries metric queries whose points depend only on their own timestamp; no backfill)"
         }
       }
     },

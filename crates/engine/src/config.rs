@@ -36,6 +36,8 @@ pub struct Config {
     pub auth: Auth,
     /// Dashboards loaded from YAML files at start.
     pub dashboards: Dashboards,
+    /// Materialized dashboard panels (`materialize: true` on a panel).
+    pub materialize: Materialize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -175,6 +177,19 @@ pub enum Scope {
 pub struct Dashboards {
     /// Directory of dashboard YAML files (schema: schema/generated/dashboard.schema.json).
     pub dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Materialize {
+    /// Node-local DuckDB file holding materialized points; empty keeps them in memory (they are
+    /// derived data: losing them only means computing the uncovered range again).
+    pub path: String,
+    /// Step of the stored points. A read whose step is a multiple of it uses them.
+    pub resolution: Dur,
+    /// A step is stored once it is this old. Samples that arrive later than this after their
+    /// timestamp are not in the stored points (raw queries still see them).
+    pub settle: Dur,
 }
 
 /// `64MB`, `1GB`, `512KB`, `100B` (powers of 1024).

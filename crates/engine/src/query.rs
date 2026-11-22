@@ -26,6 +26,8 @@ pub struct QueryOutput {
     pub rows_total: i64,
     pub truncated: bool,
     pub elapsed_ms: f64,
+    /// Set when stored points of a materialized panel answered (part of) the query.
+    pub materialized: Option<crate::materialize::Info>,
 }
 
 #[derive(Debug)]
@@ -85,9 +87,19 @@ impl Node {
     }
 
     pub async fn query(&self, json: &str) -> Result<QueryOutput, QueryError> {
+        self.query_with(json, true).await
+    }
+
+    /// `use_materialized: false` always computes from raw rows (tests and benchmarks compare).
+    pub async fn query_with(&self, json: &str, use_materialized: bool) -> Result<QueryOutput, QueryError> {
         let started = Instant::now();
         let (doc, r) = Self::parse_and_validate(json, now_ms()).map_err(QueryError::Invalid)?;
         self.metrics.queries.fetch_add(1, Ordering::Relaxed);
+        let mat = if use_materialized && doc.kind == tqs::Kind::Timeseries { self.materialized_panel(json, r.step_ms) } else { None };
+        if mat.is_some() {
+            self.metrics.materialized_reads.fetch_add(1, Ordering::Relaxed);
+        }
+        let res = self.cfg.materialize.resolution.ms();
         let res = self
             .with_conn(move |conn| {
                 conn.execute_batch("BEGIN TRANSACTION")?;
@@ -103,10 +115,18 @@ impl Node {
                         rows_total: 0,
                         truncated: false,
                         elapsed_ms: 0.0,
+                        materialized: None,
                     };
                     match doc.kind {
                         tqs::Kind::Timeseries | tqs::Kind::Table => {
-                            let rows = tqs::compile::run(conn, &doc, &r)?;
+                            let rows = match &mat {
+                                Some(p) => {
+                                    let (rows, info) = crate::materialize::read(conn, p, &doc, &r, res)?;
+                                    out.materialized = Some(info);
+                                    rows
+                                }
+                                None => tqs::compile::run(conn, &doc, &r)?,
+                            };
                             out.rows_total = rows.len() as i64;
                             for row in rows {
                                 match out.series.last_mut() {

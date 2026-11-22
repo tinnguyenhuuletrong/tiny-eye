@@ -348,6 +348,57 @@ pub struct Resolved {
     pub step_ms: i64,
 }
 
+/// Default step: the smallest round step giving at most ~300 points. Round steps line up with
+/// each other (15 s, 2 min, 5 min, 1 h are all multiples of 15 s), so a dashboard read at any
+/// range can use points materialized at a finer resolution.
+pub fn default_step_ms(range_ms: i64) -> i64 {
+    const STEPS: [i64; 19] = [
+        1_000,
+        2_000,
+        5_000,
+        10_000,
+        15_000,
+        30_000,
+        60_000,
+        120_000,
+        300_000,
+        600_000,
+        900_000,
+        1_800_000,
+        3_600_000,
+        7_200_000,
+        10_800_000,
+        21_600_000,
+        43_200_000,
+        86_400_000,
+        604_800_000,
+    ];
+    let want = range_ms / 300;
+    STEPS.into_iter().find(|s| *s >= want).unwrap_or_else(|| (want + 86_399_999) / 86_400_000 * 86_400_000)
+}
+
+/// Why a query cannot be materialized, or `None`. Materialized points are computed in slices and
+/// stitched together, so every output point must depend only on its own timestamp.
+pub fn materialize_blocker(tqs: &Tqs) -> Option<&'static str> {
+    if tqs.kind != Kind::Timeseries {
+        return Some("only timeseries queries can be materialized");
+    }
+    if tqs.top.as_ref().is_some_and(|t| t.rank != "per_step" && t.query.is_none()) {
+        return Some("top with rank max, avg or last ranks over the whole range");
+    }
+    if tqs.queries.iter().any(|q| q.fill != Fill::None) {
+        return Some("fill depends on which series appear in the range");
+    }
+    let uses_range_vars = |s: &Option<String>| s.as_deref().is_some_and(|w| w.contains("__range") || w.contains("__interval"));
+    if tqs.queries.iter().any(|q| uses_range_vars(&q.func.as_ref().and_then(|f| f.window.clone())) || uses_range_vars(&q.offset)) {
+        return Some("$__range and $__interval depend on the requested range");
+    }
+    if tqs.queries.iter().any(|q| q.spans.is_some() || q.logs.is_some()) {
+        return Some("spans and logs queries are not materialized yet");
+    }
+    None
+}
+
 static LABEL_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").expect("static regex"));
 static METRIC_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$").expect("static regex"));
 static QUERY_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9_]{0,31}$").expect("static regex"));
@@ -440,8 +491,7 @@ impl Tqs {
                     let range = to - f;
                     let step = match &t.step {
                         Some(s) => parse_duration_ms(s),
-                        // Default: ~300 points, at least 1 s.
-                        None => Some(((range / 300).max(1_000) + 999) / 1_000 * 1_000),
+                        None => Some(default_step_ms(range)),
                     };
                     match step {
                         None => push("step", "time.step".into(), format!("bad duration {:?}", t.step)),
@@ -948,5 +998,35 @@ mod tests {
         assert_eq!(codes(hist(Some(serde_json::json!({"op": "max"})), None)), vec!["then"]);
         assert_eq!(codes(hist(Some(serde_json::json!({"op": "max"})), Some(serde_json::json!({"op": ">", "value": 1.0})))), vec!["then"]);
         assert!(codes(hist(None, Some(serde_json::json!({"op": ">", "value": 1.0})))).is_empty(), "having alone filters the quantiles");
+    }
+
+    #[test]
+    fn default_steps_are_round_and_line_up() {
+        assert_eq!(default_step_ms(15 * 60_000), 5_000);
+        assert_eq!(default_step_ms(3_600_000), 15_000);
+        assert_eq!(default_step_ms(6 * 3_600_000), 120_000);
+        assert_eq!(default_step_ms(24 * 3_600_000), 300_000);
+        assert_eq!(default_step_ms(7 * 86_400_000), 3_600_000);
+        for h in [1, 6, 24, 168] {
+            assert_eq!(default_step_ms(h * 3_600_000) % 15_000, 0, "{h}h lines up with a 15 s resolution");
+        }
+    }
+
+    #[test]
+    fn what_can_be_materialized() {
+        let doc = |extra: &str| {
+            Tqs::parse(&format!(
+                r#"{{"tqs":"3","id":"x","kind":"timeseries","time":{{"from":"-1h"}},"queries":[{{"name":"a","metric":"m","fn":{{"op":"rate","window":"5m"}}{extra}}}]}}"#
+            ))
+            .expect("fixture")
+        };
+        assert_eq!(materialize_blocker(&doc("")), None);
+        assert!(materialize_blocker(&doc(r#","fill":"zero""#)).is_some());
+        let range = Tqs::parse(r#"{"tqs":"3","id":"x","kind":"timeseries","time":{"from":"-1h"},"queries":[{"name":"a","metric":"m","fn":{"op":"increase","window":"$__range"}}]}"#).expect("fixture");
+        assert!(materialize_blocker(&range).is_some());
+        let top = Tqs::parse(r#"{"tqs":"3","id":"x","kind":"timeseries","time":{"from":"-1h"},"queries":[{"name":"a","metric":"m","fn":{"op":"last"}}],"top":{"n":3,"rank":"max"}}"#).expect("fixture");
+        assert!(materialize_blocker(&top).is_some());
+        let per_step = Tqs::parse(r#"{"tqs":"3","id":"x","kind":"timeseries","time":{"from":"-1h"},"queries":[{"name":"a","metric":"m","fn":{"op":"last"}}],"top":{"n":3}}"#).expect("fixture");
+        assert_eq!(materialize_blocker(&per_step), None);
     }
 }

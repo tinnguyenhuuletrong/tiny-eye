@@ -79,6 +79,7 @@ panels:
         - { name: per_min, expr: "o * 60" }
 
   - ui: { display: timeseries, unit: req/s, w: 6, h: 4 }
+    materialize: true
     query:
       tqs: "3"
       id: requests-by-route
@@ -93,6 +94,7 @@ panels:
           agg: { op: sum, by: [http_route] }
 
   - ui: { display: timeseries, unit: s, w: 6, h: 4 }
+    materialize: true
     query:
       tqs: "3"
       id: latency

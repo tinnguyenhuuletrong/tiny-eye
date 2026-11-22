@@ -125,6 +125,8 @@ pub struct Node {
     flush_lock: tokio::sync::Mutex<()>,
     /// Serialises catalog writes (single coordinator: checkpoint, compaction, retention).
     catalog_lock: tokio::sync::Mutex<()>,
+    /// Materialized dashboard panels (see `materialize.rs`).
+    pub(crate) mat: crate::materialize::Registry,
 }
 
 const APPLIED_DDL: &str = "CREATE TABLE IF NOT EXISTS lake.applied_envelopes (envelope_id VARCHAR, region VARCHAR, node_id VARCHAR, node_epoch BIGINT, seq_to BIGINT, files INTEGER)";
@@ -212,6 +214,18 @@ impl Node {
         }
         duck::attach_lake(&root, &cfg.catalog.url, &format!("{}/lake/", store.url_prefix))?;
         root.execute_batch(APPLIED_DDL)?;
+        let mat_path = &cfg.materialize.path;
+        if mat_path.is_empty() {
+            root.execute_batch("ATTACH ':memory:' AS mat")?;
+        } else {
+            if let Some(parent) = std::path::Path::new(mat_path).parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))).with_context(|| format!("opening {mat_path}"))?;
+        }
+        root.execute_batch(crate::materialize::DDL)?;
         for t in Table::ALL {
             root.execute_batch(&t.ddl(&format!("lake.{}", t.name())))?;
             root.execute_batch(&format!("CREATE TABLE memory.main.hot_{} ({}, _seq BIGINT)", t.name(), t.ddl_columns()))?;
@@ -244,6 +258,7 @@ impl Node {
             pool: Arc::new(Mutex::new(pool)),
             flush_lock: Default::default(),
             catalog_lock: Default::default(),
+            mat: Default::default(),
         });
         node.replay_wal().await?;
         tracing::info!(epoch, node = %node.cfg.node.id, storage = %node.store.url_prefix, "node open");
@@ -717,6 +732,7 @@ impl Node {
     /// Drop files older than `retention`, expire old snapshots and let DuckLake delete the
     /// objects nothing references any more (SPEC §6.4).
     pub async fn retain(&self, now: i64) -> Result<usize> {
+        self.retain_materialized(now - self.cfg.coordinator.retention.ms()).await?;
         let _g = self.catalog_lock.lock().await;
         let conn = self.lake_conn()?;
         let store = self.store.clone();
@@ -756,6 +772,7 @@ impl Node {
         let mut last_ckpt = Instant::now();
         let mut last_compact = Instant::now();
         let mut last_retain = Instant::now() - c.retention_interval.0;
+        let mut last_mat = Instant::now();
         loop {
             tokio::select! {
                 _ = tick.tick() => {}
@@ -776,6 +793,12 @@ impl Node {
                 last_compact = Instant::now();
                 if let Err(e) = self.compact(now_ms()).await {
                     tracing::error!(error = %format!("{e:#}"), "compaction failed; will retry");
+                }
+            }
+            if last_mat.elapsed() >= self.cfg.materialize.resolution.0 {
+                last_mat = Instant::now();
+                if let Err(e) = self.materialize(now_ms()).await {
+                    tracing::error!(error = %format!("{e:#}"), "materializing panels failed; will retry");
                 }
             }
             if last_retain.elapsed() >= c.retention_interval.0 {

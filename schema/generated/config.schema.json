@@ -244,6 +244,28 @@
       },
       "additionalProperties": false,
       "description": "Dashboards loaded from YAML files at start."
+    },
+    "materialize": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Node-local DuckDB file holding materialized points; empty keeps them in memory (they are\nderived data: losing them only means computing the uncovered range again).",
+          "type": "string",
+          "default": "./data/materialized.duckdb"
+        },
+        "resolution": {
+          "description": "Step of the stored points. A read whose step is a multiple of it uses them.",
+          "$ref": "#/$defs/Duration",
+          "default": "15s"
+        },
+        "settle": {
+          "description": "A step is stored once it is this old. Samples that arrive later than this after their\ntimestamp are not in the stored points (raw queries still see them).",
+          "$ref": "#/$defs/Duration",
+          "default": "5m"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Materialized dashboard panels (`materialize: true` on a panel)."
     }
   },
   "additionalProperties": false,
@@ -501,6 +523,24 @@
         "dir": {
           "description": "Directory of dashboard YAML files (schema: schema/generated/dashboard.schema.json).",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Materialize": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Node-local DuckDB file holding materialized points; empty keeps them in memory (they are\nderived data: losing them only means computing the uncovered range again).",
+          "type": "string"
+        },
+        "resolution": {
+          "description": "Step of the stored points. A read whose step is a multiple of it uses them.",
+          "$ref": "#/$defs/Duration"
+        },
+        "settle": {
+          "description": "A step is stored once it is this old. Samples that arrive later than this after their\ntimestamp are not in the stored points (raw queries still see them).",
+          "$ref": "#/$defs/Duration"
         }
       },
       "additionalProperties": false

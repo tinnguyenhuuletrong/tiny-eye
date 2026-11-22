@@ -1,6 +1,6 @@
 ---
 title: Why tiny-eye
-description: What makes tiny-eye different, what is built today with the evidence behind it, and what is designed but not built yet (materialized panels with incremental maintenance).
+description: What makes tiny-eye different, each with the evidence behind it, including materialized panels kept up to date incrementally.
 sidebar_position: 2
 ---
 
@@ -19,7 +19,7 @@ does not have yet. Nothing in the second group is shipped.
 | [Panel cost grows with series and steps, not window size](#panel-cost-grows-with-series-and-steps-not-window-size) | Built | [Performance](../deep-dive/performance.md#the-window-evaluation-change-37-s-to-058-s) |
 | [Maintenance only rewrites what changed](#maintenance-only-rewrites-what-changed) | Built | [Catalog and maintenance](../deep-dive/catalog-and-maintenance.md), [MinIO benchmark](../deep-dive/evidence/bench-s3.md) |
 | [One binary, defined by YAML](#one-binary-defined-by-yaml) | Built | [API and code generation](../deep-dive/api-and-codegen.md) |
-| [Materialized panels, maintained incrementally](#designed-not-built-yet-materialized-panels) | **Designed, not built** | [Limitations and roadmap](../deep-dive/limitations-and-roadmap.md#materialized-panels-designed-not-built) |
+| [Materialized panels, maintained incrementally](#materialized-panels-maintained-incrementally) | Built (phase 1) | [Materialized panels](../deep-dive/materialized-panels.md), [benchmark](../deep-dive/evidence/bench-local.md#materialized-panels) |
 
 ## Your telemetry is open Parquet you own
 
@@ -89,8 +89,8 @@ took the query from about 3.7 s to **0.58 s** p50, and the saving grows with the
 differences of running sums and a difference of large sums would lose the 1e-9 precision the
 conformance suite demands.
 
-This is evaluation done once per query. Nothing is stored between queries; see
-[what a panel costs today](#what-a-panel-costs-today).
+This is evaluation done once per query. To keep a panel's results between queries, mark it
+`materialize: true`; see [materialized panels](#materialized-panels-maintained-incrementally).
 
 ## Maintenance only rewrites what changed
 
@@ -119,65 +119,33 @@ files in git, and a layout change in the UI is saved back to the file. See
 [API and code generation](../deep-dive/api-and-codegen.md) and
 [Build dashboards as code](../examples/dashboards-as-code.md).
 
-## Designed, not built yet: materialized panels
+## Materialized panels, maintained incrementally
 
-:::warning Not built
-Materialized panels and their incremental maintenance are part of the specification
-(milestone M4) and are **not in the code today**. Everything in this section describes the
-design. Track it in [Limitations and roadmap](../deep-dive/limitations-and-roadmap.md#materialized-panels-designed-not-built).
-:::
+Mark a dashboard panel `materialize: true` and tiny-eye keeps the points it computed. The
+background loop extends them every 15 s as data settles, and a dashboard read takes the stored
+points and computes only what is not stored: the steps before the panel was first seen and the
+last few minutes. A 6-hour or 7-day panel stops re-reading every raw sample on every refresh.
 
-### What a panel costs today
+- **Defined by the dashboard query.** What is materialized is exactly the panel's TQS
+  document. Edit the panel in the UI or the YAML and the old points are dropped and the new
+  query starts accumulating; nothing else to configure. Any client sending the same query (the
+  UI, `curl`, an agent over MCP) gets the stored points.
+- **Exact.** A stored point is the output of the same compiled query at the same timestamp, and
+  only queries whose points depend on their own timestamp qualify, so the answer equals the raw
+  query on the same grid. A test compares them point by point over five panel shapes, a counter
+  reset and the hot tail, and a mutation check shows the test can fail.
+- **Measured.** On the benchmark's 6-hour data, the heavy panels read 11 to 13 times faster
+  (`sum by (job) (rate(…[5m]))`: 456 ms raw, 35 ms materialized), with every point equal
+  ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
+- **Trade-offs, stated.** No backfill (we are in beta); a sample later than `materialize.settle`
+  (5 min) after its timestamp is not in the stored steps; spans/logs measures, `table`,
+  `fill: zero` and range-ranked `top` are computed raw.
 
-Every panel run is a full query. The compiler reads every raw sample in the panel's range
-(plus the window before the first step), evaluates it, and returns the points. Nothing is kept
-for the next run: there is no result cache and no precomputed aggregate. Only DuckDB's file and
-Parquet-metadata caches survive between queries. The web UI refreshes a dashboard every 30 s,
-and each refresh runs every panel again.
+The spec's fuller design, mergeable partials per bucket fed from flush envelopes (late rows,
+percentiles across regions, alert rules on the same state), is not built yet. Details:
+[Materialized panels](../deep-dive/materialized-panels.md).
 
-So a panel's cost follows the amount of raw data in its range. In the local benchmark, a
-`table` panel with `increase` over a 6-hour `$__range` returns 2 points but takes about
-**0.39 s**, because every sample in the 6 hours enters the evaluation
-([Performance](../deep-dive/performance.md#what-dominates-each-cost)). The same panel over
-7 days would feed 28 times as many samples into the evaluation.
-
-### The design
-
-The specification (section 9.1, decisions D5 and D6) designs panels that are maintained
-incrementally instead of recomputed:
-
-- **Which panels.** Panels that are viewed often, and every alert rule.
-- **Input.** The rows of the files listed in each new `ingest` envelope, the same envelopes the
-  checkpoint applies today. Views are fed from envelopes, never from DuckLake's change feed:
-  the research found that a compaction shows up in the change feed as N inserts plus N
-  deletes, which would double count. Fed from envelopes, a view ignores compaction entirely.
-- **State.** A small long-format table, `view_partials`, with one row per
-  (panel, panel version, time bucket, region, group key, aggregate): count, sum, min, max, last
-  timestamp and value, and a histogram bucket. It is small enough for DuckLake to keep inline
-  in the catalog rather than as Parquet files.
-- **Percentiles.** Stored as log-bucket histograms (scale 5), so partials from different
-  files, flushes and regions merge with a plain `SUM`. t-digest state cannot be stored this
-  way.
-- **Reads.** A panel read merges the partials of the buckets in its range and finishes the
-  aggregate (for example a quantile from the merged buckets). The target is p95 under 50 ms.
-- **Which TQS shapes.** Sums, counts, min/max, last and log-bucket quantiles can be
-  materialized. `rate` and `increase` with exact Prometheus extrapolation need the first and
-  last sample of each series in each bucket as part of the state; the spec marks that as not
-  yet proven.
-
-### What it would buy
-
-- **Dashboard load cost independent of range.** A materialized panel reads one partial row per
-  (bucket, group, aggregate) instead of every raw sample, so a 7-day panel costs about what a
-  1-hour panel costs at the same bucket count.
-- **Refresh without recomputation.** Each flush adds only its own rows to the partials. A
-  dashboard on auto-refresh stops re-reading data it has already aggregated.
-- **Alert rules on the same state.** An alert evaluator (also not built) would read the same
-  partials as the panel instead of querying raw data every interval.
-- **Cheap percentiles.** Latency quantiles merge across files, flushes and regions without
-  rereading the raw rows.
-
-### Also designed, not built: rollups
+## Designed, not built yet: rollups
 
 The spec's proposed retention (open question Q14) keeps raw data 15 days, 5-minute rollups
 90 days and 1-hour rollups 13 months. Only raw retention exists today (`coordinator.retention`,
