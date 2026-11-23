@@ -43,6 +43,33 @@ What happens:
 | Find the problem | ranks `process_cpu_utilization` with `top` through `run_tqs`, reads the WARN logs | answers from the hot tail, so the last seconds are already there |
 | Fix it | checks the process belongs to the user, stops it with `kill` | shows CPU back down a few samples later; the assistant confirms with another query |
 
+## Watch the assistant too
+
+The machine agent shows what the computer does; Claude Code's own OpenTelemetry shows what the
+assistant does on it. In tiny-assistant's `.env`:
+
+```bash
+TINY_CLAUDE_OTEL_ENDPOINT=http://127.0.0.1:7070
+# TINY_CLAUDE_OTEL_CONTENT=1   # also prompts, responses, Bash commands and tool output
+```
+
+After a daemon restart, Claude Code chats and Tiny chats on a `claude-code/...` model send their
+metrics, events and traces to tiny-eye, tagged with the engine (`tiny_engine`), tiny session
+(`tiny_session_id`) and project (`tiny_project`). The `claude-code` dashboard
+(`/#/d/claude-code`) shows:
+
+| Panel | From |
+| --- | --- |
+| Cost, tokens (1 h), by type, by engine / session / model | `claude_code_cost_usage_total`, `claude_code_token_usage_total` |
+| Tool calls by tool, model request p95, slowest steps | spans `claude_code.tool` (`attr.tool_name`), `claude_code.llm_request` |
+| What Claude Code did | events `claude_code.user_prompt`, `tool_result`, `api_request`, `api_error` |
+
+The assistant can read it too (`CLAUDE.md`, "Reading yourself"). Every turn is its own `claude`
+process, so its counters are summed as the last value per process (`max_over_time` per
+`instance`), not with `rate`; tiny-assistant forces cumulative temporality, since tiny-eye does not
+store OTLP delta sums. With Claude Code 2.1.330, a Claude Code chat's model requests and tool
+calls arrive as separate traces (no `claude_code.interaction` root span).
+
 ## The pieces
 
 | File | Role |
