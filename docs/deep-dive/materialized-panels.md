@@ -8,7 +8,7 @@ A dashboard panel normally reads all of its raw samples again on every refresh. 
 `materialize: true` and tiny-eye keeps the points it has already computed, and adds new ones as
 data arrives. A refresh then reads the stored points and computes only the few steps that are
 not stored yet. The answer is still the one the raw query gives. On the benchmark's 6-hour
-panels over many series, reads are 10–12× faster (443 ms raw, 38 ms materialized). The code is
+panels over many series, reads are 10–12× faster (443 ms raw, 37 ms materialized). The code is
 in `crates/engine/src/materialize.rs`.
 
 ## The idea in 60 seconds
@@ -21,7 +21,7 @@ A panel shows "requests per second, last 6 hours". Think of the 6 hours as 24 bo
 WITHOUT materialize: every refresh does all the work
 
   [raw][raw][raw][raw][raw] ... [raw][raw][raw]   read + compute 24 boxes
-                                                   -> 440 ms
+                                                   -> 443 ms
 
 
 WITH materialize: do the work once, keep it
@@ -36,7 +36,7 @@ WITH materialize: do the work once, keep it
            stored points           newest boxes: not settled yet
 
   A refresh = read the stored boxes + compute only the "??" boxes
-                                                   -> 38 ms
+                                                   -> 37 ms
 ```
 
 Two cases people ask about:
@@ -111,7 +111,7 @@ raw data and is read often. From the benchmark (6 h of data, 2,620 series):
 - **One-off, exploratory queries.** A query that is not a materialized panel runs raw. In the
   benchmark, the same query with `window: 4m` instead of `5m` took 441 ms. Explore and new
   agent questions are ad-hoc by nature; materialize the ones that come back.
-- **Single-series or cheap panels.** A single series: 22 ms raw, 21 ms materialized (1.1×).
+- **Single-series or cheap panels.** A single series: 21 ms raw, 20 ms materialized (1.1×).
   There is little raw work to save.
 - **Short ranges.** The UI's 15-minute range asks for a 5 s step. That is not a multiple of the
   15 s resolution, so it runs raw. A 15-minute raw read is cheap anyway.
@@ -120,8 +120,11 @@ raw data and is read often. From the benchmark (6 h of data, 2,620 series):
   6 hours is stored:
 
   ```
-  6 h read, panel stored for 1 h     [ 5 h computed raw ......... ][ 1 h ]   430 ms  (raw: 444 ms)
-  6 h read, panel stored for 6 h     [ 6 h stored ........................ ]   11.7× faster
+  a 6 h read, panel stored for 1 h:
+     [ 5 h computed raw ........... ][ 1 h ]     431 ms  (raw 441 ms)
+
+  a 6 h read, panel stored for 6 h:
+     [ 6 h stored ..................... ]         37 ms  (raw 450 ms, 12.1×)
   ```
 
   The 5 h head computed raw costs nearly a full raw read. Expect the gain once a panel has
@@ -198,11 +201,20 @@ to the store.
 
 ## Why the answer is exact
 
-A stored point is the output of the same compiled query at the same timestamp. And only queries
-whose **every output point depends only on its own timestamp** can be materialized.
+### The one rule
 
-Because a value at instant *t* does not depend on the step, points stored at 15 s serve any
-step that is a multiple of 15 s. The UI's default steps for its ranges are such multiples:
+A stored point at time *t* is a pure function of three things:
+
+1. the samples inside its own window, `(t - offset - window, t - offset]`;
+2. *t* itself;
+3. the panel's query document, which is fixed.
+
+It does not depend on `from`, `to` or `step`, on other steps, or on how long the range is. So a
+value computed once is the value any later read would compute. Only queries where **every output
+point follows this rule** can be materialized. All others are refused, with a reason.
+
+Because a value at *t* does not depend on the step, points stored at 15 s serve any step that is a
+multiple of 15 s. The UI's default steps for its ranges are such multiples:
 
 ```
 range   1 h     6 h     24 h    7 d
@@ -214,21 +226,156 @@ step    15 s    2 min   5 min   1 h      all multiples of 15 s -> read from the 
 
 ### What can be materialized
 
-**Works:** `kind: timeseries` metric queries, with
+**Pure** follows [the one rule](#the-one-rule). Pure items can be stored. The others are refused
+with a reason.
 
-- every `fn` with an explicit window;
-- `agg`, `then`, `derive`, `offset`, `having`;
-- formulas (inner and outer);
-- `top` with `rank: per_step` or `query`;
-- `absent`, `histogram_quantile`.
+| Item | Pure? | Why |
+| :--- | :--- | :--- |
+| `rate`, `increase`, `irate`, `delta`, `resets`, `changes`, `last_over_time`, `count_over_time` | yes | first and last samples (the last two for `irate`), or counts, inside the step's own window |
+| `avg_over_time`, `min_over_time`, `max_over_time`, `sum_over_time` | yes | the same window, aggregated |
+| `last` (no window) | yes | the latest sample in the fixed 5-minute lookback `(t − offset − 5 min, t − offset]`; a staleness marker ends it |
+| `histogram_quantile` | yes | computed per step from the bucket rates of that step |
+| `absent` | yes | 1 at the steps that have no value |
+| `agg`, `then`, `having` | yes | grouped or filtered per step |
+| `derive` | yes | rewrites labels, which do not change with time |
+| `offset` | yes | moves the window into the past; a late sample still only affects steps at or after its timestamp |
+| formulas, inner and outer | yes | joined per step and key |
+| `top` with `rank: per_step` (the default) | yes | ranks the series at each step on its own |
+| `top` with `query` | yes | ranks by another query at the same step (`rank` is then ignored) |
+| `top` with `rank: max`, `avg` or `last`, and no `query` | no | picks the series over the **whole range** |
+| `fill: zero` | no | zero is filled for series seen **anywhere in the range** |
+| `$__range`, `$__interval` | no | change with the requested range or step |
+| `kind: table` and the list kinds | no | `table` is one value at `to`; the list kinds return rows, not steps |
+| spans and logs measures | no | each point covers a bucket as wide as the **step** (and they are not built yet) |
 
-**Does not work (and why):**
+Two refused cases, with tiny numbers:
 
-- `kind: table` (one value at `to`) and the list kinds.
-- `fill: zero`: which steps are filled depends on which series appear in the range.
-- `top` with `rank: max`, `avg` or `last`: ranks over the whole range.
-- `$__range` or `$__interval` in a window or a matcher: change with the request.
-- spans and logs measures: they count per step bucket, so they change with the step.
+```
+top 1 by max over the range                       (the range changes the answer)
+
+           05:30   ...   10:00   10:30   11:00
+  A         90             10      12      11
+  B         40             50      52      51
+
+  view 1 h  (10:00-11:00)   the top series is B  (max 52)  -> shows B at 11:00
+  view 6 h  (05:00-11:00)   the top series is A  (max 90)  -> shows A at 11:00
+  same step, different answer: it cannot be stored once.
+```
+
+```
+spans count per step bucket                       (the step changes the answer)
+
+  spans in the last 2 min: 20, of which 3 in the last 15 s
+
+  step 15 s   point at t = spans in (t - 15 s,  t]  =  3
+  step 120 s  point at t = spans in (t - 120 s, t]  = 20
+  same time t, different value: it cannot be stored once.
+```
+
+With 15 s buckets stored, the 120 s point would be the sum of 8 of them. That is what mergeable
+partials would add (see [Chained updates](#chained-updates-not-built)).
+
+## What it costs
+
+The stored points are a trade: the background task does the work once, and every read gets cheaper.
+This part shows where the work goes and why.
+
+### How the work adds up
+
+No partial result is carried from one tick to the next. Each tick starts from the raw samples,
+usually computes one new step, and stores its finished points. Only the finished points, and
+where they end, pile up.
+
+```
+samples (every 15 s)  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .
+
+tick k       computes t:       (=========== 5 min window: 20 samples ===========]
+tick k+1     computes t+15 s:     (=========== 5 min window: 20 samples ===========]
+                                  <------ overlap: 19 of 20 samples read again ----->
+
+stored:      [ t ] [ t+15 s ] [ t+30 s ] ...      <- the finished points pile up
+```
+
+Three small formulas help to see the cost. Let `S` be the number of series, `w` the window and `i`
+the scrape interval.
+
+```
+one step, one tick      reads about  S x (w / i)  samples
+one hour of ticks       240 steps  =  240 x S x (w / i)  samples
+each sample is read     about  w / resolution  times by the background task
+                        (20 times for w = 5 min at the 15 s resolution)
+```
+
+This is on purpose. Reading a window again is cheap. In return there is no state to repair: after
+a late sample, the steps from its timestamp on are deleted and computed again from the raw data,
+and the older steps stay as they are.
+
+### Where the time goes
+
+Take the benchmark's `sum by (job) (rate(http_requests_total[5m]))` panel: `S` = 2,000 series,
+`i` = 15 s and `w` = 5 min. The read covers 6 h at a 120 s step (180 steps). The panel has 10
+jobs, so it returns 1,800 points. Numbers marked *estimate* are worked out from the formulas. The
+times and the point counts are measured.
+
+| | How | Result |
+| :--- | :--- | :--- |
+| Raw refresh, samples read | one pass of running totals per series: `S × (range + w) / i` = 2,000 × 1,460 | about 2.9 M samples (*estimate*) |
+| Raw refresh, window lookups | two per series and step: `2 × S × steps` = 2 × 2,000 × 180 | 720 k (*estimate*) |
+| One background tick, one step | `S × (w / i)` = 2,000 × 20 | 40 k samples, 10 points (*estimate*) |
+| Stored refresh | 1,770 stored points, plus 3 computed steps: the 2 newest steps (newer than now − settle) and the point at `to` | 56 k + 40 k, about 100 k samples (*estimate*) |
+| Samples, raw against stored | 2.9 M / 100 k | about 30× (*estimate*) |
+| **Time, raw against stored** | the benchmark | **443 ms and 37 ms: 11.9× (measured)** |
+
+The measured gain is smaller than the sample ratio because a stored read still has fixed work:
+two small queries (the tail and the point at `to`), planning, and the lookup of the stored rows.
+The single-series panel shows that floor: about 21 ms raw and 20 ms stored. (This reading is an
+inference from those numbers, not a separate measurement.)
+
+The background task is not free. In samples it does more than three raw refreshes per hour
+(240 ticks × 40 k = 9.6 M). In time it is more, about 16 raw refreshes, because every tick pays a
+fixed cost of about 20 ms per query while its 40 k samples take only about 6 ms (*estimate*:
+about 423 ms / 2.9 M ≈ 0.15 µs per sample). It is worth it because the work is done once per
+step, not once per refresh:
+
+```
+per hour, one panel like the one above (estimate from the measured 30 ms per panel per tick)
+
+background    240 ticks × 30 ms            =  7.2 s
+each refresh  saves about 443 - 37         =  0.4 s       -> break-even at about 18 refreshes per hour
+a 30 s auto-refresh (120 per hour):
+   raw        120 × 0.443 s                = 53 s
+   stored     7.2 s + 120 × 0.037 s        = 12 s
+```
+
+The 30 ms is the average over the 8 benchmark panels, so the rate panel itself probably costs more
+per tick. Read the break-even as an order of magnitude: a panel that is refreshed more often than
+about every few minutes gains, and a panel nobody reads does not.
+
+### Chained updates: not built
+
+A *chained* design would keep one small partial per output group and 15 s bucket (count, sum, min,
+max, last), filled only from new samples. A tick would then read only the newest 15 s, not a whole
+window again. A point would merge the buckets it covers: 8 buckets for a 120 s spans step, 20 for
+a 5-minute window. The specification calls these mergeable partials (`view_partials`, section
+9.1). For `rate` with extrapolation the spec marks them unproven. **They are not built.**
+
+```
+built now                              not built (the spec's mergeable partials)
+
+each tick: read the whole window       each tick: read only the new 15 s
+           compute the step                       store one partial for this bucket
+           store the point
+                                       a read:    merge the buckets it covers
+```
+
+Inside one query, tiny-eye does use running totals for every function except the four `*_over_time`
+aggregates, but they live only for the length of that statement. Nothing is kept between ticks.
+
+Mergeable partials would make spans and logs counts storable (a 120 s point is the sum of eight 15 s
+buckets; a spans quantile needs log-bucket histograms, decision D6), and later percentiles merged
+across regions. See
+[Limitations and roadmap](limitations-and-roadmap.md#materialized-panels) and
+[How it maps to the spec](#how-it-maps-to-the-spec).
 
 ## Memory: nothing grows without a bound
 

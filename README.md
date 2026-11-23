@@ -42,7 +42,7 @@ computed. A refresh reads the stored points and computes only the newest steps:
 a 6 h sum by (rate) panel, one refresh:
 
 without materialize   [raw][raw][raw] ... [raw][raw]   read + compute all 6 h                   443 ms
-with materialize      [ # ][ # ][ # ] ... [ # ][ ? ]   stored points + compute only the newest  38 ms
+with materialize      [ # ][ # ][ # ] ... [ # ][ ? ]   stored points + compute only the newest  37 ms
 
   every 15 s a background task stores one more finished step
   a late sample: delete the stored steps from its timestamp on, compute them again
