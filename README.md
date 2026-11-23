@@ -16,6 +16,43 @@ disk or S3 and answers queries that return the same points as Prometheus.
 > **Pre-release.** Single-node mode works end to end and is tested against Prometheus. APIs may
 > still change; cluster mode is not built yet. See [Status](#status).
 
+## How it works
+
+<img src="docs/assets/how-it-works.gif" alt="Animated diagram: writes are acknowledged after the WAL fsync and queryable from the in-memory hot tail; each flush writes one sorted Parquet file per table and hour; a commit envelope is checkpointed into DuckLake; a TQS query is compiled to SQL that DuckDB runs over the lake plus the hot tail" width="100%">
+
+1. **Write.** A write is acknowledged once it is in the write-ahead log and the in-memory hot
+   tail. So it is queryable at once.
+2. **Flush.** Every flush interval, each table's rows become sorted Parquet files in object
+   storage.
+3. **Commit.** A create-only commit envelope adds those files to the DuckLake catalog in one
+   snapshot.
+4. **Query.** Queries run on embedded DuckDB over the lake plus the hot tail.
+5. **Maintain.** Compaction and retention run hourly in the same process.
+
+Details: [Architecture](docs/deep-dive/architecture.md).
+
+### Materialized panels
+
+<img src="docs/assets/materialized-panels.gif" alt="Animated explainer: without materialize every refresh scans 6 h of raw samples; with it a background task stores each finished step once, a refresh reads the stored points and computes only the newest steps, and a late sample is recomputed" width="100%">
+
+Mark a dashboard panel `materialize: true` and tiny-eye keeps the points it has already
+computed. A refresh reads the stored points and computes only the newest steps:
+
+```
+a 6 h sum by (rate) panel, one refresh:
+
+without materialize   [raw][raw][raw] ... [raw][raw]   read + compute all 6 h                   443 ms
+with materialize      [ # ][ # ][ # ] ... [ # ][ ? ]   stored points + compute only the newest  38 ms
+
+  every 15 s a background task stores one more finished step
+  a late sample: delete the stored steps from its timestamp on, compute them again
+```
+
+The answer is the same as the raw query's. Details:
+[Materialized panels](docs/deep-dive/materialized-panels.md#the-idea-in-60-seconds).
+
+## What you get
+
 - **One binary.** Ingest, storage, query engine, web UI and an MCP server for AI agents, in one
   process with one YAML config.
 - **Open storage.** Sorted, ZSTD-compressed Parquet on local disk or any S3 store with conditional
@@ -28,8 +65,7 @@ disk or S3 and answers queries that return the same points as Prometheus.
   back to the same file. Mark a panel `materialize: true` and tiny-eye keeps its points up to date
   incrementally (spec section 9.1): the same answer, 10–12× faster on long-range
   aggregations once the range is stored (2–4× for quantiles and gauges, none for a single series).
-
-<img src="docs/assets/materialized-panels.gif" alt="Animated explainer: without materialize every refresh scans 6 h of raw samples; with it a background task stores each finished step once, a refresh reads the stored points and computes only the newest steps, and a late sample is recomputed" width="100%">
+  See [Materialized panels](#materialized-panels) above.
 
 ## Quick start
 
@@ -91,15 +127,6 @@ make docker
 docker run -p 7070:7070 -v tiny-eye-data:/data tiny-eye:dev
 ```
 
-## How it works
-
-<img src="docs/assets/how-it-works.gif" alt="Animated diagram: writes are acknowledged after the WAL fsync and queryable from the in-memory hot tail; each flush writes one sorted Parquet file per table and hour; a commit envelope is checkpointed into DuckLake; a TQS query is compiled to SQL that DuckDB runs over the lake plus the hot tail" width="100%">
-
-A write is acknowledged once it is in the write-ahead log and the in-memory hot tail, so it is
-queryable at once. Every flush interval, each table's rows become sorted Parquet files in object
-storage, and a create-only commit envelope adds them to the DuckLake catalog in one snapshot.
-Queries run on embedded DuckDB over the lake plus the hot tail. Compaction and retention run
-hourly in the same process. Details: [Architecture](docs/deep-dive/architecture.md).
 
 ## Documentation
 

@@ -160,6 +160,10 @@
   padding: 3.5rem 0;
 }
 
+.flip {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+}
+
 .flip .featureText {
   order: 2;
 }
@@ -187,7 +191,8 @@
   font-weight: 500;
 }
 
-.featureMedia img {
+.featureMedia img,
+.featureMedia video {
   width: 100%;
   height: auto;
 }
