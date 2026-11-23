@@ -6,7 +6,7 @@ panels:
 - ui:
     display: stat
     unit: USD
-    w: 3
+    w: 6
     h: 2
   query:
     tqs: '3'
@@ -33,7 +33,7 @@ panels:
 - ui:
     display: stat
     unit: tokens
-    w: 3
+    w: 6
     h: 2
   query:
     tqs: '3'
@@ -59,15 +59,15 @@ panels:
       then:
         op: sum
 - ui:
-    display: stat
+    display: table
     unit: calls
-    w: 3
-    h: 2
+    w: 6
+    h: 3
   query:
     tqs: '3'
-    id: tool-calls
+    id: tools
     kind: table
-    title: Tool calls (1 h)
+    title: Tool calls by tool (1 h)
     time:
       from: -1h
     queries:
@@ -81,10 +81,65 @@ panels:
         value: claude_code.tool
       measure:
         op: count
+      agg:
+        by:
+        - attr.tool_name
+- ui:
+    display: table
+    unit: USD
+    w: 6
+    h: 3
+  query:
+    tqs: '3'
+    id: cost-by-model
+    kind: table
+    title: Cost by model (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: usd
+      metric: claude_code_cost_usage_total
+      fn:
+        op: max_over_time
+        window: 1h
+      agg:
+        op: max
+        by:
+        - instance
+        - session_id
+        - model
+        - query_source
+      then:
+        op: sum
+        by:
+        - model
+- ui:
+    display: stat
+    unit: requests
+    w: 6
+    h: 2
+  query:
+    tqs: '3'
+    id: model-requests
+    kind: table
+    title: Model requests (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: n
+      spans:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: span_name
+        op: =
+        value: claude_code.llm_request
+      measure:
+        op: count
 - ui:
     display: stat
     unit: errors
-    w: 3
+    w: 6
     h: 2
   query:
     tqs: '3'
@@ -106,10 +161,10 @@ panels:
         op: count
       fill: zero
 - ui:
-    display: bar
+    display: table
     unit: tokens
     w: 6
-    h: 4
+    h: 3
   query:
     tqs: '3'
     id: tokens-by-type
@@ -136,15 +191,15 @@ panels:
         by:
         - type
 - ui:
-    display: bar
+    display: table
     unit: USD
     w: 6
-    h: 4
+    h: 3
   query:
     tqs: '3'
     id: cost-by-session
     kind: table
-    title: Cost by engine, tiny session and model (1 h)
+    title: Cost by engine and tiny session (1 h)
     time:
       from: -1h
     queries:
@@ -158,72 +213,15 @@ panels:
         by:
         - instance
         - session_id
+        - tiny_engine
         - tiny_session_id
         - model
         - query_source
-        - tiny_engine
       then:
         op: sum
         by:
         - tiny_engine
         - tiny_session_id
-        - model
-- ui:
-    display: bar
-    unit: calls
-    w: 6
-    h: 4
-  query:
-    tqs: '3'
-    id: tools
-    kind: table
-    title: Tool calls by tool (1 h)
-    time:
-      from: -1h
-    queries:
-    - name: n
-      spans:
-      - field: service_name
-        op: =
-        value: claude-code
-      - field: span_name
-        op: =
-        value: claude_code.tool
-      measure:
-        op: count
-      agg:
-        by:
-        - resource.tiny.engine
-        - attr.tool_name
-- ui:
-    display: timeseries
-    unit: ms
-    w: 6
-    h: 4
-  query:
-    tqs: '3'
-    id: llm-p95
-    kind: timeseries
-    title: Model request p95
-    time:
-      from: -1h
-      step: 1m
-    queries:
-    - name: p95
-      spans:
-      - field: service_name
-        op: =
-        value: claude-code
-      - field: span_name
-        op: =
-        value: claude_code.llm_request
-      measure:
-        op: quantile
-        q: 0.95
-        field: duration_ms
-      agg:
-        by:
-        - attr.model
 - ui:
     display: traces
     w: 12
@@ -262,3 +260,32 @@ panels:
         op: =~
         value: claude_code\.(user_prompt|tool_result|api_request|api_error)
     limit: 100
+- ui:
+    display: timeseries
+    unit: ms
+    w: 12
+    h: 3
+  query:
+    tqs: '3'
+    id: llm-p95
+    kind: timeseries
+    title: Model request p95
+    time:
+      from: -1h
+      step: 1m
+    queries:
+    - name: p95
+      spans:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: span_name
+        op: =
+        value: claude_code.llm_request
+      measure:
+        op: quantile
+        q: 0.95
+        field: duration_ms
+      agg:
+        by:
+        - attr.model

@@ -257,7 +257,7 @@ const JOBS = {
     // Needs: tiny-eye with examples/machine/tiny-eye.yaml (make machine), a tiny-assistant daemon with
     // examples/machine added as a project, and no machine agent running yet (the assistant starts it).
     // Step 4 needs the daemon started with TINY_CLAUDE_OTEL_ENDPOINT=<tiny-eye>, so Claude Code's own telemetry
-    // fills the claude-code dashboard.
+    // fills the claude-code dashboard, Traces and Logs.
     const TA = process.env.TINY_ASSISTANT_URL ?? "http://127.0.0.1:7777";
     const get = async (url) => (await fetch(url)).json();
     const project = (await get(`${TA}/api/state`)).projects.find((p) => p.path.endsWith("examples/machine"));
@@ -333,7 +333,29 @@ const JOBS = {
       await untilIdle(eye, 6 * 60_000);
       await eye.reload();
       await ctl.speed(1);
-      await sleep(8000);
+      await sleep(5000);
+      // ... and the same telemetry as traces (a tool call's waterfall) and as events in Logs.
+      const pick = (label, value) => eye.b.evaluate(`(() => { const s = [...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('select'); if (s) { s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
+      try {
+      await eye.click(`document.querySelector('a[href="#/traces"]')`);
+      await sleep(1200);
+      await eye.click(`[...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith('service'))?.querySelector('select')`);
+      await pick("service", "claude-code");
+      await sleep(800);
+      await eye.click(`[...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith('span name'))?.querySelector('input')`);
+      await eye.type("claude_code.tool", 40);
+      await eye.waitFor(`document.querySelector('tr.click')`);
+      await sleep(2000);
+      await eye.click(`document.querySelector('tr.click')`);
+      await sleep(5000);
+      await eye.b.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await sleep(500);
+      await eye.click(`document.querySelector('a[href="#/logs"]')`);
+      await sleep(1200);
+      await eye.click(`[...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith('service'))?.querySelector('select')`);
+      await pick("service", "claude-code");
+      await sleep(5500);
+      } catch (e) { console.error("traces/logs tour:", e.message); await sleep(3000); }
       return t0;
     });
     await withIntro("assistant-machine", mp4, "assistant-machine-intro.html", { width: 1602, height: 900, poster: 0.55 });

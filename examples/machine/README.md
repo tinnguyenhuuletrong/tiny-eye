@@ -16,7 +16,7 @@ and fix them.
 | `CLAUDE.md` | What the assistant may do here, the metric names, query examples, how to save a dashboard |
 | `.mcp.json`, `tiny-eye-mcp.sh` | tiny-eye's MCP bridge for an assistant started in this folder (`.claude/settings.json` enables it) |
 | `runaway-job.sh` | Starts a process that pins one CPU core, for the assistant to find |
-| `dashboards/` | Dashboards the assistant saves (tiny-eye writes them here). `this-mac.yaml` is the one it built in the video; `claude-code.yaml` watches the assistant itself |
+| `dashboards/` | Dashboards the assistant saves (tiny-eye writes them here). `machine.yaml` ("This Mac") is the one it built in the video; `claude-code.yaml` watches the assistant itself |
 
 ## Run it
 
