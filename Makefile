@@ -103,7 +103,7 @@ s3-down: ## Stop MinIO and drop its volume
 	$(COMPOSE) down -v
 
 .PHONY: check
-check: lint ui test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
+check: lint demo-lint ui test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
 
 ## ---- container
 .PHONY: docker
@@ -115,8 +115,12 @@ docker: ## Build the container image tiny-eye:dev (UI + binary + pinned DuckDB e
 demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo); UI at http://127.0.0.1:7070
 	./target/release/tiny-eye --config examples/demo/tiny-eye.yaml
 
-demo-app: ## Run the demo shop: shop-api :3000 + payments :3001 (Node.js, OpenTelemetry)
-	cd examples/demo/app && npm install --no-audit --no-fund && npm start
+demo-app: ## Run the demo shop: shop-api :3000 + payments :3001 (Bun, OpenTelemetry)
+	cd examples/demo/app && bun install && bun start
+
+.PHONY: demo-lint
+demo-lint: ## Lint, format check and typecheck the demo app (Biome + tsc, needs Bun)
+	cd examples/demo/app && bun install --frozen-lockfile && bun run check
 
 demo-load: ## k6 load against the demo shop via Docker (DURATION=10m for longer)
 	docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:3000 \

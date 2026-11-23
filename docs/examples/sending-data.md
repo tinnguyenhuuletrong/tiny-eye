@@ -21,7 +21,7 @@ could not be decoded (the response text says why). `429` means the ingest arena 
 token with the `ingest` scope (see [Security](../deep-dive/security.md)).
 
 :::warning What is tested
-The [demo shop](demo-shop.md) exercises OTLP/HTTP protobuf from the OpenTelemetry Node.js SDK.
+The [demo shop](demo-shop.md) exercises OTLP/HTTP protobuf from the OpenTelemetry JavaScript SDK (on Bun).
 `make e2e` exercises Prometheus remote-write. OTLP JSON and Loki JSON are covered by unit tests
 of the decoders. The OTel Collector, Prometheus and Alloy configurations below are standard
 configurations for those tools, but no tiny-eye test runs them.

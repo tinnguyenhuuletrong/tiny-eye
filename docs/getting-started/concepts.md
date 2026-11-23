@@ -137,7 +137,7 @@ Separate ingest, coordinator and query roles for a cluster are planned but not b
 | `dashboards/` | Dashboards as YAML (`self.yaml` monitors tiny-eye itself). |
 | `deploy/` | `docker-compose.yml` for a local MinIO. |
 | `docs/` | This documentation. `deep-dive/evidence/` holds generated test and benchmark reports. |
-| `examples/` | `demo/`: an instrumented Node.js shop, a k6 load script, a dashboard and queries. |
+| `examples/` | `demo/`: an instrumented Bun and TypeScript shop, a k6 load script, a dashboard and queries. |
 | `research/` | The specification (`research/spec/`) and the research code and results it is based on. |
 | `schema/` | `tables.yaml` (source of truth for stored tables) and `generated/` (JSON Schemas for TQS, dashboards and config, MCP tool list, formula grammar). |
 | `ui/` | The web UI (Preact + Vite, embedded in the binary) and `prototype/`, the clickable design prototype on sample data. |

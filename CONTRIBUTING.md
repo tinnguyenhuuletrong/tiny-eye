@@ -8,7 +8,8 @@ this page covers the development setup, the daily loop and the rules that keep t
 You need:
 
 - **Rust stable** (pinned by `rust-toolchain.toml`, with `rustfmt` and `clippy`); install via [rustup](https://rustup.rs).
-- **Node.js 20+** for the web UI (`ui/`), the documentation site (`website/`) and the demo app.
+- **Node.js 20+** for the web UI (`ui/`) and the documentation site (`website/`).
+- **[Bun](https://bun.sh) 1.x** for the demo app (`examples/demo/app`, TypeScript). `make demo-lint` runs Biome (lint and format) and `tsc` on it; `cd examples/demo/app && bun run format` fixes style.
 - **Docker** (optional) for MinIO in the S3 benchmarks (`make s3-up`) and k6 in the demo (`make demo-load`).
 
 Then, once:

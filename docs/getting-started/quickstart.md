@@ -17,7 +17,7 @@ Prefer a ready-made app with traffic? `make demo`, `make demo-app` and `make dem
 - **Rust stable** (1.90 or newer) and a C/C++ compiler. The first build compiles DuckDB and takes
   several minutes.
 - **Node.js 20+ and npm**. `make build` and `make run` build the web UI and embed it in the
-  binary. The demo shop needs Node.js too.
+  binary. The demo shop needs [Bun](https://bun.sh) 1.x.
 - **curl** and **jq** for the commands below.
 - **Docker** is optional. Only the S3 setup and the demo load test use it.
 
@@ -218,7 +218,7 @@ them into the catalog before it exits. Your data stays in `./data` for the next 
 ## Next steps
 
 - [Concepts](concepts.md): signals, TQS documents, panels, and how fresh data is.
-- [Demo shop](../examples/demo-shop.md): a real Node.js app with load, a dashboard and an agent.
+- [Demo shop](../examples/demo-shop.md): a real Bun and TypeScript app with load, a dashboard and an agent.
 - [Sending data](../examples/sending-data.md): point OpenTelemetry SDKs, the Collector,
   Prometheus or Alloy at tiny-eye.
 - [Query cookbook](../examples/query-cookbook.md): TQS recipes with their PromQL equivalents.

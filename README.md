@@ -29,12 +29,12 @@ disk or S3 and answers queries that return the same points as Prometheus.
 
 ## Quick start
 
-Needs Rust stable, a C/C++ compiler, Node.js 20+ and Docker (for the k6 load generator).
+Needs Rust stable, a C/C++ compiler, Node.js 20+ (web UI), Bun 1.x (demo shop) and Docker (for the k6 load generator).
 
 ```bash
 git clone https://github.com/tinnguyenhuuletrong/tiny-eye && cd tiny-eye
 make demo        # terminal 1: build and start tiny-eye on http://127.0.0.1:7070
-make demo-app    # terminal 2: a Node.js shop instrumented with OpenTelemetry
+make demo-app    # terminal 2: a Bun + TypeScript shop instrumented with OpenTelemetry
 make demo-load   # terminal 3: k6 traffic for 3 minutes
 ```
 
@@ -160,7 +160,7 @@ MCP tools and editor grammars are generated from them. See [CONTRIBUTING.md](CON
 | `dashboards/` | Dashboards as YAML |
 | `deploy/` | Docker Compose for a local MinIO (the image itself is built by `Dockerfile`) |
 | `docs/` | Documentation, generated evidence reports, and `assets/media/` (sources of the GIFs) |
-| `examples/` | The demo shop: Node.js app, k6 load, dashboard, queries |
+| `examples/` | The demo shop: Bun + TypeScript app, k6 load, dashboard, queries |
 | `research/` | The specification and the research it is based on |
 | `schema/` | `tables.yaml` (stored tables) and `generated/` (JSON Schemas, MCP tools, grammar) |
 | `ui/` | Web UI (Preact + Vite, embedded in the binary) and `prototype/` (the design prototype) |
