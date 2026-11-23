@@ -501,7 +501,7 @@ impl Node {
         }
         let mut env = Envelope {
             format: 1,
-            envelope_id: ulid::Ulid::new().to_string(),
+            envelope_id: ulid::Ulid::generate().to_string(),
             kind: "ingest".into(),
             tenant: self.cfg.node.tenant.clone(),
             region: self.cfg.node.region.clone(),

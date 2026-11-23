@@ -402,7 +402,7 @@ async fn run(a: Args) -> Result<()> {
     let storage = match &a.s3 {
         Some(ep) => format!(
             "storage: {{ url: s3://tiny-eye/bench-{}, s3: {{ endpoint: {ep}, access_key_id: tinyeye, secret_access_key: tinyeye-secret, allow_http: true }} }}",
-            ulid::Ulid::new().to_string().to_lowercase()
+            ulid::Ulid::generate().to_string().to_lowercase()
         ),
         None => format!("storage: {{ url: {d}/objects }}"),
     };

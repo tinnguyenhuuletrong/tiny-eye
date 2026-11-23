@@ -118,7 +118,7 @@ pub fn data_key(table: &str, tenant: &str, hour: i64, level: &str, node: &str) -
         "{table}/tenant={tenant}/date={}/hour={:02}/{level}-{}-{node}.parquet",
         date_of_hour(hour),
         hour.rem_euclid(24),
-        ulid::Ulid::new()
+        ulid::Ulid::generate()
     )
 }
 
