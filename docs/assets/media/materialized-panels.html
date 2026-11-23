@@ -1,0 +1,173 @@
+<!doctype html>
+<!--
+  Animated "Materialized panels" explainer. Source of docs/assets/materialized-panels.gif / .mp4:
+    node docs/assets/media/record.mjs materialized-panels      (or: make media)
+  Open it in a browser to watch it live. render(t) is a pure function of time,
+  so the recorder steps it frame by frame and the output is identical every run.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Materialized panels</title>
+<style>
+  @font-face { font-family: Geist; src: url(../../../ui/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2) format("woff2"); font-weight: 100 900; }
+  @font-face { font-family: "Geist Mono"; src: url(../../../ui/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2) format("woff2"); font-weight: 100 900; }
+  :root { --bg: #0b0d12; --panel: #12151d; --panel2: #171b25; --line: #262c39; --ink: #e8eaf0; --muted: #8b93a5; --dim: #5a6275; }
+  html, body { margin: 0; background: var(--bg); }
+  body { display: grid; place-items: center; min-height: 100vh; }
+  svg { width: 1200px; height: 640px; display: block; font-family: Geist, -apple-system, "Segoe UI", sans-serif; }
+  .mono { font-family: "Geist Mono", ui-monospace, Menlo, monospace; }
+  .title { fill: var(--ink); font-size: 15px; font-weight: 600; }
+  .label { fill: var(--muted); font-size: 12px; }
+  .small { fill: var(--dim); font-size: 11px; }
+  .big { fill: var(--ink); font-size: 26px; font-weight: 600; }
+</style>
+</head>
+<body>
+<svg id="s" viewBox="0 0 1200 640" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="640" fill="#0b0d12"/>
+  <text x="40" y="38" class="title" style="font-size:20px">Materialized panels</text>
+  <text x="250" y="38" class="label" style="font-size:14px">one dashboard panel: requests per second, last 6 hours (24 steps shown)</text>
+
+  <!-- row 1: without -->
+  <text x="72" y="96" class="title">Without <tspan class="mono" style="fill:#8b93a5;font-weight:400">materialize</tspan></text>
+  <text x="72" y="114" class="label">every refresh reads the raw samples of the whole range and does the maths again</text>
+  <g id="row1"></g>
+  <text id="ms1" x="1128" y="96" class="big mono" text-anchor="end" opacity="0">440 ms</text>
+
+  <!-- row 2: with -->
+  <text x="72" y="262" class="title">With <tspan class="mono" style="fill:#5eead4;font-weight:400">materialize: true</tspan></text>
+  <text x="72" y="280" class="label">a background task stores each finished step once; a read reuses them</text>
+  <g id="row2"></g>
+  <text id="ms2" x="1128" y="262" class="big mono" text-anchor="end" opacity="0" style="fill:#5eead4">38 ms</text>
+
+  <!-- axis -->
+  <text x="72" y="452" class="small">6 h ago</text>
+  <text x="1128" y="452" class="small" text-anchor="end">now</text>
+  <text id="settle" x="1050" y="470" class="small" text-anchor="middle" opacity="0">newest steps not settled yet</text>
+
+  <!-- legend -->
+  <g transform="translate(72,500)">
+    <rect width="14" height="14" rx="3" fill="#3ccf91"/><text x="22" y="12" class="label">stored point (computed once)</text>
+    <rect x="260" width="14" height="14" rx="3" fill="#f5a524"/><text x="282" y="12" class="label">computed from raw samples</text>
+    <rect x="520" width="14" height="14" rx="3" fill="#ff5d6c"/><text x="542" y="12" class="label">stale: a late sample arrived</text>
+  </g>
+
+  <!-- info -->
+  <rect x="72" y="535" width="1056" height="42" rx="10" fill="#12151d" stroke="#262c39"/>
+  <text id="info" x="92" y="561" class="mono" style="fill:#e8eaf0;font-size:14px"></text>
+
+  <!-- late sample marker -->
+  <g id="late" opacity="0">
+    <path id="latearrow" d="M0,0 L0,24" stroke="#ff5d6c" stroke-width="3" fill="none"/>
+    <text id="latetext" class="small" style="fill:#ff5d6c" text-anchor="middle" y="-6">late sample</text>
+  </g>
+
+  <!-- caption -->
+  <rect x="0" y="600" width="1200" height="40" fill="#12151d"/>
+  <text id="cap" x="40" y="625" class="label" style="font-size:14px;fill:#e8eaf0"></text>
+  <text id="capstep" x="1160" y="625" class="small mono" text-anchor="end"></text>
+</svg>
+<script>
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const N = 24, X0 = 72, CW = 40, GAP = 4, H = 56, Y1 = 130, Y2 = 296, STORED = 21;
+const AMBER = "#f5a524", TEAL = "#3ccf91", RED = "#ff5d6c", ACC = "#5eead4";
+
+function cell(parent, i, y) {
+  const x = X0 + i * (CW + GAP);
+  const base = document.createElementNS(NS, "rect");
+  Object.entries({ x, y, width: CW, height: H, rx: 6, fill: "#171b25", stroke: "#262c39", "stroke-width": 1 }).forEach(([k, v]) => base.setAttribute(k, v));
+  const fill = document.createElementNS(NS, "rect");
+  Object.entries({ x, y, width: CW, height: H, rx: 6, fill: "none", "fill-opacity": 0, stroke: "none", "stroke-width": 2 }).forEach(([k, v]) => fill.setAttribute(k, v));
+  parent.appendChild(base); parent.appendChild(fill);
+  return { fill, x };
+}
+const row1 = [...Array(N)].map((_, i) => cell($("row1"), i, Y1));
+const row2 = [...Array(N)].map((_, i) => cell($("row2"), i, Y2));
+const style = (c, color, op, stroke = "none", dash = "") => {
+  c.fill.setAttribute("fill", color); c.fill.setAttribute("fill-opacity", op.toFixed(2));
+  c.fill.setAttribute("stroke", stroke); c.fill.setAttribute("stroke-dasharray", dash);
+};
+
+// timeline (seconds)
+const S1 = 0.6, S2 = 5.5, S3 = 13.0, S4 = 18.0, S5 = 24.0, L = 28;
+const CAPS = [
+  [0, "1  Without materialize", "each refresh scans 6 h of raw samples: slow, and the same work every time"],
+  [S2, "2  With materialize", "every 15 s a background task computes the next finished step and keeps it"],
+  [S3, "3  A refresh", "take the stored points, compute only the newest steps: same answer, much less work"],
+  [S4, "4  Late data", "an old sample arrives (retry, backlog): drop stored points from there, compute them again"],
+  [S5, "5  The idea", "do the work once, keep it, and fix it only when data changes"],
+];
+const INFO = [
+  [0, "reads 6 h of raw samples (2,620 series) every refresh"],
+  [S2, ""],
+  [S3, "read = 21 stored points + 3 computed steps"],
+  [S4, "late sample at step 13: recompute steps 13 to 21 on the next tick"],
+  [S5, "same value at the same timestamp as the raw query: tested point by point"],
+];
+
+function render(t) {
+  // row 1: scan sweeps the whole row
+  row1.forEach((c, i) => {
+    const lit = seg(t, S1 + i * 0.07, S1 + i * 0.07 + 0.3);
+    const again = t >= S3 && t < S3 + 2.2 ? seg(t, S3 + i * 0.03, S3 + i * 0.03 + 0.4) * (1 - seg(t, S3 + 1.4 + i * 0.03, S3 + 1.8 + i * 0.03)) : 0;
+    style(c, AMBER, Math.max(0.12 + 0.55 * lit * (t < S3 ? 1 : 0.55), again * 0.7));
+  });
+  $("ms1").setAttribute("opacity", seg(t, 3.2, 3.8).toFixed(2));
+  const info = INFO.filter((x) => t >= x[0]).pop();
+
+  // row 2
+  let stored = 0;
+  row2.forEach((c, i) => {
+    if (i >= STORED) {
+      // newest, unsettled steps: always computed on read
+      const show = seg(t, S2, S2 + 0.6);
+      const readk = t >= S3 + 0.2 && t < S3 + 1.6 ? seg(t, S3 + 0.8, S3 + 1.2) * (1 - seg(t, S3 + 1.3, S3 + 1.6)) : 0;
+      style(c, AMBER, show * (0.12 + 0.6 * readk), AMBER, "4 4");
+      c.fill.setAttribute("stroke-opacity", show.toFixed(2));
+      return;
+    }
+    const ts = S2 + 0.2 + i * 0.3;
+    const filled = seg(t, ts, ts + 0.25);
+    if (filled >= 1) stored++;
+    const glow = t >= S3 && t < S3 + 1.4 ? seg(t, S3 + i * 0.02, S3 + i * 0.02 + 0.2) * (1 - seg(t, S3 + 0.9, S3 + 1.3)) : 0;
+    // late data: steps 13..20 turn stale, then are recomputed
+    let color = TEAL, op = filled * (0.55 + 0.35 * glow);
+    if (i >= 13) {
+      const r1 = S4 + 0.9 + (i - 13) * 0.1, r2 = S4 + 2.6 + (i - 13) * 0.18;
+      if (t >= r1 && t < r2) { color = RED; op = 0.8; }
+      else if (t >= r2 && t < r2 + 0.3) { color = TEAL; op = 0.55 + 0.4 * (1 - seg(t, r2, r2 + 0.3)); }
+    }
+    style(c, color, op, glow > 0.2 ? ACC : "none");
+  });
+  $("settle").setAttribute("opacity", seg(t, S2 + 0.5, S2 + 1).toFixed(2));
+  $("ms2").setAttribute("opacity", seg(t, S3 + 1.2, S3 + 1.7).toFixed(2));
+
+  // late marker
+  const lm = seg(t, S4 + 0.1, S4 + 0.6) * (1 - seg(t, S4 + 1.0, S4 + 1.3));
+  const lx = row2[13].x + CW / 2;
+  $("late").setAttribute("opacity", lm.toFixed(2));
+  $("late").setAttribute("transform", `translate(${lx},${Y2 - 34 + 14 * seg(t, S4 + 0.1, S4 + 0.8)})`);
+
+  let text = info[1];
+  if (t >= S2 && t < S3) text = `stored points: ${stored} of ${STORED} (+1 per 15 s tick)`;
+  $("info").textContent = text;
+
+  let cap = CAPS[0];
+  for (const c of CAPS) if (t >= c[0]) cap = c;
+  $("cap").textContent = `${cap[1]}: ${cap[2]}`;
+  $("capstep").textContent = `${CAPS.indexOf(cap) + 1}/${CAPS.length}`;
+}
+window.render = render;
+window.LOOP_SECONDS = L;
+if (!new URLSearchParams(location.search).has("still")) {
+  const t0 = performance.now();
+  const tick = () => { render(((performance.now() - t0) / 1000) % L); requestAnimationFrame(tick); };
+  document.fonts.ready.then(tick);
+} else render(0);
+</script>
+</body>
+</html>

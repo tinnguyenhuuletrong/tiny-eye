@@ -14,3 +14,5 @@ coordinator:
   hot_grace: 10s
 dashboards:
   dir: examples/demo/dashboards
+materialize:
+  path: ./data/demo/materialized.duckdb

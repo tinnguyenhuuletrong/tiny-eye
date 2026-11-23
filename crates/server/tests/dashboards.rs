@@ -36,7 +36,7 @@ async fn ui_state_round_trips_through_the_yaml_file() {
     std::fs::copy(root.join("examples/demo/dashboards/shop.yaml"), dash_dir.join("shop.yaml")).unwrap();
     let d = dir.path().display();
     let yaml = format!(
-        "duckdb: {{ extension_dir: {} }}\nstorage: {{ url: {d}/o }}\ncatalog: {{ url: {d}/c.ducklake }}\ningest: {{ wal_dir: {d}/w }}\ndashboards: {{ dir: {} }}\n",
+        "duckdb: {{ extension_dir: {} }}\nstorage: {{ url: {d}/o }}\ncatalog: {{ url: {d}/c.ducklake }}\ningest: {{ wal_dir: {d}/w }}\nmaterialize: {{ path: {d}/mat.duckdb }}\ndashboards: {{ dir: {} }}\n",
         root.join(".tools/duckdb_ext").display(),
         dash_dir.display()
     );
@@ -98,7 +98,7 @@ async fn start(dir: &std::path::Path, dash_dir: &std::path::Path, tokens: &[(&st
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let d = dir.display();
     let yaml = format!(
-        "duckdb: {{ extension_dir: {} }}\nstorage: {{ url: {d}/o }}\ncatalog: {{ url: {d}/c.ducklake }}\ningest: {{ wal_dir: {d}/w }}\ndashboards: {{ dir: {} }}\n",
+        "duckdb: {{ extension_dir: {} }}\nstorage: {{ url: {d}/o }}\ncatalog: {{ url: {d}/c.ducklake }}\ningest: {{ wal_dir: {d}/w }}\nmaterialize: {{ path: {d}/mat.duckdb }}\ndashboards: {{ dir: {} }}\n",
         root.join(".tools/duckdb_ext").display(),
         dash_dir.display()
     );

@@ -96,6 +96,7 @@ main { min-width: 0; display: flex; flex-direction: column; }
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
 .pill.good { background: var(--good-soft); color: var(--ink); }
 .pill.warn { background: var(--warning-soft); color: var(--ink); }
+.pill.mat { background: var(--accent-soft); color: var(--ink-2); font-weight: 500; margin-left: 6px; }
 .pill.crit { background: var(--critical-soft); color: var(--ink); }
 .pill .dot { width: 7px; height: 7px; border-radius: 50%; }
 .spark { height: 38px; margin-top: 8px; }
@@ -313,3 +314,6 @@ svg.spark { width: 100%; height: 36px; margin-top: auto; display: block; }
 .body .problems { margin: 4px 0; }
 .wf .span em.inside { left: auto; right: 6px; color: #fff; font-weight: 600; }
 .wf .lane { overflow: hidden; }
+.field.check { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--ink-2); line-height: 1.45; }
+.field.check input { margin-top: 2px; }
+.field.check b { color: var(--ink); font-weight: 600; }

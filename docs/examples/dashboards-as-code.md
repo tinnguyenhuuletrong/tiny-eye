@@ -48,6 +48,23 @@ There are no x/y coordinates. Panels flow over the grid in list order: a panel g
 of the previous one if it fits in the remaining columns, otherwise to the next row. To move a
 panel, move it in the list.
 
+## Keep heavy panels fast: `materialize`
+
+A panel over a long range re-reads every raw sample on each refresh. Add `materialize: true`
+next to `ui` and `query` and tiny-eye keeps the panel's computed points, extending them as data
+arrives; a read then computes only what is not stored, with the same result:
+
+```yaml
+  - ui: { display: timeseries, unit: req/s, w: 6, h: 4 }
+    materialize: true
+    query: { tqs: "3", id: rps, kind: timeseries, time: { from: "-6h" },
+             queries: [{ name: r, metric: http_requests_total, fn: { op: rate, window: 5m }, agg: { op: sum, by: [route] } }] }
+```
+
+It applies to timeseries metric queries whose points depend only on their own timestamp;
+validation tells you when a panel does not qualify. The UI marks materialized panels
+**stored**. How it works and what it costs: [Materialized panels](../deep-dive/materialized-panels.md). New to the idea? Start with its [60-second explainer](../deep-dive/materialized-panels.md#the-idea-in-60-seconds).
+
 ## Editor autocompletion
 
 The JSON Schema for dashboards is generated from the API definition into

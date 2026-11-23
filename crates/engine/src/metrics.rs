@@ -17,6 +17,13 @@ pub struct Metrics {
     pub queries: AtomicU64,
     pub query_errors: AtomicU64,
     pub query_ms: AtomicU64,
+    pub materialized_points: AtomicU64,
+    pub materialized_reads: AtomicU64,
+    pub materialized_trimmed: AtomicU64,
+    /// Gauges, set by the background task each tick.
+    pub materialized_stored: AtomicU64,
+    pub materialized_panels: AtomicU64,
+    pub materialized_tick_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -56,6 +63,24 @@ impl Metrics {
         counter("queries_total", "TQS queries run.", vec![(String::new(), g(&self.queries))]);
         counter("query_errors_total", "TQS queries that failed.", vec![(String::new(), g(&self.query_errors))]);
         counter("query_milliseconds_total", "Time spent running queries.", vec![(String::new(), g(&self.query_ms))]);
+        counter("materialized_points_total", "Points stored for materialized panels.", vec![(String::new(), g(&self.materialized_points))]);
+        counter(
+            "materialized_reads_total",
+            "Queries answered from materialized panel points.",
+            vec![(String::new(), g(&self.materialized_reads))],
+        );
+        counter(
+            "materialized_trimmed_points_total",
+            "Stored points dropped because a panel passed materialize.max_points_per_panel.",
+            vec![(String::new(), g(&self.materialized_trimmed))],
+        );
+        for (name, help, v) in [
+            ("materialized_stored_points", "Points now stored for materialized panels.", &self.materialized_stored),
+            ("materialized_panels", "Panels currently materialized.", &self.materialized_panels),
+            ("materialized_tick_milliseconds", "Duration of the last materialization tick.", &self.materialized_tick_ms),
+        ] {
+            let _ = writeln!(s, "# HELP tiny_eye_{name} {help}\n# TYPE tiny_eye_{name} gauge\ntiny_eye_{name} {}", g(v));
+        }
         let _ = writeln!(
             s,
             "# HELP tiny_eye_hot_bytes Bytes buffered in the ingest arena / hot tail.\n# TYPE tiny_eye_hot_bytes gauge\ntiny_eye_hot_bytes {hot_bytes}"

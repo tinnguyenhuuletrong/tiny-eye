@@ -36,6 +36,8 @@ pub struct Config {
     pub auth: Auth,
     /// Dashboards loaded from YAML files at start.
     pub dashboards: Dashboards,
+    /// Materialized dashboard panels (`materialize: true` on a panel).
+    pub materialize: Materialize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -175,6 +177,30 @@ pub enum Scope {
 pub struct Dashboards {
     /// Directory of dashboard YAML files (schema: schema/generated/dashboard.schema.json).
     pub dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Materialize {
+    /// Node-local DuckDB file holding materialized points; empty keeps them in memory (they are
+    /// derived data: losing them only means computing the uncovered range again).
+    pub path: String,
+    /// Step of the stored points. A read whose step is a multiple of it uses them.
+    pub resolution: Dur,
+    /// A step is stored once it is this old. A sample that arrives later than this for a stored
+    /// step makes the next tick recompute the stored steps from its timestamp on, so stored points
+    /// never miss accepted data; a larger value stores later and recomputes less often.
+    pub settle: Dur,
+    /// At most this many panels are materialized; the rest are skipped with a warning. Bounds the
+    /// store: `max_panels * max_points_per_panel * ~24 B`.
+    pub max_panels: usize,
+    /// Stored points kept per panel. Past it the oldest steps are dropped (a read computes them
+    /// again), so a wide panel (many series per step) cannot grow the store without bound. A
+    /// panel that cannot hold at least 240 steps (1 h at 15 s) is not stored at all.
+    pub max_points_per_panel: u64,
+    /// Points one background slice may produce (computed and written in one statement). The
+    /// slice length adapts to the panel's width, so the working memory of a tick stays bounded.
+    pub max_slice_points: u64,
 }
 
 /// `64MB`, `1GB`, `512KB`, `100B` (powers of 1024).

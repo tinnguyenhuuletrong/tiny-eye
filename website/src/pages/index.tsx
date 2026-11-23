@@ -12,7 +12,7 @@ const MCP_ADD = "claude mcp add tiny-eye -- tiny-eye mcp --url http://127.0.0.1:
 
 const WHY = "/docs/getting-started/why-tiny-eye";
 // "What makes it different": built items only, plus planned ones labelled as such (see the docs page).
-const DIFFERENT = [
+const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolean }[] = [
   {
     title: "Files that outlive the engine",
     text: "Plain Parquet and a DuckLake catalog in your bucket. Any Parquet reader opens them.",
@@ -35,9 +35,8 @@ const DIFFERENT = [
   },
   {
     title: "Materialized panels",
-    text: "Panels kept up to date incrementally, so load cost does not grow with the range.",
-    anchor: "designed-not-built-yet-materialized-panels",
-    planned: true,
+    text: "Mark a panel materialize: true; long-range reads use stored points, up to 12× faster on aggregations, same answer.",
+    anchor: "materialized-panels-maintained-incrementally",
   },
 ];
 
@@ -154,6 +153,28 @@ export default function Home(): ReactNode {
 
         <Feature
           flip
+          eyebrow="Materialized panels"
+          title="Do the work once, keep the answer"
+          to="/docs/deep-dive/materialized-panels"
+          link="How materialized panels work"
+          media={
+            <video
+              className="screenshot"
+              src={useBaseUrl("/materialized-panels.mp4")}
+              poster={useBaseUrl("/materialized-panels.png")}
+              autoPlay
+              muted
+              loop
+              playsInline
+              aria-label="Materialized panels: stored points, a refresh that computes only the newest steps, and recompute after late data"
+            />
+          }
+        >
+          Mark a panel <code>materialize: true</code>. A background task stores each finished step, a refresh reads them and computes
+          only the newest part, and late data is recomputed. The answer equals the raw query; aggregations over many series on long ranges are up to 12× faster once the range is stored.
+        </Feature>
+
+        <Feature
           eyebrow="Explore and traces"
           title="From a spike to the span"
           to="/docs/examples/query-cookbook"
@@ -164,6 +185,7 @@ export default function Home(): ReactNode {
         </Feature>
 
         <Feature
+          flip
           eyebrow="AI agents (MCP)"
           title="Let an agent query your telemetry"
           to={MCP_GUIDE}

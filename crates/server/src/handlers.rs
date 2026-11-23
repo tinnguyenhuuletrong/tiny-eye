@@ -45,6 +45,12 @@ pub async fn run_query(State(st): State<AppState>, body: String) -> Response {
             rows_total: o.rows_total,
             truncated: o.truncated,
             elapsed_ms: o.elapsed_ms,
+            materialized: o.materialized.map(|m| MaterializedInfo {
+                panel: m.panel,
+                resolution_ms: m.resolution_ms,
+                stored_points: m.stored_points as i64,
+                computed_steps: m.computed_steps,
+            }),
         })
         .into_response(),
         Err(QueryError::Invalid(ps)) => (StatusCode::BAD_REQUEST, Json(problems(ps))).into_response(),
@@ -92,6 +98,7 @@ fn to_api(d: &engine::dashboards::Dashboard) -> Dashboard {
             .iter()
             .map(|p| Panel {
                 query: p.query.clone(),
+                materialize: p.materialize.then_some(true),
                 ui: p.ui.as_ref().map(|u| PanelUi {
                     display: u.display.clone(),
                     unit: u.unit.clone(),
@@ -131,7 +138,7 @@ pub async fn save_dashboard(State(st): State<AppState>, Path(id): Path<String>, 
         }]);
     }
     let dir = st.node.cfg.dashboards.dir.clone();
-    let (ds, d2) = (st.dashboards.clone(), d.clone());
+    let (ds, d2, node) = (st.dashboards.clone(), d.clone(), st.node.clone());
     // One write lock across the file write and the in-memory replace: concurrent saves are
     // serialised and readers never see memory and file disagree.
     let saved = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, SaveError> {
@@ -141,6 +148,7 @@ pub async fn save_dashboard(State(st): State<AppState>, Path(id): Path<String>, 
             Some(slot) => *slot = d2,
             None => ds.push(d2),
         }
+        node.set_materialized(engine::dashboards::materialized(&ds));
         Ok(path)
     })
     .await;

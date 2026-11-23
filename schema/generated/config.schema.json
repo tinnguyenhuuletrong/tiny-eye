@@ -244,6 +244,49 @@
       },
       "additionalProperties": false,
       "description": "Dashboards loaded from YAML files at start."
+    },
+    "materialize": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Node-local DuckDB file holding materialized points; empty keeps them in memory (they are\nderived data: losing them only means computing the uncovered range again).",
+          "type": "string",
+          "default": "./data/materialized.duckdb"
+        },
+        "resolution": {
+          "description": "Step of the stored points. A read whose step is a multiple of it uses them.",
+          "$ref": "#/$defs/Duration",
+          "default": "15s"
+        },
+        "settle": {
+          "description": "A step is stored once it is this old. A sample that arrives later than this for a stored\nstep makes the next tick recompute the stored steps from its timestamp on, so stored points\nnever miss accepted data; a larger value stores later and recomputes less often.",
+          "$ref": "#/$defs/Duration",
+          "default": "5m"
+        },
+        "max_panels": {
+          "description": "At most this many panels are materialized; the rest are skipped with a warning. Bounds the\nstore: `max_panels * max_points_per_panel * ~24 B`.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 64
+        },
+        "max_points_per_panel": {
+          "description": "Stored points kept per panel. Past it the oldest steps are dropped (a read computes them\nagain), so a wide panel (many series per step) cannot grow the store without bound. A\npanel that cannot hold at least 240 steps (1 h at 15 s) is not stored at all.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1000000
+        },
+        "max_slice_points": {
+          "description": "Points one background slice may produce (computed and written in one statement). The\nslice length adapts to the panel's width, so the working memory of a tick stays bounded.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 200000
+        }
+      },
+      "additionalProperties": false,
+      "description": "Materialized dashboard panels (`materialize: true` on a panel)."
     }
   },
   "additionalProperties": false,
@@ -501,6 +544,42 @@
         "dir": {
           "description": "Directory of dashboard YAML files (schema: schema/generated/dashboard.schema.json).",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Materialize": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Node-local DuckDB file holding materialized points; empty keeps them in memory (they are\nderived data: losing them only means computing the uncovered range again).",
+          "type": "string"
+        },
+        "resolution": {
+          "description": "Step of the stored points. A read whose step is a multiple of it uses them.",
+          "$ref": "#/$defs/Duration"
+        },
+        "settle": {
+          "description": "A step is stored once it is this old. A sample that arrives later than this for a stored\nstep makes the next tick recompute the stored steps from its timestamp on, so stored points\nnever miss accepted data; a larger value stores later and recomputes less often.",
+          "$ref": "#/$defs/Duration"
+        },
+        "max_panels": {
+          "description": "At most this many panels are materialized; the rest are skipped with a warning. Bounds the\nstore: `max_panels * max_points_per_panel * ~24 B`.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_points_per_panel": {
+          "description": "Stored points kept per panel. Past it the oldest steps are dropped (a read computes them\nagain), so a wide panel (many series per step) cannot grow the store without bound. A\npanel that cannot hold at least 240 steps (1 h at 15 s) is not stored at all.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_slice_points": {
+          "description": "Points one background slice may produce (computed and written in one statement). The\nslice length adapts to the panel's width, so the working memory of a tick stays bounded.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false

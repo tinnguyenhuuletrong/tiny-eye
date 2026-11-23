@@ -125,6 +125,8 @@ pub struct Node {
     flush_lock: tokio::sync::Mutex<()>,
     /// Serialises catalog writes (single coordinator: checkpoint, compaction, retention).
     catalog_lock: tokio::sync::Mutex<()>,
+    /// Materialized dashboard panels (see `materialize.rs`).
+    pub(crate) mat: crate::materialize::Registry,
 }
 
 const APPLIED_DDL: &str = "CREATE TABLE IF NOT EXISTS lake.applied_envelopes (envelope_id VARCHAR, region VARCHAR, node_id VARCHAR, node_epoch BIGINT, seq_to BIGINT, files INTEGER)";
@@ -212,6 +214,25 @@ impl Node {
         }
         duck::attach_lake(&root, &cfg.catalog.url, &format!("{}/lake/", store.url_prefix))?;
         root.execute_batch(APPLIED_DDL)?;
+        let mat_path = &cfg.materialize.path;
+        if mat_path.is_empty() {
+            root.execute_batch("ATTACH ':memory:' AS mat")?;
+        } else {
+            if let Some(parent) = std::path::Path::new(mat_path).parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            // Derived data: a file that cannot be opened is moved aside and started again.
+            if let Err(e) = root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))) {
+                let aside = format!("{mat_path}.broken-{epoch}");
+                tracing::warn!(path = %mat_path, moved_to = %aside, error = %e, "materialized panels file unusable; starting a new one");
+                let _ = std::fs::rename(mat_path, &aside);
+                let _ = std::fs::remove_file(format!("{mat_path}.wal"));
+                root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))).with_context(|| format!("opening {mat_path}"))?;
+            }
+        }
+        root.execute_batch(crate::materialize::DDL)?;
         for t in Table::ALL {
             root.execute_batch(&t.ddl(&format!("lake.{}", t.name())))?;
             root.execute_batch(&format!("CREATE TABLE memory.main.hot_{} ({}, _seq BIGINT)", t.name(), t.ddl_columns()))?;
@@ -244,6 +265,7 @@ impl Node {
             pool: Arc::new(Mutex::new(pool)),
             flush_lock: Default::default(),
             catalog_lock: Default::default(),
+            mat: Default::default(),
         });
         node.replay_wal().await?;
         tracing::info!(epoch, node = %node.cfg.node.id, storage = %node.store.url_prefix, "node open");
@@ -297,6 +319,10 @@ impl Node {
         if dropped > 0 {
             self.metrics.rejected_out_of_bounds.fetch_add(dropped as u64, Ordering::Relaxed);
         }
+
+        // The oldest sample: if it is at or before the materialized horizon when the rows become
+        // visible (below), stored steps change (see materialize.rs).
+        let oldest_point = rows.points.iter().map(|p| p.timestamp_ms).min();
 
         let seq_guard = self.seq.read().await;
         let seq = *seq_guard;
@@ -364,6 +390,14 @@ impl Node {
         for (t, n) in counts {
             self.metrics.ingested(t, n);
         }
+        // Only once the rows are visible, so the recompute cannot run before they are, and against
+        // a fresh clock: a tick that read before the rows were visible started earlier than this
+        // check, so its horizon is no newer than the one used here.
+        if let Some(t) = oldest_point
+            && t <= now_ms() - self.cfg.materialize.settle.ms()
+        {
+            self.mat.note_late(t);
+        }
         drop(seq_guard);
         Ok(())
     }
@@ -395,6 +429,13 @@ impl Node {
                 let conn = self.writer.lock().map_err(|_| anyhow!("writer lock poisoned"))?;
                 let (mut bytes, mut rows) = (0u64, 0u64);
                 for (t, b) in recs {
+                    // Replayed samples may be late for stored points (the note is in memory only).
+                    if t == Table::MetricsPoints
+                        && let Some(c) = b.column_by_name("timestamp_ms").and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                        && let Some(min) = arrow::compute::min(c)
+                    {
+                        self.mat.note_late(min);
+                    }
                     bytes += b.get_array_memory_size() as u64;
                     rows += b.num_rows() as u64;
                     replayed += b.num_rows();
@@ -717,6 +758,15 @@ impl Node {
     /// Drop files older than `retention`, expire old snapshots and let DuckLake delete the
     /// objects nothing references any more (SPEC §6.4).
     pub async fn retain(&self, now: i64) -> Result<usize> {
+        let dropped = self.retain_lake(now).await?;
+        // Derived data: a failure here never holds back retention of the lake.
+        if let Err(e) = self.retain_materialized(now - self.cfg.coordinator.retention.ms()).await {
+            tracing::warn!(error = %format!("{e:#}"), "retention of materialized points failed; will retry");
+        }
+        Ok(dropped)
+    }
+
+    async fn retain_lake(&self, now: i64) -> Result<usize> {
         let _g = self.catalog_lock.lock().await;
         let conn = self.lake_conn()?;
         let store = self.store.clone();
@@ -756,6 +806,8 @@ impl Node {
         let mut last_ckpt = Instant::now();
         let mut last_compact = Instant::now();
         let mut last_retain = Instant::now() - c.retention_interval.0;
+        let mut last_mat = Instant::now();
+        let mut mat_task: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             tokio::select! {
                 _ = tick.tick() => {}
@@ -777,6 +829,18 @@ impl Node {
                 if let Err(e) = self.compact(now_ms()).await {
                     tracing::error!(error = %format!("{e:#}"), "compaction failed; will retry");
                 }
+            }
+            // In its own task: a long catch-up never delays flushes or checkpoints.
+            if last_mat.elapsed() >= self.cfg.materialize.resolution.0 && mat_task.as_ref().is_none_or(|h| h.is_finished()) {
+                last_mat = Instant::now();
+                let node = self.clone();
+                mat_task = Some(tokio::spawn(async move {
+                    let t = Instant::now();
+                    if let Err(e) = node.materialize(now_ms()).await {
+                        tracing::error!(error = %format!("{e:#}"), "materializing panels failed; will retry");
+                    }
+                    node.metrics.materialized_tick_ms.store(t.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+                }));
             }
             if last_retain.elapsed() >= c.retention_interval.0 {
                 last_retain = Instant::now();

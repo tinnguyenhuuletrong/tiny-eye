@@ -25,7 +25,7 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 ### M4: dashboards and alerts
 
 - The alert evaluator and Alertmanager integration.
-- Materialized panels and their incremental maintenance (see [below](#materialized-panels-designed-not-built)).
+- The rest of materialized panels: the spec's mergeable partials (spans and logs measures, percentiles across regions) and alert rules on the same state. Phase 1 is built (see [below](#materialized-panels)).
 - A Grafana data source plugin. tiny-eye ships its own web UI instead (see [Dashboards and the web UI](dashboards-and-ui.md)).
 - Dashboard variables with allowed values (options from a query). Variables are plain defaults today.
 
@@ -37,30 +37,31 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 
 - Native histograms. OTLP delta temporality and exponential histograms are counted and skipped.
 - Rollups (5-minute and 1-hour) and their retention; only raw retention exists. Compaction writes `positive_delta` into L1 files, but no query reads it.
-- A query result cache. Every query, including each dashboard auto-refresh, is evaluated from raw rows; only DuckDB's file and Parquet-metadata caches persist between queries.
+- A general query result cache. Only [materialized panels](materialized-panels.md) keep results; every other query is evaluated from raw rows.
 - Erasure (rewrite files to remove data).
 - `bytes_scanned` in responses, per-query bytes-scanned limits, and some self-metrics (commit lag, compaction backlog, cache hits).
 - Multi-tenant isolation (one tenant per node).
 - Dependency licence checks in CI.
 
-## Materialized panels (designed, not built)
+## Materialized panels
 
-The spec (section 9.1, decisions D5 and D6, milestone M4) designs panels that are kept up to date incrementally instead of recomputed on every view. None of it is in the code: no `view_partials` table in `schema/tables.yaml`, no materializer in the coordinator loop, no panel or config field to enable it.
+The spec's materialized panels (section 9.1, D5, D6, milestone M4) are **built as phase 1**: a
+panel with `materialize: true` keeps its computed points in a node-local DuckDB file, a background
+task extends them as data settles, late samples trigger a recompute, and reads take stored points
+plus computed head and tail — equal to the raw query at the same timestamps
+([Materialized panels](materialized-panels.md), [benchmark](evidence/bench-local.md#materialized-panels)).
 
-What a panel costs today: every run compiles the TQS document and evaluates every raw sample in its range, so cost follows the range. The 6-hour `table` panel with `increase` over `$__range` takes about 0.39 s for 2 output points ([Performance](performance.md#what-dominates-each-cost)), and the web UI re-runs every panel on each 30 s auto-refresh.
+Limits of phase 1, by design:
 
-The design:
+- **No backfill.** A panel's points start when it is first seen; older steps are computed on read.
+- **Shapes.** Timeseries metric queries whose points depend only on their own timestamp: not
+  `table`, `fill: zero`, `top` ranked over the range, `$__range`/`$__interval`, or spans/logs
+  measures.
+- **Node-local.** The store belongs to one node; there is one node today.
 
-| Part | Spec |
-| :--- | :--- |
-| Scope | Often-viewed panels and every alert rule |
-| Input | Rows of the files listed in each `ingest` envelope (D5). Never the DuckLake change feed, which reports a compaction as N inserts plus N deletes (E6), so compaction does not disturb a view |
-| State | `view_partials (tenant, panel_id, panel_version, bucket_ts, region, group_key, agg_name, n, s, mn, mx, last_ts, last_val, hist_bucket)`, long format, scalar columns only, small enough to be inlined in the catalog (E8) |
-| Percentiles | Log-bucket histograms (scale 5), merged with `SUM` (D6) |
-| Read | Merge the partials of the buckets in range and finish the aggregate; target p95 under 50 ms |
-| Materializable shapes | Sums, counts, min/max, last, log-bucket quantiles. `rate`/`increase` with Prometheus extrapolation need the per-series first and last sample per bucket in the state, marked unproven (U) in the spec |
-
-What it buys: a materialized panel's read cost depends on the number of buckets in its range, not on the raw samples behind them, and a refresh reads state that each flush has already updated. Open points before it can be built: how the newest, not yet applied rows (the hot tail) join the partials so `freshness_s` stays 0, how a changed panel query (`panel_version`) is backfilled, and how partials follow retention. See [What makes it different](../getting-started/why-tiny-eye.md#designed-not-built-yet-materialized-panels).
+Not built from section 9.1: the mergeable `view_partials` state fed from flush envelopes, which
+would add spans and logs measures and percentiles merged across regions (log-bucket histograms,
+D6), and alert rules evaluated on the same state.
 
 ## Known deviations
 
@@ -109,7 +110,7 @@ A short, ordered view of what is next, based on the gaps above:
 
 1. **Web UI.** Finish the Preact UI (dashboards, Explore, traces, logs) and a build target that embeds it into the binary.
 2. **Cluster (M3).** Roles, lease and fencing, hot-tail RPC, `replicated` durability, OTLP gRPC.
-3. **Alerts and materialized panels (M4).** Evaluator with Alertmanager v2; [materialized panels](#materialized-panels-designed-not-built) fed from ingest envelopes into `view_partials`, read by both panels and alert rules.
+3. **Alerts and materialized panels (M4).** Evaluator with Alertmanager v2; the [partials design for materialized panels](#materialized-panels) fed from ingest envelopes into `view_partials`, read by both panels and alert rules (phase 1, stored panel points, is built).
 4. **Operability.** Missing self-metrics, `bytes_scanned`, a published container image, licence checks in CI.
 5. **Multi-region (M5)** and laptop snapshot export.
 

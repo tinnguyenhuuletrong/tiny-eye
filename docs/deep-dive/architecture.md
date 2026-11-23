@@ -105,7 +105,8 @@ The spec (section 3) describes N stateless ingest nodes, N query nodes, one leas
 | Arena spills at 75 %, refuses at 95 % | One limit, `ingest.arena_limit`, then 429 | No spill tier. The limit bounds every hot byte, sealed sequences included |
 | Batching all pending envelopes per checkpoint is U (unverified) | Built: one transaction per tick | Fewer catalog snapshots. The trade-off is in [Catalog and maintenance](catalog-and-maintenance.md) |
 | Metrics compaction through DuckDB `COPY` | DuckDB query, then our writer, for every table | One writer for every file, so sort, encodings and bloom filters are the same everywhere (D4) |
-| DuckDB-file catalog synced to S3, laptop snapshot export (D10), `traces_index`, `metrics_hist`, `events`/`links` columns, materialized panels, alert evaluator | Not built | Later milestones. See [Limitations and roadmap](limitations-and-roadmap.md) |
+| Materialized panels as mergeable partials fed from envelopes (D5, D6) | Phase 1 built differently | A panel's finished points are stored in a node-local DuckDB file and extended as data settles; see [Materialized panels](materialized-panels.md) |
+| DuckDB-file catalog synced to S3, laptop snapshot export (D10), `traces_index`, `metrics_hist`, `events`/`links` columns, alert evaluator | Not built | Later milestones. See [Limitations and roadmap](limitations-and-roadmap.md) |
 | Ten crates (spec section 15.1) | Three crates | Fewer layers. A crate boundary needs a second user |
 
 What is kept unchanged: DuckLake as the catalog (D3), our own compactor and writer (D4), conditional create-only envelopes (D7), the per-node watermark (D8), absolute file paths in one catalog (D9), TQS 3 as the only language (D11), and extensions shipped and pinned (D12).
