@@ -15,7 +15,7 @@
 
 use engine::node::now_ms;
 use engine::{Config, Node};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use serde_json::{Value as J, json};
 use server::receivers::{Label, Sample, TimeSeries, WriteRequest, encode_remote_write};
 use std::collections::BTreeMap;
