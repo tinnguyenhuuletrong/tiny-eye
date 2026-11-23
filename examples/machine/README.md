@@ -16,7 +16,7 @@ and fix them.
 | `CLAUDE.md` | What the assistant may do here, the metric names, query examples, how to save a dashboard |
 | `.mcp.json`, `tiny-eye-mcp.sh` | tiny-eye's MCP bridge for an assistant started in this folder (`.claude/settings.json` enables it) |
 | `runaway-job.sh` | Starts a process that pins one CPU core, for the assistant to find |
-| `dashboards/` | Dashboards the assistant saves (tiny-eye writes them here). `this-mac.yaml` is the one it built in the video |
+| `dashboards/` | Dashboards the assistant saves (tiny-eye writes them here). `this-mac.yaml` is the one it built in the video; `claude-code.yaml` watches the assistant itself |
 
 ## Run it
 
@@ -41,6 +41,28 @@ Ask, for example:
 The assistant starts the agent itself if it is not running (`make machine-agent` does the same by
 hand), saves the dashboard with `PUT /api/v1/dashboards/<id>` (tiny-eye validates it and writes
 `dashboards/<id>.yaml`), and checks with tiny-eye that CPU went back down after stopping the process.
+
+## Watch the assistant too
+
+The machine agent shows what the computer does; Claude Code's own OpenTelemetry shows what the
+assistant does on it: every model request, tool call (which tool, how long, whether it worked),
+token and cost, prompt, and hook. tiny-eye takes both. In tiny-assistant's `.env`:
+
+```bash
+TINY_CLAUDE_OTEL_ENDPOINT=http://127.0.0.1:7070
+# TINY_CLAUDE_OTEL_CONTENT=1   # also prompts, responses, Bash commands and tool output
+```
+
+Restart the daemon. Claude Code chats now report to tiny-eye tagged with their engine
+(`tiny_engine`), tiny session (`tiny_session_id`) and project folder (`tiny_project`); Tiny chats on
+a `claude-code/...` model report too, tagged `tiny_engine="pi"`. Open
+<http://127.0.0.1:7070/#/d/claude-code> for cost and tokens per engine and session, tool calls by
+tool, model latency, the slowest model requests and tool calls as traces, and the event log; or ask
+the assistant "what did you spend and run in the last hour?".
+With plain Claude Code (`claude` in this folder), export the same variables yourself (see
+[Monitoring](https://code.claude.com/docs/en/monitoring-usage)) and add
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative`: tiny-eye stores cumulative
+counters and skips delta ones.
 
 ## Metrics
 

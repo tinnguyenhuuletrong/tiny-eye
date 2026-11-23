@@ -65,6 +65,44 @@ that exited has no points after it ended, so "did it stop?" is answered by its s
                      {"field": "severity_text", "op": "=", "value": "WARN"}]}, "limit": 20}
 ```
 
+## Reading yourself (Claude Code telemetry)
+
+When tiny-assistant runs with `TINY_CLAUDE_OTEL_ENDPOINT=http://127.0.0.1:7070`, Claude Code reports
+to tiny-eye as `service_name = "claude-code"` (metrics: `job="claude-code"`). Claude Code chats are
+tagged `tiny_engine="claude-code"`, `tiny_session_id`, `tiny_project`, and `instance` (one per turn);
+Tiny chats on a `claude-code/...` model are tagged `tiny_engine="pi"`, and `session_id` (one per model
+call). On spans and logs the same tags are `resource.tiny.engine`, `resource.tiny.session.id`. Use it
+to answer "what did you do, how long did it take, what did it cost".
+
+| Signal | Name | Useful labels / attributes |
+| --- | --- | --- |
+| metric, counter | `claude_code_cost_usage_total` (USD), `claude_code_token_usage_total` | `model`, `type` (input, output, cacheRead, cacheCreation), `query_source`, `instance`, `tiny_session_id` |
+| metric, counter | `claude_code_active_time_total`, `claude_code_session_count_total`, `claude_code_lines_of_code_count_total` | `instance`, `tiny_session_id` |
+| span | `claude_code.llm_request`, `claude_code.tool`, `claude_code.tool.execution`, `claude_code.tool.blocked_on_user` | `attr.model`, `attr.tool_name`, `resource.tiny.session.id` |
+| log (body = event name) | `claude_code.user_prompt`, `claude_code.api_request`, `claude_code.api_error`, `claude_code.tool_decision`, `claude_code.tool_result`, `claude_code.hook_execution_complete`, `claude_code.mcp_server_connection` | `attr.tool_name`, `attr.success`, `attr.model` |
+
+Each turn (or model call) is its own process whose counters start at zero, so take the last value
+per process (`instance`, `session_id`) and sum, never `rate`/`increase` (a short turn exports once):
+
+```json
+{"tqs": "3", "id": "spend", "kind": "table", "time": {"from": "-1h"},
+ "queries": [{"name": "usd", "metric": "claude_code_cost_usage_total",
+   "fn": {"op": "max_over_time", "window": "1h"},
+   "agg": {"op": "max", "by": ["instance", "session_id", "tiny_engine", "tiny_session_id", "model", "query_source"]},
+   "then": {"op": "sum", "by": ["tiny_engine", "tiny_session_id"]}}]}
+```
+
+```json
+{"tqs": "3", "id": "tools", "kind": "table", "time": {"from": "-1h"},
+ "queries": [{"name": "n", "spans": [{"field": "service_name", "op": "=", "value": "claude-code"},
+                                     {"field": "span_name", "op": "=", "value": "claude_code.tool"}],
+   "measure": {"op": "count"}, "agg": {"by": ["attr.tool_name"]}}]}
+```
+
+Each model request and tool call is its own trace (`kind: trace_search` on `service_name =
+"claude-code"`, `order: duration_desc` for the slowest). The saved dashboard is
+`http://127.0.0.1:7070/#/d/claude-code`.
+
 The full language: `../../docs/deep-dive/tqs-reference.md`. When `validate_tqs` reports a
 problem, fix the field it names and try again.
 

@@ -1,0 +1,264 @@
+# Dashboard "Claude Code": saved by tiny-eye. This file is the source of truth; commit it.
+# Each panel: `ui` (display, unit, w of 12 columns, h rows) and `query` (TQS).
+id: claude-code
+title: Claude Code
+panels:
+- ui:
+    display: stat
+    unit: USD
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: cost
+    kind: table
+    title: Cost (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: usd
+      metric: claude_code_cost_usage_total
+      fn:
+        op: max_over_time
+        window: 1h
+      agg:
+        op: max
+        by:
+        - instance
+        - session_id
+        - model
+        - query_source
+      then:
+        op: sum
+- ui:
+    display: stat
+    unit: tokens
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: tokens
+    kind: table
+    title: Tokens (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: tok
+      metric: claude_code_token_usage_total
+      fn:
+        op: max_over_time
+        window: 1h
+      agg:
+        op: max
+        by:
+        - instance
+        - session_id
+        - type
+        - model
+        - query_source
+      then:
+        op: sum
+- ui:
+    display: stat
+    unit: calls
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: tool-calls
+    kind: table
+    title: Tool calls (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: n
+      spans:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: span_name
+        op: =
+        value: claude_code.tool
+      measure:
+        op: count
+- ui:
+    display: stat
+    unit: errors
+    w: 3
+    h: 2
+  query:
+    tqs: '3'
+    id: api-errors
+    kind: table
+    title: API errors (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: n
+      logs:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: body
+        op: =
+        value: claude_code.api_error
+      measure:
+        op: count
+      fill: zero
+- ui:
+    display: bar
+    unit: tokens
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: tokens-by-type
+    kind: table
+    title: Tokens by type (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: tok
+      metric: claude_code_token_usage_total
+      fn:
+        op: max_over_time
+        window: 1h
+      agg:
+        op: max
+        by:
+        - instance
+        - session_id
+        - type
+        - model
+        - query_source
+      then:
+        op: sum
+        by:
+        - type
+- ui:
+    display: bar
+    unit: USD
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: cost-by-session
+    kind: table
+    title: Cost by engine, tiny session and model (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: usd
+      metric: claude_code_cost_usage_total
+      fn:
+        op: max_over_time
+        window: 1h
+      agg:
+        op: max
+        by:
+        - instance
+        - session_id
+        - tiny_session_id
+        - model
+        - query_source
+        - tiny_engine
+      then:
+        op: sum
+        by:
+        - tiny_engine
+        - tiny_session_id
+        - model
+- ui:
+    display: bar
+    unit: calls
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: tools
+    kind: table
+    title: Tool calls by tool (1 h)
+    time:
+      from: -1h
+    queries:
+    - name: n
+      spans:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: span_name
+        op: =
+        value: claude_code.tool
+      measure:
+        op: count
+      agg:
+        by:
+        - resource.tiny.engine
+        - attr.tool_name
+- ui:
+    display: timeseries
+    unit: ms
+    w: 6
+    h: 4
+  query:
+    tqs: '3'
+    id: llm-p95
+    kind: timeseries
+    title: Model request p95
+    time:
+      from: -1h
+      step: 1m
+    queries:
+    - name: p95
+      spans:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: span_name
+        op: =
+        value: claude_code.llm_request
+      measure:
+        op: quantile
+        q: 0.95
+        field: duration_ms
+      agg:
+        by:
+        - attr.model
+- ui:
+    display: traces
+    w: 12
+    h: 4
+  query:
+    tqs: '3'
+    id: slow-steps
+    kind: trace_search
+    title: Slowest model requests and tool calls
+    time:
+      from: -1h
+    search:
+      spans:
+      - field: service_name
+        op: =
+        value: claude-code
+      order: duration_desc
+    limit: 20
+- ui:
+    display: logs
+    w: 12
+    h: 5
+  query:
+    tqs: '3'
+    id: events
+    kind: log_search
+    title: What Claude Code did (prompts, tool results, API calls)
+    time:
+      from: -1h
+    search:
+      logs:
+      - field: service_name
+        op: =
+        value: claude-code
+      - field: body
+        op: =~
+        value: claude_code\.(user_prompt|tool_result|api_request|api_error)
+    limit: 100
