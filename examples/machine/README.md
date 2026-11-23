@@ -92,8 +92,9 @@ read them before you point it at a machine you care about.
 
 ## Re-record the video
 
-With tiny-eye (`make machine`) and a tiny-assistant daemon running, `examples/machine` added as a
-project, and no machine agent running yet:
+With tiny-eye (`make machine`) and a tiny-assistant daemon running (started with
+`TINY_CLAUDE_OTEL_ENDPOINT=http://127.0.0.1:7070`, so step 4 has the assistant's own telemetry to
+read), `examples/machine` added as a project, and no machine agent running yet:
 
 ```bash
 TINY_ASSISTANT_URL=http://127.0.0.1:7777 node docs/assets/media/record.mjs assistant-machine
