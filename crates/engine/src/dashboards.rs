@@ -201,7 +201,7 @@ fn new_header(title: &str) -> String {
 
 fn write_atomic(dir: &Path, path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
-    let tmp = dir.join(format!(".{}.{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("dashboard"), ulid::Ulid::new()));
+    let tmp = dir.join(format!(".{}.{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("dashboard"), ulid::Ulid::generate()));
     let written = (|| -> Result<()> {
         let mut f = std::fs::File::create_new(&tmp)?;
         f.write_all(text.as_bytes())?;
