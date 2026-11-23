@@ -23,17 +23,18 @@
 <main>
   <div class="eyebrow fade" id="e">Demo</div>
   <h1 class="fade" id="h">tiny-assistant <span>×</span> tiny-eye</h1>
-  <p class="fade" id="p">A personal AI assistant that watches this Mac through tiny-eye, builds its dashboard, and acts on what it sees.</p>
+  <p class="fade" id="p">A personal AI assistant that watches this Mac through tiny-eye, builds its dashboard, acts on what it sees, and watches itself.</p>
   <ol>
     <li class="fade" id="s1"><b>1</b>Start watching the machine</li>
     <li class="fade" id="s2"><b>2</b>Build a dashboard</li>
     <li class="fade" id="s3"><b>3</b>Find and stop a runaway process</li>
+    <li class="fade" id="s4"><b>4</b>Check its own cost and tool calls</li>
   </ol>
 </main>
 <script>
 const L = 4.5;
 const ease = (x) => 1 - Math.pow(1 - Math.max(0, Math.min(1, x)), 3);
-const items = [["e", 0.1], ["h", 0.25], ["p", 0.55], ["s1", 1.1], ["s2", 1.35], ["s3", 1.6]];
+const items = [["e", 0.1], ["h", 0.25], ["p", 0.55], ["s1", 1.1], ["s2", 1.35], ["s3", 1.6], ["s4", 1.85]];
 function render(t) {
   for (const [id, at] of items) {
     const k = ease((t - at) / 0.5);

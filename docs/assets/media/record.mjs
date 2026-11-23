@@ -256,6 +256,8 @@ const JOBS = {
     // tiny-assistant (left) drives this machine through examples/machine; tiny-eye (right) shows it.
     // Needs: tiny-eye with examples/machine/tiny-eye.yaml (make machine), a tiny-assistant daemon with
     // examples/machine added as a project, and no machine agent running yet (the assistant starts it).
+    // Step 4 needs the daemon started with TINY_CLAUDE_OTEL_ENDPOINT=<tiny-eye>, so Claude Code's own telemetry
+    // fills the claude-code dashboard, Traces and Logs.
     const TA = process.env.TINY_ASSISTANT_URL ?? "http://127.0.0.1:7777";
     const get = async (url) => (await fetch(url)).json();
     const project = (await get(`${TA}/api/state`)).projects.find((p) => p.path.endsWith("examples/machine"));
@@ -264,6 +266,7 @@ const JOBS = {
     const busy = async () => (await get(`${TA}/api/state`)).sessions.find((s) => s.id === session.id)?.busy;
     const PROMPT1 = "Start watching this Mac with tiny-eye, then build me a dashboard for it: CPU, memory, load, network, disk and the busiest processes.";
     const PROMPT2 = "My fan just got loud. Use tiny-eye to find what is eating the CPU, and stop it.";
+    const PROMPT3 = "What did you spend and run while doing all that? Check your own telemetry in tiny-eye.";
     const send = async (ta, text) => {
       await ta.click(`document.querySelector('textarea')`);
       await ta.type(text, 24);
@@ -289,7 +292,8 @@ const JOBS = {
       let dash = null;
       await untilIdle(eye, 8 * 60_000, async () => {
         if (dash) return;
-        const list = await get(`${URL_}/api/v1/dashboards`).catch(() => []);
+        // claude-code.yaml ships with the example; wait for the one the assistant builds.
+        const list = (await get(`${URL_}/api/v1/dashboards`).catch(() => [])).filter((d) => d.id !== "claude-code");
         if (list.length) {
           dash = list[0].id;
           await eye.go(`/#/d/${dash}`);
@@ -319,6 +323,39 @@ const JOBS = {
       await sleep(3000);
       await ctl.speed(1);
       await sleep(5000);
+      // 4: the assistant reads its own telemetry; the right side shows the claude-code dashboard.
+      await eye.go("/#/d/claude-code");
+      await eye.click(byText("button", "1h")).catch(() => {});
+      await sleep(2000);
+      await send(ta, PROMPT3);
+      await sleep(1500);
+      await ctl.speed(6);
+      await untilIdle(eye, 6 * 60_000);
+      await eye.reload();
+      await ctl.speed(1);
+      await sleep(5000);
+      // ... and the same telemetry as traces (a tool call's waterfall) and as events in Logs.
+      const pick = (label, value) => eye.b.evaluate(`(() => { const s = [...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('select'); if (s) { s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
+      try {
+      await eye.click(`document.querySelector('a[href="#/traces"]')`);
+      await sleep(1200);
+      await eye.click(`[...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith('service'))?.querySelector('select')`);
+      await pick("service", "claude-code");
+      await sleep(800);
+      await eye.click(`[...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith('span name'))?.querySelector('input')`);
+      await eye.type("claude_code.tool", 40);
+      await eye.waitFor(`document.querySelector('tr.click')`);
+      await sleep(2000);
+      await eye.click(`document.querySelector('tr.click')`);
+      await sleep(5000);
+      await eye.b.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await sleep(500);
+      await eye.click(`document.querySelector('a[href="#/logs"]')`);
+      await sleep(1200);
+      await eye.click(`[...document.querySelectorAll('label.select')].find(l => l.textContent.trim().startsWith('service'))?.querySelector('select')`);
+      await pick("service", "claude-code");
+      await sleep(5500);
+      } catch (e) { console.error("traces/logs tour:", e.message); await sleep(3000); }
       return t0;
     });
     await withIntro("assistant-machine", mp4, "assistant-machine-intro.html", { width: 1602, height: 900, poster: 0.55 });
