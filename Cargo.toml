@@ -22,9 +22,9 @@ bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }  # keys stay in written order (dashboards round-trip without reordering)
 serde_norway = "0.9"
-ulid = "1"
+ulid = "3"
 schemars = "1"
-rand = "0.9"
+rand = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 futures = "0.3"
 regex = "1"

@@ -21,7 +21,7 @@ use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
 use prost::Message;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use server::receivers::{Label, Sample, TimeSeries, WriteRequest, encode_remote_write};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -648,7 +648,7 @@ async fn run(a: Args) -> Result<()> {
     let storage = match &a.s3 {
         Some(ep) => format!(
             "storage: {{ url: s3://tiny-eye/bench-{}, s3: {{ endpoint: {ep}, access_key_id: tinyeye, secret_access_key: tinyeye-secret, allow_http: true }} }}",
-            ulid::Ulid::new().to_string().to_lowercase()
+            ulid::Ulid::generate().to_string().to_lowercase()
         ),
         None => format!("storage: {{ url: {d}/objects }}"),
     };

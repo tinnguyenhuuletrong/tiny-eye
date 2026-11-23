@@ -6,11 +6,21 @@ updates:
       interval: weekly
   - package-ecosystem: npm
     directories:
-      - /ui
       - /website
       - /examples/demo/app
     schedule:
       interval: weekly
+  # Blocked upstream: @preact/preset-vite peers on @babel/core 7.x, openapi-typescript on typescript 5.x.
+  # Drop these ignores once they release support for Babel 8 / TypeScript 7.
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "@babel/core"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
