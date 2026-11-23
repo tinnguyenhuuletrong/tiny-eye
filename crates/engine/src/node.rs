@@ -320,9 +320,9 @@ impl Node {
             self.metrics.rejected_out_of_bounds.fetch_add(dropped as u64, Ordering::Relaxed);
         }
 
-        // A sample at or before the materialized horizon changes stored steps (see materialize.rs).
-        let horizon = now - self.cfg.materialize.settle.ms();
-        let late = rows.points.iter().map(|p| p.timestamp_ms).filter(|t| *t <= horizon).min();
+        // The oldest sample: if it is at or before the materialized horizon when the rows become
+        // visible (below), stored steps change (see materialize.rs).
+        let oldest_point = rows.points.iter().map(|p| p.timestamp_ms).min();
 
         let seq_guard = self.seq.read().await;
         let seq = *seq_guard;
@@ -390,8 +390,12 @@ impl Node {
         for (t, n) in counts {
             self.metrics.ingested(t, n);
         }
-        // Only once the rows are visible, so the recompute cannot run before they are.
-        if let Some(t) = late {
+        // Only once the rows are visible, so the recompute cannot run before they are, and against
+        // a fresh clock: a tick that read before the rows were visible started earlier than this
+        // check, so its horizon is no newer than the one used here.
+        if let Some(t) = oldest_point
+            && t <= now_ms() - self.cfg.materialize.settle.ms()
+        {
             self.mat.note_late(t);
         }
         drop(seq_guard);
@@ -425,6 +429,13 @@ impl Node {
                 let conn = self.writer.lock().map_err(|_| anyhow!("writer lock poisoned"))?;
                 let (mut bytes, mut rows) = (0u64, 0u64);
                 for (t, b) in recs {
+                    // Replayed samples may be late for stored points (the note is in memory only).
+                    if t == Table::MetricsPoints
+                        && let Some(c) = b.column_by_name("timestamp_ms").and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                        && let Some(min) = arrow::compute::min(c)
+                    {
+                        self.mat.note_late(min);
+                    }
                     bytes += b.get_array_memory_size() as u64;
                     rows += b.num_rows() as u64;
                     replayed += b.num_rows();

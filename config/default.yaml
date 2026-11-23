@@ -75,7 +75,7 @@ materialize:
   # panel is first seen. Empty path = in memory.
   path: ./data/materialized.duckdb
   resolution: 15s           # stored step; reads with a step that is a multiple of it use the store
-  settle: 5m                # store a step once it is this old (senders later than this are not reflected)
+  settle: 5m                # store a step once it is this old (a later sample makes it recompute)
   # Memory and disk bounds. The store never holds more than max_panels * max_points_per_panel
   # points (about 24 bytes each); a tick never computes more than max_slice_points at once.
   max_panels: 64            # panels beyond this are skipped with a warning

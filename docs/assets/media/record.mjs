@@ -325,7 +325,7 @@ const JOBS = {
     console.log(`session ${session.id} in ${TA}`);
   },
   "how-it-works": () => recordAnimation("how-it-works", "how-it-works.html"),
-  "materialized-panels": () => recordAnimation("materialized-panels", "materialized-panels.html", { poster: 14 * 30 }),
+  "materialized-panels": () => recordAnimation("materialized-panels", "materialized-panels.html", { poster: 14.8 * 30 }),
   "getting-started": async () => {
     // 1. terminal scene (deterministic page), 2. live UI tour, then joined.
     if (!existsSync(join(OUT, "gs-terminal.mp4"))) await recordAnimation("gs-terminal", "getting-started-terminal.html", { width: 1440, height: 900, fps: 24, poster: 0 });

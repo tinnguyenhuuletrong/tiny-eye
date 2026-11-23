@@ -259,7 +259,7 @@
           "default": "15s"
         },
         "settle": {
-          "description": "A step is stored once it is this old. Samples that arrive later than this after their\ntimestamp are not in the stored points (raw queries still see them).",
+          "description": "A step is stored once it is this old. A sample that arrives later than this for a stored\nstep makes the next tick recompute the stored steps from its timestamp on, so stored points\nnever miss accepted data; a larger value stores later and recomputes less often.",
           "$ref": "#/$defs/Duration",
           "default": "5m"
         },
@@ -560,7 +560,7 @@
           "$ref": "#/$defs/Duration"
         },
         "settle": {
-          "description": "A step is stored once it is this old. Samples that arrive later than this after their\ntimestamp are not in the stored points (raw queries still see them).",
+          "description": "A step is stored once it is this old. A sample that arrives later than this for a stored\nstep makes the next tick recompute the stored steps from its timestamp on, so stored points\nnever miss accepted data; a larger value stores later and recomputes less often.",
           "$ref": "#/$defs/Duration"
         },
         "max_panels": {

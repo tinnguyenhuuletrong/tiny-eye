@@ -451,3 +451,38 @@ async fn a_slice_never_produces_more_than_max_slice_points() {
     }
     assert!(ticks > 10, "the catch-up took many small slices ({ticks})");
 }
+
+#[tokio::test]
+async fn a_late_sample_in_the_wal_is_recomputed_after_a_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = now_ms() / 15_000 * 15_000;
+    {
+        let n = node(dir.path()).await;
+        n.ingest(rows(now, now - 2 * 3_600_000)).await.unwrap();
+        n.set_materialized(panels());
+        n.materialize_since(now - 3_600_000, now).await.unwrap();
+        // A backlog for stored steps is acknowledged (it is in the WAL), then the process dies
+        // before the next tick: the in-memory note of it is lost.
+        let mut late = Rows::default();
+        let labels: Labels = [("job".to_string(), "late".to_string()), ("code".to_string(), "200".to_string())].into();
+        let id = engine::ids::series_id("default", "local", "reqs_total", &labels);
+        late.series.push(MetricsSeriesRow { series_id: id, metric_name: "reqs_total".into(), labels, ..Default::default() });
+        for i in 0..160 {
+            late.points.push(MetricsPointsRow {
+                series_id: id,
+                timestamp_ms: now - 50 * 60_000 + i * 15_000,
+                value: (i * 7) as f64,
+                ..Default::default()
+            });
+        }
+        n.ingest(late).await.unwrap();
+    }
+    let n = node(dir.path()).await; // replays the WAL
+    n.set_materialized(panels());
+    n.materialize(now).await.unwrap();
+    let (_, mut q) = panels().remove(0);
+    q["time"] = serde_json::json!({"from": now - 3_600_000, "to": now, "step": "15000ms"});
+    let mat = n.query(&q.to_string()).await.unwrap();
+    assert!(mat.series.iter().any(|s| s.key == "job=late"), "the replayed late sample is in the stored points");
+    assert_same("late sample after a crash", &shape(&mat), &raw_on_grid(&n, &q, now - 3_600_000, now, 15_000).await);
+}

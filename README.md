@@ -27,7 +27,7 @@ disk or S3 and answers queries that return the same points as Prometheus.
 - **Dashboards as code.** YAML files in git, editable in the UI (drag, resize, add a panel), saved
   back to the same file. Mark a panel `materialize: true` and tiny-eye keeps its points up to date
   incrementally (spec section 9.1): the same answer, 10–12× faster on long-range
-  aggregations.
+  aggregations once the range is stored (2–4× for quantiles and gauges, none for a single series).
 
 <img src="docs/assets/materialized-panels.gif" alt="Animated explainer: without materialize every refresh scans 6 h of raw samples; with it a background task stores each finished step once, a refresh reads the stored points and computes only the newest steps, and a late sample is recomputed" width="100%">
 

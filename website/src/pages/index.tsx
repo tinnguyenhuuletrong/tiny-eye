@@ -35,7 +35,7 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
   },
   {
     title: "Materialized panels",
-    text: "Mark a panel materialize: true; long-range reads use stored points, 10–12× faster, same answer.",
+    text: "Mark a panel materialize: true; long-range reads use stored points, up to 12× faster on aggregations, same answer.",
     anchor: "materialized-panels-maintained-incrementally",
   },
 ];
@@ -171,7 +171,7 @@ export default function Home(): ReactNode {
           }
         >
           Mark a panel <code>materialize: true</code>. A background task stores each finished step, a refresh reads them and computes
-          only the newest part, and late data is recomputed. The answer equals the raw query; long ranges are 10–12× faster.
+          only the newest part, and late data is recomputed. The answer equals the raw query; aggregations over many series on long ranges are up to 12× faster once the range is stored.
         </Feature>
 
         <Feature

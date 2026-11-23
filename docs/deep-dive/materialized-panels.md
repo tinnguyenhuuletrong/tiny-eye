@@ -68,7 +68,7 @@ hot tail.
 | Same answer as the raw query | every point equal (relative 1e-9) over 12 query shapes, late data and restarts | `crates/engine/tests/materialize.rs`, the benchmark's "Equal" column |
 | Defined by the dashboard query | the panel's TQS document is what is materialized; edit it and the old points are dropped | [how it works](#how-it-works) |
 | Any client benefits | the same query from the UI, `curl` or an agent over MCP uses the stored points | [benchmark, ad-hoc queries](evidence/bench-local.md#ad-hoc-queries-6-h-relative-time-no-step-what-an-agent-or-curl-sends) |
-| Background cost | 29 ms per panel every 15 s (1.5 % of one connection for 8 panels); 24 bytes per stored point | [benchmark](evidence/bench-local.md#background-cost-and-storage) |
+| Background cost | 30 ms per panel every 15 s (1.6 % of one connection for 8 panels); 24 bytes per stored point | [benchmark](evidence/bench-local.md#background-cost-and-storage) |
 
 ## Use it
 
@@ -156,11 +156,15 @@ flowchart LR
    flushes and checkpoints — compiles each panel for the steps between its last stored step and
    `now - settle`, and stores the output points (after formulas, `having` and per-step `top`).
    It reads the same views as any query, so hot-tail rows are included. Each panel runs on its
-   own connection, at most 2,880 steps (12 h) per tick, so a slow panel never holds back the
-   others; a node that was down catches up slice by slice.
+   own connection, in turn, at most 2,880 steps (12 h) per slice and fewer for wide panels (see
+   [Memory](#memory-nothing-grows-without-a-bound)). A panel that fails is skipped and retried
+   with a shorter slice, so it does not block the others; a slow one delays the panels after it in
+   the same tick. A node that was down catches up slice by slice.
 3. **Late data.** A sample that arrives for a timestamp at or before the stored horizon (a
-   sender's backlog after an outage, a retry) is noted by ingest once it is visible. The next
-   tick deletes stored points from that timestamp on and computes them again.
+   sender's backlog after an outage, a retry) is noted by ingest once it is visible (and by WAL replay after a crash, so a note lost with the
+   process is not lost for good). The next tick deletes stored points from that timestamp on, for
+   every panel, and computes them again. Late data is not tracked per metric, so a sender that is
+   always about `settle` behind keeps the newest minutes of every panel recomputing.
 4. **Reads.** A `timeseries` query whose key matches a registered panel, whose step is a
    multiple of the resolution, and that overlaps the stored range, is answered on the
    step-aligned grid plus the point at `to`: stored points where they exist, the compiler for
@@ -197,7 +201,7 @@ query at the same timestamps:
   query, unregistered, nothing stored).
 
 The tests fail when the stitching, the late-sample recompute or the wipe guard is broken
-(checked by breaking each on purpose while writing them).
+(checked by hand while writing them: each fix was removed and its test failed; this is not an automated mutation run).
 
 ### What can be materialized
 
@@ -258,7 +262,7 @@ the head computed raw dominates.
 | Per panel per tick | 30 ms |
 | Storage | 24.2 bytes per stored point (65,394 points in 1.6 MB) |
 | 240 more ticks (1 h of steps), 8 panels | process RSS 1,737 MB before, 1,589 MB after (peak 1,749 MB): no growth; tick p50 152 ms, max 245 ms; stored points 65,394 to 67,188 |
-| Catch-up of 6 panels over 6 h (benchmark only; the background task never backfills) | 62,490 points in 3.6 s |
+| Catch-up of 6 panels over 6 h (benchmark only; the background task never backfills) | 62,490 points in 3.7 s |
 
 A panel at the 15 s resolution stores 5,760 points per day per output series: about 140 KB per
 series per day, deleted with `coordinator.retention`. Ingest does not wait for materialization:
@@ -286,24 +290,28 @@ panel's width). Four limits keep the node's memory and the store file bounded:
 
 | Limit | What it bounds | Default |
 | :--- | :--- | ---: |
-| `max_slice_points` | rows built by one background statement; the slice shrinks for panels with many series per step | 200,000 |
-| `max_points_per_panel` | points stored for one panel; the oldest whole steps go first and a read computes them again, so answers stay exact | 1,000,000 |
+| `max_slice_points` | output rows of one background slice, about: the slice length comes from the width seen in the previous slice (the first slice after a start is 60 steps), and it counts output points, not the raw samples read | 200,000 |
+| `max_points_per_panel` | points stored for one panel, about: the newest `max_points_per_panel / width` steps are kept, the oldest whole steps go first and a read computes them again, so answers stay exact | 1,000,000 |
 | minimum 240 steps | a panel that cannot keep 1 h of steps is not stored (it would be rewritten every tick) | fixed |
 | `max_panels` | panels materialized | 64 |
 
 The store can therefore never hold more than `max_panels × max_points_per_panel × ~24 B`
 (about 1.5 GB of disk with the defaults, far less in practice: the six benchmark panels hold
-about 65,000 points in 1.6 MB). In the benchmark, 240 more ticks (1 h of steps) over 8 panels left the
-process RSS flat (1,737 MB before, 1,589 MB after; the figure is the whole benchmark process, which
-also holds the 6 h of ingested data) and the store grew by 1,794 points. The store is a DuckDB file, so it is paged by DuckDB inside
+about 65,000 points in 1.6 MB). The benchmark ran 240 more ticks (1 h of steps) over 8 panels: process RSS 1,737 MB before and
+1,589 MB after (the whole benchmark process, which also holds the 6 h of ingested data), and the
+store grew by 1,794 points. That shows the background task does not leak; those ticks run past the last
+ingested sample, so they do not reach the caps. The caps themselves are proven by the tests in
+`crates/engine/tests/materialize.rs` (a small cap is trimmed and the read still equals the raw query). The store is a DuckDB file, so it is paged by DuckDB inside
 `duckdb.memory_limit` rather than held in the process; with `path: ""` it is in memory, but the
 same limits apply. A read still builds its answer in memory, as any query does (`query.timeout`
 and the points returned bound it).
 
 Watch it on `/metrics`: `tiny_eye_materialized_stored_points`, `tiny_eye_materialized_panels`,
 `tiny_eye_materialized_tick_milliseconds` and `tiny_eye_materialized_trimmed_points_total`. A
-trimmed counter that keeps rising means a panel is wider than its cap: narrow its `by` labels or
-raise `max_points_per_panel`.
+rising trimmed counter is normal once a panel is full: the oldest steps go as new ones arrive. A panel
+with more than about 700 series per step (`max_points_per_panel` / 1,440 steps in 6 h) cannot hold a
+6 h range, so it never gets the full gain: narrow its `by` labels or raise the cap. A panel that cannot
+hold 1 h is not stored at all, and is measured again every 10 minutes.
 
 ## Caveats
 
@@ -342,7 +350,7 @@ points start again. `coordinator.retention` deletes stored points older than the
 | State: mergeable partials in an inlined `view_partials` table | Finished points per panel in a node-local DuckDB file |
 | Percentiles from log-bucket histograms merged with `SUM`, ≤ 1.01 % error (D6) | `histogram_quantile` computed exactly by the compiler |
 | `rate`/`increase` with Prometheus extrapolation marked unproven | Exact, tested, and the largest measured gain |
-| Read p50 ≈ 12.5 ms, target p95 < 50 ms | Materialized 6 h reads: p95 22–50 ms on the six benchmark panels (target p95 < 50 ms met), p50 21–48 ms |
+| Read p50 ≈ 12.5 ms, target p95 < 50 ms | Materialized 6 h reads: p95 22.5–48.1 ms on the six benchmark panels (target p95 < 50 ms met), p50 20.3–47.2 ms |
 | Alert rules on the same state | Not built (no alert evaluator yet) |
 
 Still to build from the spec: partials for spans and logs measures and for percentiles that

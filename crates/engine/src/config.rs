@@ -187,8 +187,9 @@ pub struct Materialize {
     pub path: String,
     /// Step of the stored points. A read whose step is a multiple of it uses them.
     pub resolution: Dur,
-    /// A step is stored once it is this old. Samples that arrive later than this after their
-    /// timestamp are not in the stored points (raw queries still see them).
+    /// A step is stored once it is this old. A sample that arrives later than this for a stored
+    /// step makes the next tick recompute the stored steps from its timestamp on, so stored points
+    /// never miss accepted data; a larger value stores later and recomputes less often.
     pub settle: Dur,
     /// At most this many panels are materialized; the rest are skipped with a warning. Bounds the
     /// store: `max_panels * max_points_per_panel * ~24 B`.

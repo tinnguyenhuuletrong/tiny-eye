@@ -20,7 +20,7 @@ use anyhow::Result;
 use duckdb::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tqs::compile::OutRow;
 
@@ -40,9 +40,14 @@ pub struct Panel {
     pub doc: tqs::Tqs,
     /// Points per step seen in the last slice (0 = not known yet): sizes the next slice.
     width: AtomicI64,
-    /// Too wide to hold `MIN_STEPS` steps within `max_points_per_panel`: never stored.
-    too_wide: AtomicBool,
+    /// When the panel was found too wide to hold `MIN_STEPS` steps within `max_points_per_panel`
+    /// (0 = not): it is not stored, and measured again after `WIDE_RETRY_MS` (a cardinality spike
+    /// passes).
+    too_wide_at: AtomicI64,
 }
+
+/// A too-wide panel is measured again after this long.
+const WIDE_RETRY_MS: i64 = 600_000;
 
 /// Steps computed per panel per call (12 h at 15 s): bounds the work behind one query timeout.
 const SLICE_STEPS: i64 = 2_880;
@@ -73,6 +78,16 @@ impl Registry {
     pub(crate) fn note_late(&self, ts_ms: i64) {
         self.late.fetch_min(ts_ms, Ordering::Relaxed);
     }
+}
+
+/// What one background slice of one panel did.
+#[derive(Default)]
+struct Slice {
+    stored: usize,
+    more: bool,
+    dropped: u64,
+    width: i64,
+    wide: bool,
 }
 
 /// How a query was answered when stored points were used.
@@ -154,14 +169,14 @@ impl Node {
                 tracing::warn!(panel = %name, max_panels = max, "materialize.max_panels reached: panel not materialized");
                 continue;
             }
-            let id = fnv1a(&format!("{res}:{key}"));
+            // The engine version is in the id: stored points never outlive a compiler change.
+            let id = fnv1a(&format!("{}:{res}:{key}", env!("CARGO_PKG_VERSION")));
             // Keep what was learned about a panel that is registered again unchanged.
             let old = self.mat.panels.read().ok().and_then(|m| m.get(&key).cloned());
-            let (width, too_wide) =
-                old.map(|o| (o.width.load(Ordering::Relaxed), o.too_wide.load(Ordering::Relaxed))).unwrap_or((0, false));
+            let (width, wide_at) = old.map(|o| (o.width.load(Ordering::Relaxed), o.too_wide_at.load(Ordering::Relaxed))).unwrap_or((0, 0));
             map.insert(
                 key.clone(),
-                Arc::new(Panel { name, key, id, doc, width: AtomicI64::new(width), too_wide: AtomicBool::new(too_wide) }),
+                Arc::new(Panel { name, key, id, doc, width: AtomicI64::new(width), too_wide_at: AtomicI64::new(wide_at) }),
             );
         }
         tracing::info!(panels = map.len(), skipped = over, "materialized panels registered");
@@ -213,10 +228,14 @@ impl Node {
     async fn extend(&self, start: Option<i64>, now_ms: i64) -> Result<(usize, bool)> {
         let res = self.cfg.materialize.resolution.ms();
         let horizon = floor_to(now_ms - self.cfg.materialize.settle.ms(), res);
-        let panels: Vec<Arc<Panel>> = self.mat.panels.read().map(|m| m.values().cloned().collect()).unwrap_or_default();
+        // The generation first: a registration in between makes this tick clean up against the older
+        // list under the older generation, so the next tick cleans up again.
         let generation = self.mat.generation.load(Ordering::Relaxed);
+        let panels: Vec<Arc<Panel>> = self.mat.panels.read().map(|m| m.values().cloned().collect()).unwrap_or_default();
         let cleanup = generation > 0 && generation != self.mat.cleaned.load(Ordering::Relaxed);
-        let late = self.mat.late.swap(i64::MAX, Ordering::Relaxed);
+        // Before the first registration nothing is forgotten or rewound; the note waits (a restart
+        // replays the WAL and notes its samples before the dashboards are loaded).
+        let late = if generation == 0 { i64::MAX } else { self.mat.late.swap(i64::MAX, Ordering::Relaxed) };
         if cleanup || late != i64::MAX {
             let keep = panels.iter().map(|p| format!("'{}'", p.id)).collect::<Vec<_>>().join(", ");
             let r = self
@@ -264,13 +283,14 @@ impl Node {
         }
         let (mut stored, mut more) = (0usize, false);
         let (max_points, max_slice) = (self.cfg.materialize.max_points_per_panel as i64, self.cfg.materialize.max_slice_points as i64);
-        let trimmed_total = Arc::new(AtomicU64::new(0));
+        let mut trimmed_total = 0u64;
         for p in panels {
-            if p.too_wide.load(Ordering::Relaxed) {
+            let wide_at = p.too_wide_at.load(Ordering::Relaxed);
+            if wide_at != 0 && now_ms < wide_at + WIDE_RETRY_MS {
                 continue;
             }
             let name = p.name.clone();
-            let trimmed = trimmed_total.clone();
+            let pp = p.clone();
             let r = self
                 .with_conn(move |conn| {
                     let to_t: Option<i64> = conn
@@ -283,10 +303,10 @@ impl Node {
                         (None, None) => horizon,
                     };
                     if lo > horizon {
-                        return Ok((0, false));
+                        return Ok(Slice::default());
                     }
-                    // A slice is sized by the panel's width, so one statement never builds more
-                    // than `max_slice_points` rows however many series the panel has.
+                    // A slice is sized by the panel's width, so one statement builds about
+                    // `max_slice_points` output rows however many series the panel has.
                     let width = p.width.load(Ordering::Relaxed);
                     let steps = if width <= 0 { FIRST_SLICE_STEPS } else { (max_slice / width).clamp(1, SLICE_STEPS) };
                     let hi = horizon.min(lo + res * (steps - 1));
@@ -296,53 +316,42 @@ impl Node {
                     // so it goes in as a literal.
                     debug_assert!(p.id.bytes().all(|b| b.is_ascii_hexdigit()));
                     conn.execute_batch("BEGIN TRANSACTION")?;
-                    let written = (|| -> Result<usize> {
+                    let written = (|| -> Result<Slice> {
                         let n = conn.execute(
                             &format!("INSERT INTO mat.panel_points SELECT '{}', output, key, t, value FROM ({sql})", p.id),
                             duckdb::params_from_iter(params.iter()),
                         )?;
                         let done_steps = (hi - lo) / res + 1;
                         let w = (n as i64 + done_steps - 1) / done_steps;
-                        if n > 0 {
-                            p.width.store(w, Ordering::Relaxed);
+                        let more = hi < horizon;
+                        // A panel too wide to keep MIN_STEPS steps is not stored at all.
+                        if w * MIN_STEPS > max_points {
+                            conn.execute("DELETE FROM mat.panel_points WHERE panel_id = ?", [&p.id])?;
+                            conn.execute("DELETE FROM mat.panel_state WHERE panel_id = ?", [&p.id])?;
+                            return Ok(Slice { width: w, wide: true, ..Slice::default() });
                         }
                         conn.execute(
                             "INSERT INTO mat.panel_state VALUES (?, ?, ?, ?, ?, ?, ?)
                              ON CONFLICT (panel_id) DO UPDATE SET to_t = excluded.to_t, updated_ms = excluded.updated_ms",
                             duckdb::params![p.id, p.name, p.key, res, lo, hi, now_ms],
                         )?;
-                        // A panel too wide to keep MIN_STEPS steps is not stored at all.
-                        if w * MIN_STEPS > max_points {
-                            conn.execute("DELETE FROM mat.panel_points WHERE panel_id = ?", [&p.id])?;
-                            conn.execute("DELETE FROM mat.panel_state WHERE panel_id = ?", [&p.id])?;
-                            p.too_wide.store(true, Ordering::Relaxed);
-                            tracing::warn!(panel = %p.name, points_per_step = w, max_points_per_panel = max_points,
-                                "materialized panel is too wide (series per step) to be stored; reads compute it raw");
-                            return Ok(0);
+                        // Keep about the newest `max_points` points: drop the oldest whole steps.
+                        // The cut comes from the width, so no count or sort of the store is needed;
+                        // `t` is sorted by insertion, so the delete only touches old row groups.
+                        let keep_from = hi - (max_points / w.max(1)).max(MIN_STEPS).saturating_sub(1) * res;
+                        let from_t: i64 = conn.query_row("SELECT from_t FROM mat.panel_state WHERE panel_id = ?", [&p.id], |r| r.get(0))?;
+                        let mut dropped = 0;
+                        if from_t < keep_from {
+                            dropped = conn
+                                .execute("DELETE FROM mat.panel_points WHERE panel_id = ? AND t < ?", duckdb::params![p.id, keep_from])?;
+                            conn.execute("UPDATE mat.panel_state SET from_t = ? WHERE panel_id = ?", duckdb::params![keep_from, p.id])?;
                         }
-                        // Keep the newest `max_points` points: drop the oldest whole steps.
-                        let count: i64 =
-                            conn.query_row("SELECT count(*) FROM mat.panel_points WHERE panel_id = ?", [&p.id], |r| r.get(0))?;
-                        if count > max_points {
-                            let cut: i64 = conn.query_row(
-                                "SELECT min(t) FROM (SELECT t FROM mat.panel_points WHERE panel_id = ? ORDER BY t DESC LIMIT ?)",
-                                duckdb::params![p.id, max_points],
-                                |r| r.get(0),
-                            )?;
-                            let dropped =
-                                conn.execute("DELETE FROM mat.panel_points WHERE panel_id = ? AND t <= ?", duckdb::params![p.id, cut])?;
-                            conn.execute(
-                                "UPDATE mat.panel_state SET from_t = greatest(from_t, ?) WHERE panel_id = ?",
-                                duckdb::params![cut + res, p.id],
-                            )?;
-                            trimmed.fetch_add(dropped as u64, Ordering::Relaxed);
-                        }
-                        Ok(n)
+                        Ok(Slice { stored: n, more, dropped: dropped as u64, width: w, wide: false })
                     })();
                     match written {
-                        Ok(n) => {
+                        Ok(sl) => {
                             conn.execute_batch("COMMIT")?;
-                            Ok((n, hi < horizon))
+                            Ok(sl)
                         }
                         Err(e) => {
                             let _ = conn.execute_batch("ROLLBACK");
@@ -352,14 +361,31 @@ impl Node {
                 })
                 .await;
             match r {
-                Ok((n, m)) => {
-                    stored += n;
-                    more |= m;
+                Ok(sl) => {
+                    // Side effects only once the slice is committed.
+                    if sl.width > 0 {
+                        pp.width.store(sl.width, Ordering::Relaxed);
+                    }
+                    if sl.wide {
+                        pp.too_wide_at.store(now_ms.max(1), Ordering::Relaxed);
+                        tracing::warn!(panel = %name, points_per_step = sl.width, max_points_per_panel = max_points,
+                            "materialized panel is too wide (series per step) to be stored; reads compute it raw, measured again in 10 min");
+                    } else {
+                        pp.too_wide_at.store(0, Ordering::Relaxed);
+                    }
+                    stored += sl.stored;
+                    more |= sl.more;
+                    trimmed_total += sl.dropped;
                 }
-                Err(e) => tracing::warn!(panel = %name, error = %format!("{e:#}"), "materializing a panel failed; will retry"),
+                Err(e) => {
+                    // A slice that fails (a timeout, say) is retried half as long.
+                    let w = pp.width.load(Ordering::Relaxed).max(1);
+                    pp.width.store(w.saturating_mul(2), Ordering::Relaxed);
+                    tracing::warn!(panel = %name, error = %format!("{e:#}"), "materializing a panel failed; will retry with a shorter slice");
+                }
             }
         }
-        self.metrics.materialized_trimmed.fetch_add(trimmed_total.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.metrics.materialized_trimmed.fetch_add(trimmed_total, Ordering::Relaxed);
         if let Ok(total) = self.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_points", [], |r| r.get::<_, i64>(0))?)).await {
             self.metrics.materialized_stored.store(total.max(0) as u64, Ordering::Relaxed);
         }
@@ -369,11 +395,13 @@ impl Node {
 
     /// Delete stored points older than `cutoff_ms` (retention).
     pub(crate) async fn retain_materialized(&self, cutoff_ms: i64) -> Result<()> {
+        // On the step grid, so a rewind past `from_t` later stays aligned.
+        let cutoff_ms = ceil_to(cutoff_ms, self.cfg.materialize.resolution.ms().max(1));
         self.with_conn(move |conn| {
             // State first, in one transaction: a reader never sees coverage over deleted points.
             conn.execute_batch("BEGIN TRANSACTION")?;
             let done = conn
-                .execute("UPDATE mat.panel_state SET from_t = greatest(from_t, ?)", [cutoff_ms])
+                .execute("UPDATE mat.panel_state SET from_t = ? WHERE from_t < ?", [cutoff_ms, cutoff_ms])
                 .and_then(|_| conn.execute("DELETE FROM mat.panel_points WHERE t < ?", [cutoff_ms]));
             match done {
                 Ok(_) => Ok(conn.execute_batch("COMMIT")?),
@@ -412,6 +440,9 @@ pub(crate) fn read(conn: &Connection, p: &Panel, doc: &tqs::Tqs, r: &tqs::Resolv
             Ok(OutRow { output: row.get(0)?, t: row.get(1)?, key: row.get(2)?, value: row.get(3)? })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    if rows.is_empty() {
+        return Ok(None); // coverage without a point (no data): the caller runs the raw query
+    }
     info.stored_points = rows.len();
     if from < c0 {
         rows.extend(run(conn, doc, from, c0 - s, s)?);

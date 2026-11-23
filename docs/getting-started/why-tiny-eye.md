@@ -135,7 +135,7 @@ every raw sample on every refresh.
   timestamps, and a sample that arrives late for stored steps makes them recomputed. A test
   compares materialized and raw answers point by point over 12 query shapes, late samples and
   restarts.
-- **Measured.** On the benchmark's 6-hour panels, aggregations over many series read 10–12× faster (`sum by (job) (rate(…[5m]))`: 443 ms raw, 38 ms materialized), materialized reads stay near 40 ms from 1 h to 6 h ranges, every point equals the raw answer, and the background cost is 29 ms per panel every 15 s ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
+- **Measured.** On the benchmark's 6-hour panels, aggregations over many series read 10–12× faster once the range is stored (`sum by (job) (rate(…[5m]))`: 443 ms raw, 38 ms materialized), materialized reads stay near 40 ms from 1 h to 6 h ranges, every point equals the raw answer, and the background cost is 30 ms per panel every 15 s ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
 - **Stated limits.** No backfill: points start when a panel is first seen, so the gain grows
   with uptime. Spans and logs measures, `table`, `fill: zero` and range-ranked `top` run raw.
 
