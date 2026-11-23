@@ -5,7 +5,7 @@
 //! Counters have resets, and the generator keeps every sample so the true increase is
 //! known even after an ingest node "crashes" and loses its unflushed batch.
 
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 pub const WINDOW_MS: i64 = 60_000;
 pub const WINDOWS: i64 = 3;
