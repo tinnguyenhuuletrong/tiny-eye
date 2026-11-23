@@ -17,7 +17,7 @@ Prefer a ready-made app with traffic? `make demo`, `make demo-app` and `make dem
 - **Rust stable** (1.90 or newer) and a C/C++ compiler. The first build compiles DuckDB and takes
   several minutes.
 - **Node.js 20+ and npm**. `make build` and `make run` build the web UI and embed it in the
-  binary. The demo shop needs [Bun](https://bun.sh) 1.x.
+  binary. The examples (demo shop, machine agent) need [Bun](https://bun.sh) 1.x.
 - **curl** and **jq** for the commands below.
 - **Docker** is optional. Only the S3 setup and the demo load test use it.
 

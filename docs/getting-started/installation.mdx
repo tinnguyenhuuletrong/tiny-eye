@@ -18,7 +18,7 @@ run against S3.
 | Rust stable (1.90 or newer) | Builds the binary. `rust-toolchain.toml` selects the stable channel. |
 | A C/C++ compiler | The `duckdb` crate compiles DuckDB from source. The first build takes several minutes. |
 | `curl`, `tar`, `gunzip` | `make tools` downloads pinned binaries. |
-| Node.js 20+ and npm | Builds the web UI, which `make build` and `make run` embed. Also needed for the docs site. The demo shop needs [Bun](https://bun.sh) 1.x instead. Not needed if you build with `cargo` directly. |
+| Node.js 20+ and npm | Builds the web UI, which `make build` and `make run` embed. Also needed for the docs site. The examples (demo shop, machine agent) need [Bun](https://bun.sh) 1.x instead. Not needed if you build with `cargo` directly. |
 | Docker (optional) | For the container image (`make docker`), MinIO (`make s3-up`) and the demo load test (`make demo-load`). |
 
 ## Install

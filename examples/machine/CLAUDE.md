@@ -9,7 +9,7 @@ you find. Keep answers short: what you did, the numbers that matter, and a dashb
 | Thing | How to check | How to start (from this folder) |
 | --- | --- | --- |
 | tiny-eye (UI + API) on http://127.0.0.1:7070 | `curl -sf http://127.0.0.1:7070/healthz` | `cd ../.. && nohup make machine > /tmp/tiny-eye-machine.log 2>&1 &` (first build takes minutes; wait for `/healthz`) |
-| Machine agent (sends metrics every 5 s) | `pgrep -f examples/machine/agent.mjs` | `cd ../.. && nohup node examples/machine/agent.mjs > /tmp/machine-agent.log 2>&1 &` |
+| Machine agent (sends metrics every 5 s) | `pgrep -f examples/machine/agent.ts` | `cd ../.. && nohup bun examples/machine/agent.ts > /tmp/machine-agent.log 2>&1 &` |
 
 Start things in the background with `nohup … &` so your turn can end while they keep running.
 

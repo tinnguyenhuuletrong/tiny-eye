@@ -29,7 +29,7 @@ disk or S3 and answers queries that return the same points as Prometheus.
 
 ## Quick start
 
-Needs Rust stable, a C/C++ compiler, Node.js 20+ (web UI), Bun 1.x (demo shop) and Docker (for the k6 load generator).
+Needs Rust stable, a C/C++ compiler, Node.js 20+ (web UI), Bun 1.x (the examples) and Docker (for the k6 load generator).
 
 ```bash
 git clone https://github.com/tinnguyenhuuletrong/tiny-eye && cd tiny-eye

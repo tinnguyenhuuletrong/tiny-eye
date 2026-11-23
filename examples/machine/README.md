@@ -11,7 +11,7 @@ and fix them.
 
 | File | What it is |
 | --- | --- |
-| `agent.mjs` | The machine agent: OTLP/HTTP JSON every 5 s, no dependencies (Node.js 20+, macOS or Linux) |
+| `agent.ts` | The machine agent: OTLP/HTTP JSON every 5 s, no runtime dependencies (Bun 1.x, macOS or Linux) |
 | `tiny-eye.yaml` | tiny-eye config: data under `./data/machine`, dashboards in `dashboards/` |
 | `CLAUDE.md` | What the assistant may do here, the metric names, query examples, how to save a dashboard |
 | `.mcp.json`, `tiny-eye-mcp.sh` | tiny-eye's MCP bridge for an assistant started in this folder (`.claude/settings.json` enables it) |

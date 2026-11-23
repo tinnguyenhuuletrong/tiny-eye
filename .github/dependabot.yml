@@ -21,7 +21,9 @@ updates:
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
   - package-ecosystem: bun
-    directory: /examples/demo/app
+    directories:
+      - /examples/demo/app
+      - /examples/machine
     schedule:
       interval: weekly
   - package-ecosystem: github-actions

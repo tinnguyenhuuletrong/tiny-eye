@@ -38,7 +38,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
 - Evidence: TQS conformance against Prometheus 3.16 point by point with a mutation check
   (`make conformance`), end-to-end comparison of the whole binary against Prometheus (`make e2e`),
   storage proof of concept (`make poc`), benchmarks on local disk and MinIO (`make bench`, `make bench-s3`).
-- Demo: a Bun and TypeScript shop instrumented with OpenTelemetry (manual spans, metrics and trace propagation, Biome lint and format, `make demo-lint`), k6 load, a dashboard, ad-hoc queries and
+- Examples on Bun and TypeScript. Demo: a shop instrumented with OpenTelemetry (manual spans, metrics and trace propagation, Biome lint and format, `make examples-lint`), k6 load, a dashboard, ad-hoc queries and
   MCP setup for Claude Code / Claude Desktop (`make demo`, `make demo-app`, `make demo-load`).
 - Container image: multi-stage `Dockerfile` (web UI, binary, pinned DuckDB extensions; non-root,
   data in a `/data` volume), `make docker`, and a release workflow publishing multi-arch images to
