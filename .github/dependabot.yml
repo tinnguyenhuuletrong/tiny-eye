@@ -7,7 +7,6 @@ updates:
   - package-ecosystem: npm
     directories:
       - /website
-      - /examples/demo/app
     schedule:
       interval: weekly
   # Blocked upstream: @preact/preset-vite peers on @babel/core 7.x, openapi-typescript on typescript 5.x.
@@ -21,6 +20,12 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+  - package-ecosystem: bun
+    directories:
+      - /examples/demo/app
+      - /examples/machine
+    schedule:
+      interval: weekly
   - package-ecosystem: github-actions
     directory: /
     schedule:

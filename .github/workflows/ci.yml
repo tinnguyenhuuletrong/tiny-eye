@@ -12,7 +12,9 @@ jobs:
         with: { node-version: 20, cache: npm, cache-dependency-path: ui/package-lock.json }
       - run: make tools
       - run: make ui
+      - uses: oven-sh/setup-bun@v2
       - run: make lint
+      - run: make examples-lint
       - run: make test
       - run: make conformance
 

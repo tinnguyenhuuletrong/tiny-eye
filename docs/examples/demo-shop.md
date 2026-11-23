@@ -1,10 +1,10 @@
 ---
 title: Demo shop
-description: Run an OpenTelemetry-instrumented Node.js shop under k6 load and read it through dashboards, TQS and an AI agent.
+description: Run an OpenTelemetry-instrumented Bun and TypeScript shop under k6 load and read it through dashboards, TQS and an AI agent.
 sidebar_position: 1
 ---
 
-A small Node.js shop sends traces, metrics and logs to tiny-eye with the standard OpenTelemetry
+A small Bun and TypeScript shop sends traces, metrics and logs to tiny-eye with the standard OpenTelemetry
 SDK. k6 generates traffic. You then read the data through a dashboard, ad-hoc TQS queries, or an
 AI agent over MCP. Everything lives in `examples/demo/`.
 
@@ -18,7 +18,10 @@ flowchart LR
   U[dashboards, curl + TQS, MCP agents] --> T
 ```
 
-Both services use Express and the OpenTelemetry Node SDK. The shop has realistic trouble built
+Both services are one TypeScript file, `examples/demo/app/server.ts`, on Bun (`Bun.serve`) with the
+OpenTelemetry JS SDK. Bun's HTTP server does not go through `node:http`, so nothing is
+auto-instrumented: the file emits its own server and client spans, propagates the trace context
+between the two services, and records the `http.server.request.duration` metric. The shop has realistic trouble built
 in:
 
 - search is sometimes slow;
@@ -31,7 +34,7 @@ Every error writes a log line that carries its trace id.
 
 ## Run it
 
-Prerequisites: Rust (for tiny-eye), Node.js 20+, Docker (for k6), and `jq`.
+Prerequisites: Rust (for tiny-eye), [Bun](https://bun.sh) 1.x, Docker (for k6), and `jq`.
 
 ```bash
 make tools                 # once: pinned DuckDB extensions (+ Prometheus for the test suite)
@@ -223,7 +226,8 @@ The demo exercises the OTLP path only; remote-write is covered by `make e2e`. Se
 | Symptom | Cause and fix |
 | --- | --- |
 | No logs (`tiny_eye_ingested_rows_total{table="logs"} 0`) with recent `@opentelemetry/*` packages | The logs API now lives in `@opentelemetry/api` (`logs`, `SeverityNumber`); a separate `@opentelemetry/api-logs` package registers a provider the SDK never reads. Also pass log processors an options object: `new BatchLogRecordProcessor({ exporter })`. |
-| A seconds histogram shows p95 of about 4.75 for everything | The SDK's default buckets (0, 5, 10, 25, …) are for milliseconds. Give `createHistogram` `advice.explicitBucketBoundaries` in seconds, as `server.js` does. |
-| HTTP metrics have no `http_route` label | Express route templates reach the HTTP metric through the request's RPC metadata; `server.js` sets it with a small `route()` middleware. |
+| A seconds histogram shows p95 of about 4.75 for everything | The SDK's default buckets (0, 5, 10, 25, …) are for milliseconds. Give `createHistogram` `advice.explicitBucketBoundaries` in seconds, as `server.ts` does. |
+| HTTP metrics have no `http_route` label | `Bun.serve` is not auto-instrumented. `server.ts` records `http.server.request.duration` itself, in the `traced()` wrapper that also knows each route's template. |
+| A trace stops at the shop and payments starts a new one | Bun's `fetch` is not auto-instrumented either. `server.ts` injects the trace context into the outgoing headers (`propagation.inject`) and `traced()` extracts it. |
 | Panels show nothing for delta counters | tiny-eye stores cumulative temporality (the SDK default) and skips delta points. |
 | `/checkout` sometimes returns 502 | Intended: the payments provider times out on purpose. |

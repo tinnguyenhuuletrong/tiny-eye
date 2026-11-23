@@ -38,7 +38,7 @@ What happens:
 
 | Step | The assistant | tiny-eye |
 | --- | --- | --- |
-| Start watching | checks `/healthz`, starts `examples/machine/agent.mjs` in the background | receives OTLP metrics every 5 s and an INFO log line |
+| Start watching | checks `/healthz`, starts `examples/machine/agent.ts` in the background | receives OTLP metrics every 5 s and an INFO log line |
 | Build a dashboard | lists metrics with `discover_telemetry_catalog`, checks each panel with `validate_tqs`, saves the dashboard with `PUT /api/v1/dashboards/<id>` | validates the whole dashboard, writes `examples/machine/dashboards/<id>.yaml`, serves it at `/#/d/<id>` |
 | Find the problem | ranks `process_cpu_utilization` with `top` through `run_tqs`, reads the WARN logs | answers from the hot tail, so the last seconds are already there |
 | Fix it | checks the process belongs to the user, stops it with `kill` | shows CPU back down a few samples later; the assistant confirms with another query |
@@ -47,7 +47,7 @@ What happens:
 
 | File | Role |
 | --- | --- |
-| `agent.mjs` | The machine agent. OTLP/HTTP JSON, no dependencies, macOS and Linux. `MACHINE_NAME`, `MACHINE_INTERVAL`, `MACHINE_TOP`, `MACHINE_PROCESSES=user` |
+| `agent.ts` | The machine agent (Bun, TypeScript). OTLP/HTTP JSON, no runtime dependencies, macOS and Linux. `MACHINE_NAME`, `MACHINE_INTERVAL`, `MACHINE_TOP`, `MACHINE_PROCESSES=user` |
 | `CLAUDE.md` | The assistant's contract: what runs where, the metric table, query examples, dashboard format, and rules for acting on the machine (no `sudo`, only the user's own processes) |
 | `.mcp.json`, `tiny-eye-mcp.sh` | Starts `tiny-eye mcp` against the local node; `.claude/settings.json` enables it without a prompt |
 | `tiny-eye.yaml` | Data under `./data/machine`; dashboards from `examples/machine/dashboards` |
