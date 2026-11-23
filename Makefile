@@ -61,6 +61,7 @@ docs-dev: ## Preview the documentation site on :3000
 .PHONY: media
 media: ## Re-record the README/docs GIFs and videos (needs Chrome + ffmpeg; getting-started needs make demo, demo-app, demo-load running)
 	node docs/assets/media/record.mjs how-it-works
+	node docs/assets/media/record.mjs materialized-panels
 	node docs/assets/media/record.mjs getting-started
 
 .PHONY: schemas

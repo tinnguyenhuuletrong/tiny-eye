@@ -262,6 +262,27 @@
           "description": "A step is stored once it is this old. Samples that arrive later than this after their\ntimestamp are not in the stored points (raw queries still see them).",
           "$ref": "#/$defs/Duration",
           "default": "5m"
+        },
+        "max_panels": {
+          "description": "At most this many panels are materialized; the rest are skipped with a warning. Bounds the\nstore: `max_panels * max_points_per_panel * ~24 B`.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 64
+        },
+        "max_points_per_panel": {
+          "description": "Stored points kept per panel. Past it the oldest steps are dropped (a read computes them\nagain), so a wide panel (many series per step) cannot grow the store without bound. A\npanel that cannot hold at least 240 steps (1 h at 15 s) is not stored at all.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1000000
+        },
+        "max_slice_points": {
+          "description": "Points one background slice may produce (computed and written in one statement). The\nslice length adapts to the panel's width, so the working memory of a tick stays bounded.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 200000
         }
       },
       "additionalProperties": false,
@@ -541,6 +562,24 @@
         "settle": {
           "description": "A step is stored once it is this old. Samples that arrive later than this after their\ntimestamp are not in the stored points (raw queries still see them).",
           "$ref": "#/$defs/Duration"
+        },
+        "max_panels": {
+          "description": "At most this many panels are materialized; the rest are skipped with a warning. Bounds the\nstore: `max_panels * max_points_per_panel * ~24 B`.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_points_per_panel": {
+          "description": "Stored points kept per panel. Past it the oldest steps are dropped (a read computes them\nagain), so a wide panel (many series per step) cannot grow the store without bound. A\npanel that cannot hold at least 240 steps (1 h at 15 s) is not stored at all.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_slice_points": {
+          "description": "Points one background slice may produce (computed and written in one statement). The\nslice length adapts to the panel's width, so the working memory of a tick stays bounded.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false

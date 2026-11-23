@@ -824,9 +824,11 @@ impl Node {
                 last_mat = Instant::now();
                 let node = self.clone();
                 mat_task = Some(tokio::spawn(async move {
+                    let t = Instant::now();
                     if let Err(e) = node.materialize(now_ms()).await {
                         tracing::error!(error = %format!("{e:#}"), "materializing panels failed; will retry");
                     }
+                    node.metrics.materialized_tick_ms.store(t.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
                 }));
             }
             if last_retain.elapsed() >= c.retention_interval.0 {

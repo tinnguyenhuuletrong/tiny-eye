@@ -13,6 +13,53 @@ This is the spec's **materialized panels** (section 9.1, decisions D5 and D6, mi
 panels "maintained incrementally" by a materializer in the coordinator. Phase 1 is built; how it
 maps to the spec is [below](#how-it-maps-to-the-spec).
 
+## The idea in 60 seconds
+
+![Animated explainer: without materialize every refresh scans 6 h of raw samples; with it a background task stores each finished step once, a refresh reads the stored points and computes only the newest steps, and a late sample makes tiny-eye recompute from that step on](../assets/materialized-panels.gif)
+
+A panel shows "requests per second, last 6 hours". Think of the 6 hours as 24 boxes.
+
+```
+WITHOUT materialize: every refresh does all the work
+
+  [raw][raw][raw][raw][raw] ... [raw][raw][raw]   read + compute 24 boxes
+                                                   -> 440 ms
+
+
+WITH materialize: do the work once, keep it
+
+  every 15 s a background task finishes one more box and stores it
+
+  t=0     [    ][    ][    ] ...                   (empty)
+  t=15 s  [ ## ][    ][    ] ...
+  t=30 s  [ ## ][ ## ][    ] ...
+  ...
+  later   [ ## ][ ## ][ ## ] ... [ ## ][ ?? ][ ?? ]
+           stored points           newest boxes: not settled yet
+
+  A refresh = read the stored boxes + compute only the "??" boxes
+                                                   -> 38 ms
+```
+
+Two cases people ask about:
+
+```
+Late data   a sender was offline and sends old samples for step 13
+
+  stored:  [##][##]...[##][XX][##][##]             XX = now wrong
+  next tick: delete step 13 and later, compute them again
+  stored:  [##][##]...[##][##][##][##]             correct again
+
+New panel   stored for 1 h, you view 6 h
+
+  [ compute 5 h from raw ............ ][ 1 h stored ]   little gain yet
+  Each hour of uptime moves one more hour to the store.
+```
+
+The answer is the same as the raw query at the same timestamps. The stored points are only a
+copy of work already done, and tiny-eye can always compute them again from the lake and the
+hot tail.
+
 ## At a glance
 
 | | Result | Proof |
@@ -63,8 +110,8 @@ raw data and is read often. From the benchmark (6 h of data, 2,620 series):
 
 | Use case | Why it fits | Measured |
 | :--- | :--- | :--- |
-| **Long-range dashboards on auto-refresh** (6 h, 24 h, 7 d; wall screens) | raw cost grows with the range; stored points do not re-read it | 1 h 5.0×, 3 h 6.9×, 6 h 11.6×: materialized stays at 38–43 ms while raw grows from 215 to 460 ms |
-| **Aggregations over many series** (`sum by`, `topk`, ratios) | each raw read touches every series' samples | `sum by`, `topk`, an error ratio: 10.5–11.8×; gauge `max` 3.8×; `histogram_quantile` 2.3× |
+| **Long-range dashboards on auto-refresh** (6 h, 24 h, 7 d; wall screens) | raw cost grows with the range; stored points do not re-read it | 1 h 5.1×, 3 h 6.8×, 6 h 12.0×: materialized stays at 37–45 ms while raw grows from 229 to 441 ms |
+| **Aggregations over many series** (`sum by`, `topk`, ratios) | each raw read touches every series' samples | `sum by`, `topk`, an error ratio: 10.6–11.9×; gauge `max` 3.9×; `histogram_quantile` 2.3× |
 | **Recurring questions from agents and scripts** | an agent (MCP) or `curl` sending the panel's query gets the stored points; put the recurring question in a materialized panel | the panel's query with another `id` and `title`: 57 ms with the store, 445 ms raw |
 
 When it does not help:
@@ -171,12 +218,12 @@ in process, warm caches, 10 runs after a warm-up, 6 h of data for 2,620 series.
 
 | Panel | Raw p50 | Materialized p50 / p95 | Faster | Equal |
 | :--- | ---: | ---: | ---: | :--- |
-| `sum by (job) (rate(http_requests_total[5m]))` | 443 ms | 38 / 38 ms | 11.8× | yes |
-| `topk(10, sum by (route) (rate(…[5m])))` | 446 ms | 39 / 42 ms | 11.6× | yes |
-| error ratio formula (2 queries) | 502 ms | 48 / 50 ms | 10.5× | yes |
-| `histogram_quantile(0.99, … by (job, le))` | 64 ms | 28 / 30 ms | 2.3× | yes |
-| `max by (job) (gauge)` | 89 ms | 24 / 25 ms | 3.8× | yes |
-| one series: `rate(…{instance="10.0.0.1:9100"})` | 22 ms | 21 / 22 ms | 1.1× | yes |
+| `sum by (job) (rate(http_requests_total[5m]))` | 443 ms | 37 / 40 ms | 11.9× | yes |
+| `topk(10, sum by (route) (rate(…[5m])))` | 443 ms | 38 / 39 ms | 11.8× | yes |
+| error ratio formula (2 queries) | 499 ms | 47 / 48 ms | 10.6× | yes |
+| `histogram_quantile(0.99, … by (job, le))` | 62 ms | 27 / 28 ms | 2.3× | yes |
+| `max by (job) (gauge)` | 91 ms | 23 / 25 ms | 3.9× | yes |
+| one series: `rate(…{instance="10.0.0.1:9100"})` | 21 ms | 20 / 23 ms | 1.1× | yes |
 
 Each materialized read took 177 to 1,780 stored points and computed 3 steps (the unsettled tail
 and the point at `to`). "Equal" compares every point with the raw query at the same timestamps.
@@ -185,9 +232,9 @@ and the point at `to`). "Equal" compares every point with the raw query at the s
 
 | Range | Step | Raw p50 | Materialized p50 | Faster |
 | :--- | ---: | ---: | ---: | ---: |
-| 1 h | 15 s | 215 ms | 43 ms | 5.0× |
-| 3 h | 60 s | 264 ms | 38 ms | 6.9× |
-| 6 h | 120 s | 460 ms | 40 ms | 11.6× |
+| 1 h | 15 s | 229 ms | 45 ms | 5.1× |
+| 3 h | 60 s | 270 ms | 40 ms | 6.8× |
+| 6 h | 120 s | 441 ms | 37 ms | 12.0× |
 
 Raw cost follows the samples in range; materialized cost follows the points returned, which the
 UI keeps near 300 whatever the range.
@@ -196,9 +243,9 @@ UI keeps near 300 whatever the range.
 
 | Panel stored for | Raw p50 | Materialized p50 | Faster |
 | :--- | ---: | ---: | ---: |
-| 0 h (just added) | 444 ms | 442 ms | 1.0× |
-| 1 h | 445 ms | 430 ms | 1.0× |
-| 6 h | 443 ms | 38 ms | 11.7× |
+| 0 h (just added) | 438 ms | 444 ms | 1.0× |
+| 1 h | 441 ms | 431 ms | 1.0× |
+| 6 h | 450 ms | 37 ms | 12.1× |
 
 With nothing stored in range the query runs raw, unchanged. Until most of the range is stored,
 the head computed raw dominates.
@@ -207,14 +254,56 @@ the head computed raw dominates.
 
 | Measure | Result |
 | :--- | :--- |
-| One background tick, 8 panels (one new 15 s step each) | 229 ms every 15 s: 1.5 % of one query connection |
-| Per panel per tick | 29 ms |
+| One background tick, 8 panels (one new 15 s step each) | 244 ms every 15 s: 1.6 % of one query connection |
+| Per panel per tick | 30 ms |
 | Storage | 24.2 bytes per stored point (65,394 points in 1.6 MB) |
+| 240 more ticks (1 h of steps), 8 panels | process RSS 1,737 MB before, 1,589 MB after (peak 1,749 MB): no growth; tick p50 152 ms, max 245 ms; stored points 65,394 to 67,188 |
 | Catch-up of 6 panels over 6 h (benchmark only; the background task never backfills) | 62,490 points in 3.6 s |
 
 A panel at the 15 s resolution stores 5,760 points per day per output series: about 140 KB per
 series per day, deleted with `coordinator.retention`. Ingest does not wait for materialization:
 the background task runs on a query connection, separately from flushes and checkpoints.
+
+## Memory: nothing grows without a bound
+
+The background task is a buffer, not a cache. Each tick computes one slice, writes it to the
+store in one statement and lets go of it; nothing is kept between ticks except a number (the
+panel's width). Four limits keep the node's memory and the store file bounded:
+
+```
+ tick (every 15 s), for each panel:
+
+   width known?  steps = max_slice_points / width      (first slice: 60 steps)
+        |
+        v
+   compute <= max_slice_points rows ──> write ──> forget      working memory: one slice
+        |
+        v
+   panel > max_points_per_panel?  ──> drop the OLDEST steps   store: newest N points only
+   panel too wide for 240 steps?  ──> do not store it         reads compute it raw
+   more than max_panels panels?   ──> skip the extra ones     (warning at registration)
+```
+
+| Limit | What it bounds | Default |
+| :--- | :--- | ---: |
+| `max_slice_points` | rows built by one background statement; the slice shrinks for panels with many series per step | 200,000 |
+| `max_points_per_panel` | points stored for one panel; the oldest whole steps go first and a read computes them again, so answers stay exact | 1,000,000 |
+| minimum 240 steps | a panel that cannot keep 1 h of steps is not stored (it would be rewritten every tick) | fixed |
+| `max_panels` | panels materialized | 64 |
+
+The store can therefore never hold more than `max_panels × max_points_per_panel × ~24 B`
+(about 1.5 GB of disk with the defaults, far less in practice: the six benchmark panels hold
+about 65,000 points in 1.6 MB). In the benchmark, 240 more ticks (1 h of steps) over 8 panels left the
+process RSS flat (1,737 MB before, 1,589 MB after; the figure is the whole benchmark process, which
+also holds the 6 h of ingested data) and the store grew by 1,794 points. The store is a DuckDB file, so it is paged by DuckDB inside
+`duckdb.memory_limit` rather than held in the process; with `path: ""` it is in memory, but the
+same limits apply. A read still builds its answer in memory, as any query does (`query.timeout`
+and the points returned bound it).
+
+Watch it on `/metrics`: `tiny_eye_materialized_stored_points`, `tiny_eye_materialized_panels`,
+`tiny_eye_materialized_tick_milliseconds` and `tiny_eye_materialized_trimmed_points_total`. A
+trimmed counter that keeps rising means a panel is wider than its cap: narrow its `by` labels or
+raise `max_points_per_panel`.
 
 ## Caveats
 
@@ -235,6 +324,9 @@ materialize:
   path: ./data/materialized.duckdb   # empty: in memory, started again after a restart
   resolution: 15s                    # stored step; reads with a step that is a multiple of it use the store
   settle: 5m                         # store a step once it is this old (late samples are recomputed anyway)
+  max_panels: 64                     # panels beyond this are skipped with a warning
+  max_points_per_panel: 1000000      # oldest steps are dropped past this; a wider panel is not stored
+  max_slice_points: 200000           # one background slice; its length shrinks for wide panels
 ```
 
 `settle` now trades recomputation for nothing else: a larger value stores later and recomputes

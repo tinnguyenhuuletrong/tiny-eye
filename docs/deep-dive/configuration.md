@@ -135,6 +135,9 @@ See [Security](security.md) for which scope each operation needs.
 | `materialize.path` | path | `./data/materialized.duckdb` | Node-local DuckDB file for the points of [materialized panels](materialized-panels.md); empty keeps them in memory. Derived data: safe to delete. |
 | `materialize.resolution` | duration | `15s` | Step of the stored points. A read whose step is a multiple of it uses them. |
 | `materialize.settle` | duration | `5m` | A step is stored once it is this old. Samples arriving later than this after their timestamp are not in stored steps (raw reads still see them). |
+| `materialize.max_panels` | int | `64` | Panels materialized at most; the rest are skipped with a warning (the same panels win on every start). |
+| `materialize.max_points_per_panel` | int | `1000000` | Stored points kept per panel. Past it the oldest steps are dropped and computed on read. A panel too wide to keep 240 steps (1 h) is not stored. |
+| `materialize.max_slice_points` | int | `200000` | Points one background slice may produce. The slice length shrinks for wide panels, so a tick's working memory stays bounded. |
 
 Relative paths are relative to the process's working directory.
 

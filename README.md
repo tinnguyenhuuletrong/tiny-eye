@@ -29,6 +29,8 @@ disk or S3 and answers queries that return the same points as Prometheus.
   incrementally (spec section 9.1): the same answer, 10–12× faster on long-range
   aggregations.
 
+<img src="docs/assets/materialized-panels.gif" alt="Animated explainer: without materialize every refresh scans 6 h of raw samples; with it a background task stores each finished step once, a refresh reads the stored points and computes only the newest steps, and a late sample is recomputed" width="100%">
+
 ## Quick start
 
 Needs Rust stable, a C/C++ compiler, Node.js 20+ and Docker (for the k6 load generator).

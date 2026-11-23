@@ -63,7 +63,7 @@ arrives; a read then computes only what is not stored, with the same result:
 
 It applies to timeseries metric queries whose points depend only on their own timestamp;
 validation tells you when a panel does not qualify. The UI marks materialized panels
-**stored**. How it works and what it costs: [Materialized panels](../deep-dive/materialized-panels.md).
+**stored**. How it works and what it costs: [Materialized panels](../deep-dive/materialized-panels.md). New to the idea? Start with its [60-second explainer](../deep-dive/materialized-panels.md#the-idea-in-60-seconds).
 
 ## Editor autocompletion
 

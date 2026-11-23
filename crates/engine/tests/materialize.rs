@@ -10,10 +10,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 fn config(dir: &std::path::Path) -> Config {
+    config_with(dir, "")
+}
+
+/// `extra` is more `materialize:` keys, e.g. `, max_panels: 2`.
+fn config_with(dir: &std::path::Path, extra: &str) -> Config {
     let ext = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext");
     let yaml = format!(
         "duckdb: {{ extension_dir: {ext}, threads: 2, memory_limit: 1GB }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\n\
-         ingest: {{ wal_dir: {d}/wal, max_sample_age: 1d }}\nmaterialize: {{ path: {d}/mat.duckdb, resolution: 15s, settle: 5m }}\n\
+         ingest: {{ wal_dir: {d}/wal, max_sample_age: 1d }}\nmaterialize: {{ path: {d}/mat.duckdb, resolution: 15s, settle: 5m{extra} }}\n\
          coordinator: {{ hot_grace: 1ms }}\n",
         d = dir.display()
     );
@@ -342,4 +347,107 @@ async fn nothing_is_forgotten_before_panels_are_registered() {
     q["time"] = serde_json::json!({"from": "-1h", "step": "15s"});
     let info = n.query(&q.to_string()).await.unwrap().materialized.unwrap();
     assert!(info.stored_points > 100, "stored points survived an unregistered tick: {}", info.stored_points);
+}
+
+// ---- memory and disk bounds: the store must not grow without limit ----
+
+fn temp_panel() -> (String, serde_json::Value) {
+    panels().into_iter().find(|(n, _)| n == "t/temp").unwrap()
+}
+
+async fn stored_points(n: &Node) -> i64 {
+    n.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_points", [], |r| r.get(0))?)).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_panel_keeps_at_most_max_points_and_still_answers_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    // 3 hosts: 3 points per step, so 1,000 points hold 333 steps (about 83 min).
+    let n = Node::open(config_with(dir.path(), ", max_points_per_panel: 1000")).await.unwrap();
+    let now = now_ms() / 15_000 * 15_000;
+    n.ingest(rows(now, now - 3 * 3_600_000)).await.unwrap();
+    n.set_materialized(vec![temp_panel()]);
+    // Catching up over 2 h (480 steps, 1,440 points) must end up trimmed to the newest steps.
+    n.materialize_since(now - 2 * 3_600_000, now).await.unwrap();
+    let kept = stored_points(&n).await;
+    assert!((1..=1000).contains(&kept), "kept {kept} points, cap 1000");
+    assert!(n.metrics.materialized_trimmed.load(std::sync::atomic::Ordering::Relaxed) > 0, "trimming is counted");
+    assert_eq!(n.metrics.materialized_stored.load(std::sync::atomic::Ordering::Relaxed) as i64, kept, "the gauge matches the store");
+
+    // The trimmed head is computed on read: the answer is still the raw one.
+    let (_, mut q) = temp_panel();
+    let (from, to) = (now - 2 * 3_600_000 + 7_000, now);
+    q["time"] = serde_json::json!({"from": from, "to": to, "step": "15000ms"});
+    let mat = n.query(&q.to_string()).await.unwrap();
+    let info = mat.materialized.clone().expect("answered from the store");
+    assert!(info.stored_points > 0 && info.stored_points as i64 <= 1000, "{info:?}");
+    assert!(info.computed_steps > 100, "the dropped head is computed: {info:?}");
+    assert_same("trimmed panel", &shape(&mat), &raw_on_grid(&n, &q, from, to, 15_000).await);
+
+    // Ticks keep it bounded as time advances.
+    for k in 1..=20 {
+        n.materialize(now + k * 15_000).await.unwrap();
+    }
+    assert!(stored_points(&n).await <= 1000, "still within the cap after more ticks");
+}
+
+#[tokio::test]
+async fn a_panel_too_wide_for_the_cap_is_not_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let n = Node::open(config_with(dir.path(), ", max_points_per_panel: 1000")).await.unwrap();
+    let now = now_ms() / 15_000 * 15_000;
+    n.ingest(rows(now, now - 3_600_000)).await.unwrap();
+    // 6 series per step (job x code): 240 steps would need 1,440 points.
+    let wide = (
+        "t/wide".to_string(),
+        doc(
+            "wide",
+            r#"{"queries":[{"name":"r","metric":"reqs_total","fn":{"op":"irate","window":"1m"},"agg":{"op":"sum","by":["job","code"]}}]}"#,
+        ),
+    );
+    n.set_materialized(vec![wide.clone(), temp_panel()]);
+    n.materialize_since(now - 3_600_000, now).await.unwrap();
+    n.materialize(now + 15_000).await.unwrap();
+    let wide_points: i64 =
+        n.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_state WHERE name = 't/wide'", [], |r| r.get(0))?)).await.unwrap();
+    assert_eq!(wide_points, 0, "no state for the wide panel");
+    let mut q = wide.1.clone();
+    q["time"] = serde_json::json!({"from": "-30m", "step": "15s"});
+    assert!(n.query(&q.to_string()).await.unwrap().materialized.is_none(), "its reads are computed raw");
+    // The narrow panel is unaffected.
+    let (_, mut t) = temp_panel();
+    t["time"] = serde_json::json!({"from": "-30m", "step": "15s"});
+    assert!(n.query(&t.to_string()).await.unwrap().materialized.is_some());
+}
+
+#[tokio::test]
+async fn max_panels_bounds_the_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let n = Node::open(config_with(dir.path(), ", max_panels: 2")).await.unwrap();
+    n.set_materialized(panels());
+    assert_eq!(n.metrics.materialized_panels.load(std::sync::atomic::Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn a_slice_never_produces_more_than_max_slice_points() {
+    let dir = tempfile::tempdir().unwrap();
+    // 3 points per step and 20 points per slice: 6 steps per tick once the width is known.
+    let n = Node::open(config_with(dir.path(), ", max_slice_points: 20")).await.unwrap();
+    let now = now_ms() / 15_000 * 15_000;
+    n.ingest(rows(now, now - 3 * 3_600_000)).await.unwrap();
+    n.set_materialized(vec![temp_panel()]);
+    let first = n.materialize(now - 2 * 3_600_000).await.unwrap(); // starts at the horizon, learns the width
+    assert!(first > 0);
+    // 240 steps behind: caught up slice by slice.
+    let mut ticks = 0;
+    loop {
+        let stored = n.materialize(now - 3_600_000).await.unwrap();
+        assert!(stored <= 20, "one tick stored {stored} points, slice limit 20");
+        ticks += 1;
+        if stored == 0 {
+            break;
+        }
+        assert!(ticks < 200, "caught up");
+    }
+    assert!(ticks > 10, "the catch-up took many small slices ({ticks})");
 }

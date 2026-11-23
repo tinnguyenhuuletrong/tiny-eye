@@ -190,6 +190,16 @@ pub struct Materialize {
     /// A step is stored once it is this old. Samples that arrive later than this after their
     /// timestamp are not in the stored points (raw queries still see them).
     pub settle: Dur,
+    /// At most this many panels are materialized; the rest are skipped with a warning. Bounds the
+    /// store: `max_panels * max_points_per_panel * ~24 B`.
+    pub max_panels: usize,
+    /// Stored points kept per panel. Past it the oldest steps are dropped (a read computes them
+    /// again), so a wide panel (many series per step) cannot grow the store without bound. A
+    /// panel that cannot hold at least 240 steps (1 h at 15 s) is not stored at all.
+    pub max_points_per_panel: u64,
+    /// Points one background slice may produce (computed and written in one statement). The
+    /// slice length adapts to the panel's width, so the working memory of a tick stays bounded.
+    pub max_slice_points: u64,
 }
 
 /// `64MB`, `1GB`, `512KB`, `100B` (powers of 1024).

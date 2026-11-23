@@ -126,6 +126,8 @@ tiny-eye keeps the points it computed, extends them every 15 s as data settles, 
 read from the stored points plus only what is not stored. Long-range panels stop re-reading
 every raw sample on every refresh.
 
+![Animated explainer: stored steps, a refresh that computes only the newest steps, and recompute after a late sample](../assets/materialized-panels.gif)
+
 - **Defined by the dashboard query.** What is materialized is exactly the panel's TQS document.
   Edit the panel and the old points are dropped. Any client sending the same query (the UI,
   `curl`, an agent over MCP) gets the stored points.

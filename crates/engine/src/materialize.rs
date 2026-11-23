@@ -20,7 +20,7 @@ use anyhow::Result;
 use duckdb::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tqs::compile::OutRow;
 
@@ -38,10 +38,18 @@ pub struct Panel {
     /// Stable id of (key, resolution) used in the tables.
     pub id: String,
     pub doc: tqs::Tqs,
+    /// Points per step seen in the last slice (0 = not known yet): sizes the next slice.
+    width: AtomicI64,
+    /// Too wide to hold `MIN_STEPS` steps within `max_points_per_panel`: never stored.
+    too_wide: AtomicBool,
 }
 
 /// Steps computed per panel per call (12 h at 15 s): bounds the work behind one query timeout.
 const SLICE_STEPS: i64 = 2_880;
+/// The first slice of a panel, before its width is known (15 min at 15 s).
+const FIRST_SLICE_STEPS: i64 = 60;
+/// A panel must be able to keep this many steps (1 h at 15 s) or it is not stored.
+const MIN_STEPS: i64 = 240;
 
 pub struct Registry {
     panels: RwLock<HashMap<String, Arc<Panel>>>,
@@ -130,17 +138,34 @@ impl Node {
     /// that are gone are deleted on the next [`Node::materialize`].
     pub fn set_materialized(&self, panels: Vec<(String, serde_json::Value)>) {
         let res = self.cfg.materialize.resolution.ms();
+        let mut panels = panels;
+        panels.sort_by(|a, b| a.0.cmp(&b.0)); // the same panels win on every start
+        let max = self.cfg.materialize.max_panels;
         let mut map = HashMap::new();
+        let mut over = 0usize;
         for (name, json) in panels {
             let Ok(doc) = tqs::Tqs::parse(&json.to_string()) else { continue };
             if tqs::materialize_blocker(&doc).is_some() {
                 continue;
             }
             let key = key_of(&json);
+            if map.len() >= max && !map.contains_key(&key) {
+                over += 1;
+                tracing::warn!(panel = %name, max_panels = max, "materialize.max_panels reached: panel not materialized");
+                continue;
+            }
             let id = fnv1a(&format!("{res}:{key}"));
-            map.insert(key.clone(), Arc::new(Panel { name, key, id, doc }));
+            // Keep what was learned about a panel that is registered again unchanged.
+            let old = self.mat.panels.read().ok().and_then(|m| m.get(&key).cloned());
+            let (width, too_wide) =
+                old.map(|o| (o.width.load(Ordering::Relaxed), o.too_wide.load(Ordering::Relaxed))).unwrap_or((0, false));
+            map.insert(
+                key.clone(),
+                Arc::new(Panel { name, key, id, doc, width: AtomicI64::new(width), too_wide: AtomicBool::new(too_wide) }),
+            );
         }
-        tracing::info!(panels = map.len(), "materialized panels registered");
+        tracing::info!(panels = map.len(), skipped = over, "materialized panels registered");
+        self.metrics.materialized_panels.store(map.len() as u64, Ordering::Relaxed);
         *self.mat.panels.write().unwrap_or_else(|e| e.into_inner()) = map;
         self.mat.generation.fetch_add(1, Ordering::Relaxed);
     }
@@ -238,8 +263,14 @@ impl Node {
             }
         }
         let (mut stored, mut more) = (0usize, false);
+        let (max_points, max_slice) = (self.cfg.materialize.max_points_per_panel as i64, self.cfg.materialize.max_slice_points as i64);
+        let trimmed_total = Arc::new(AtomicU64::new(0));
         for p in panels {
+            if p.too_wide.load(Ordering::Relaxed) {
+                continue;
+            }
             let name = p.name.clone();
+            let trimmed = trimmed_total.clone();
             let r = self
                 .with_conn(move |conn| {
                     let to_t: Option<i64> = conn
@@ -254,7 +285,11 @@ impl Node {
                     if lo > horizon {
                         return Ok((0, false));
                     }
-                    let hi = horizon.min(lo + res * (SLICE_STEPS - 1));
+                    // A slice is sized by the panel's width, so one statement never builds more
+                    // than `max_slice_points` rows however many series the panel has.
+                    let width = p.width.load(Ordering::Relaxed);
+                    let steps = if width <= 0 { FIRST_SLICE_STEPS } else { (max_slice / width).clamp(1, SLICE_STEPS) };
+                    let hi = horizon.min(lo + res * (steps - 1));
                     // Compute and store in one statement and one transaction.
                     let (sql, params) = tqs::compile::timeseries_sql(&p.doc, &tqs::Resolved { from_ms: lo, to_ms: hi, step_ms: res })?;
                     // The compiled SQL numbers its parameters ($1, $2, …); the id is 16 hex digits,
@@ -266,11 +301,42 @@ impl Node {
                             &format!("INSERT INTO mat.panel_points SELECT '{}', output, key, t, value FROM ({sql})", p.id),
                             duckdb::params_from_iter(params.iter()),
                         )?;
+                        let done_steps = (hi - lo) / res + 1;
+                        let w = (n as i64 + done_steps - 1) / done_steps;
+                        if n > 0 {
+                            p.width.store(w, Ordering::Relaxed);
+                        }
                         conn.execute(
                             "INSERT INTO mat.panel_state VALUES (?, ?, ?, ?, ?, ?, ?)
                              ON CONFLICT (panel_id) DO UPDATE SET to_t = excluded.to_t, updated_ms = excluded.updated_ms",
                             duckdb::params![p.id, p.name, p.key, res, lo, hi, now_ms],
                         )?;
+                        // A panel too wide to keep MIN_STEPS steps is not stored at all.
+                        if w * MIN_STEPS > max_points {
+                            conn.execute("DELETE FROM mat.panel_points WHERE panel_id = ?", [&p.id])?;
+                            conn.execute("DELETE FROM mat.panel_state WHERE panel_id = ?", [&p.id])?;
+                            p.too_wide.store(true, Ordering::Relaxed);
+                            tracing::warn!(panel = %p.name, points_per_step = w, max_points_per_panel = max_points,
+                                "materialized panel is too wide (series per step) to be stored; reads compute it raw");
+                            return Ok(0);
+                        }
+                        // Keep the newest `max_points` points: drop the oldest whole steps.
+                        let count: i64 =
+                            conn.query_row("SELECT count(*) FROM mat.panel_points WHERE panel_id = ?", [&p.id], |r| r.get(0))?;
+                        if count > max_points {
+                            let cut: i64 = conn.query_row(
+                                "SELECT min(t) FROM (SELECT t FROM mat.panel_points WHERE panel_id = ? ORDER BY t DESC LIMIT ?)",
+                                duckdb::params![p.id, max_points],
+                                |r| r.get(0),
+                            )?;
+                            let dropped =
+                                conn.execute("DELETE FROM mat.panel_points WHERE panel_id = ? AND t <= ?", duckdb::params![p.id, cut])?;
+                            conn.execute(
+                                "UPDATE mat.panel_state SET from_t = greatest(from_t, ?) WHERE panel_id = ?",
+                                duckdb::params![cut + res, p.id],
+                            )?;
+                            trimmed.fetch_add(dropped as u64, Ordering::Relaxed);
+                        }
                         Ok(n)
                     })();
                     match written {
@@ -292,6 +358,10 @@ impl Node {
                 }
                 Err(e) => tracing::warn!(panel = %name, error = %format!("{e:#}"), "materializing a panel failed; will retry"),
             }
+        }
+        self.metrics.materialized_trimmed.fetch_add(trimmed_total.load(Ordering::Relaxed), Ordering::Relaxed);
+        if let Ok(total) = self.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_points", [], |r| r.get::<_, i64>(0))?)).await {
+            self.metrics.materialized_stored.store(total.max(0) as u64, Ordering::Relaxed);
         }
         self.metrics.materialized_points.fetch_add(stored as u64, Ordering::Relaxed);
         Ok((stored, more))

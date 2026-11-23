@@ -452,7 +452,55 @@ async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) ->
         bytes as f64 / points.max(1) as f64,
         n = docs.len() + 2 // the six above plus the two coverage panels
     )?;
+
+    // Memory: the process must not grow while the background task keeps running.
+    let rss0 = rss_mb();
+    let mut peak = rss0;
+    let mut tick_ms = vec![];
+    for k in 12..252 {
+        let t = Instant::now();
+        node.materialize(now + k * 15_000).await?; // 240 more ticks: one hour of steps
+        tick_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        if k % 20 == 0 {
+            peak = peak.max(rss_mb());
+        }
+    }
+    let rss1 = rss_mb();
+    let points1: i64 = node.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_points", [], |r| r.get(0))?)).await?;
+    let m = &node.cfg.materialize;
+    writeln!(
+        md,
+        "\n### Memory and disk bounds\n\n\
+         The background task keeps one slice in flight and writes it straight to the store, so nothing accumulates in the process. \
+         Bounds (config `materialize.*`): at most {} panels, {} stored points per panel (oldest steps dropped past it), {} points per slice.\n\n\
+         | Measure | Result |\n| :--- | :--- |\n\
+         | Process RSS before / after 240 more ticks (1 h of steps) | {rss0:.0} MB / {rss1:.0} MB (peak {peak:.0} MB, change {:+.0} MB) |\n\
+         | Tick p50 / max over those ticks | {:.0} / {:.0} ms |\n\
+         | Stored points before / after | {points} / {points1} |\n\
+         | Worst case the config allows | {} panels x {} points x ~24 B = {:.0} MB of store |",
+        m.max_panels,
+        m.max_points_per_panel,
+        m.max_slice_points,
+        rss1 - rss0,
+        pct(&mut tick_ms.clone(), 0.5),
+        tick_ms.iter().cloned().fold(0.0, f64::max),
+        m.max_panels,
+        m.max_points_per_panel,
+        (m.max_panels as f64) * (m.max_points_per_panel as f64) * 24.0 / 1e6
+    )?;
+    println!("   memory: RSS {rss0:.0} -> {rss1:.0} MB (peak {peak:.0}), stored points {points} -> {points1}");
     Ok(md)
+}
+
+/// Resident memory of this process in MB (`ps`, so it works on macOS and Linux).
+fn rss_mb() -> f64 {
+    std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .map_or(0.0, |kb| kb / 1024.0)
 }
 
 /// p50 of 10 runs each, raw and materialized, and the number of points returned.
