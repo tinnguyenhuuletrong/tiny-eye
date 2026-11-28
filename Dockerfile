@@ -19,6 +19,10 @@ FROM rust:1-bookworm AS build
 ARG BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${BUILD_JOBS} CARGO_PROFILE_RELEASE_DEBUG=false
 WORKDIR /src
+# The exact Rust version comes from rust-toolchain.toml; install it before the sources so this
+# layer stays cached until the version is bumped.
+COPY rust-toolchain.toml .
+RUN rustup install
 COPY . .
 COPY --from=ui /src/ui/dist ./ui/dist
 # One target cache per architecture (amd64 and arm64 build in parallel). Touching build.rs makes

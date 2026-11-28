@@ -99,4 +99,4 @@ The web UI in `ui/` generates `ui/src/api.gen.ts` from `api/openapi.yaml` with `
 | `crates/server/tests/dashboards.rs` | A dashboard round-trips through `GET` and `PUT` with the YAML file as the source of truth. |
 | `crates/engine/src/config.rs` unit tests | Defaults parse, file and env layering, unknown keys refused, secrets redacted. |
 
-All of them run in `make test`, which CI runs on every push. See [Testing and evidence](testing-and-evidence.md).
+All of them run in `make test`, which CI runs on every pull request and push to `main`. See [Testing and evidence](testing-and-evidence.md).

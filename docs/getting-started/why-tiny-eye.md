@@ -85,7 +85,7 @@ The compiler evaluates the `rate` family with running sums per series and two AS
 (series, step) to find each window's first and last sample. The work is one pass over the
 samples plus O(series × steps) probes, instead of building every (step, series, sample in
 window) row. On the benchmark's 6-hour, 2,000-series `sum by (job) (rate(…[5m]))` panel this
-took the query from about 3.7 s to **0.58 s** p50, and the saving grows with the window
+took the query from about 3.7 s to **0.58 s** p50 in one laptop run, and the saving grows with the window
 ([Performance](../deep-dive/performance.md#the-window-evaluation-change-37-s-to-058-s),
 [local benchmark](../deep-dive/evidence/bench-local.md)). `avg_over_time`, `min_over_time`,
 `max_over_time` and `sum_over_time` keep the slower join path, because min and max are not
@@ -138,7 +138,7 @@ every raw sample on every refresh.
   timestamps, and a sample that arrives late for stored steps makes them recomputed. A test
   compares materialized and raw answers point by point over 12 query shapes, late samples and
   restarts.
-- **Measured.** On the benchmark's 6-hour panels, aggregations over many series read 10–12× faster once the range is stored (`sum by (job) (rate(…[5m]))`: 443 ms raw, 38 ms materialized), materialized reads stay near 40 ms from 1 h to 6 h ranges, every point equals the raw answer, and the background cost is 30 ms per panel every 15 s ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
+- **Measured.** On the benchmark's 6-hour panels (one laptop run; the linked report holds the latest weekly run), aggregations over many series read 10–12× faster once the range is stored (`sum by (job) (rate(…[5m]))`: 443 ms raw, 38 ms materialized), materialized reads stay near 40 ms from 1 h to 6 h ranges, every point equals the raw answer, and the background cost is 30 ms per panel every 15 s ([benchmark](../deep-dive/evidence/bench-local.md#materialized-panels)).
 - **Stated limits.** No backfill: points start when a panel is first seen, so the gain grows
   with uptime. Spans and logs measures, `table`, `fill: zero` and range-ranked `top` run raw.
 

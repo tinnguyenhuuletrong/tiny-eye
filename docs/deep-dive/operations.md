@@ -105,7 +105,7 @@ For S3, set `storage.s3.region`, the credentials (through the env vars), and for
 
 ## Sizing hints
 
-From `make bench` and `make bench-s3` on one 8-core laptop (4 DuckDB threads, `wal` durability, 2,620 series, 6 hours at a 15 s scrape interval, 3.7 M samples):
+From one run of `make bench` and `make bench-s3` on an 8-core laptop (4 DuckDB threads, `wal` durability, 2,620 series, 6 hours at a 15 s scrape interval, 3.7 M samples):
 
 | Measure | Result |
 | :--- | :--- |
@@ -129,7 +129,7 @@ Practical starting points:
 - **CPU.** Heavy range panels scale with `duckdb.threads`; `query.workers` bounds how many queries run at once.
 - **Disk.** The WAL holds at most the unflushed data (bounded by `flush_bytes` / `flush_interval` and the arena). Object storage grows with retention (`15d` by default).
 
-Full reports: [local disk](evidence/bench-local.md), [MinIO](evidence/bench-s3.md). More in [Performance](performance.md).
+Full reports: [local disk](evidence/bench-local.md), [MinIO](evidence/bench-s3.md). They are refreshed every week on a GitHub-hosted runner, so their numbers can differ from this table; the run block at the top of each report says where and when it ran. More in [Performance](performance.md).
 
 ## Self-metrics
 

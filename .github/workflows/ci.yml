@@ -1,18 +1,46 @@
 name: ci
-on: [push, pull_request]
+# Pushes to main and pull requests. A branch push without a pull request runs nothing (one run
+# per change, not two); start it by hand with workflow_dispatch if needed.
+# Pull requests that only change benchmark reports (the bench workflow's own PRs) run nothing:
+# GitHub holds runs on a PR opened by github-actions[bot] for approval, which then expires red.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths-ignore: ["docs/deep-dive/evidence/**"]
+  workflow_dispatch:
+
+# A new push to a pull request cancels its run still in progress; runs on main always finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: "rustfmt, clippy" }
+      - run: rustup toolchain install # the exact version and components in rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the Rust cache (about 1.2 GB); pull requests restore it. When every
+          # branch saved its own copy, the repo's 10 GB cache limit evicted main's, and runs
+          # rebuilt everything, bundled DuckDB included.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@v4
+        with:
+          path: .tools # pinned Prometheus + DuckDB extensions; versions live in the Makefile
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
       - uses: actions/setup-node@v7
         with: { node-version: 20, cache: npm, cache-dependency-path: ui/package-lock.json }
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('examples/**/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
       - run: make tools
       - run: make ui
-      - uses: oven-sh/setup-bun@v2
       - run: make lint
       - run: make examples-lint
       - run: make test

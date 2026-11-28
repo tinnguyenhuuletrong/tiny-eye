@@ -1,0 +1,65 @@
+name: bench
+# Runs every benchmark (`make bench-all`) on a GitHub-hosted runner of the same class each time
+# (the CPU model can differ; the run block records it). The reports in docs/deep-dive/evidence/ are
+# uploaded as a run artifact and committed through a pull request that this workflow opens and
+# merges itself. Each report starts with a run block (date, commit, runner, link to this run, whose
+# logs and artifact back the numbers). `make bench-all` locally writes the same reports, stamped
+# "local machine". See docs/deep-dive/testing-and-evidence.md, "Where the benchmarks run".
+#
+# Needs: Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests",
+# and no required reviews or status checks on main (ci.yml skips PRs that only change reports).
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the report branch, merge the pull request
+  pull-requests: write # open the pull request
+  actions: write # start the pages workflow: a push made with GITHUB_TOKEN starts no workflow
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    # Reports land on main, so they must measure main's code.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install # the exact version in rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2 # its own key (release build); saved from main only, where this runs
+      - uses: actions/cache@v4
+        with:
+          path: .tools
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - run: make tools # no UI build: the benchmarks don't serve it (build.rs embeds an empty UI)
+      # Fails when a report records a broken equality; the artifact still keeps that report.
+      - run: make bench-all
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: bench-reports, path: docs/deep-dive/evidence/, retention-days: 90 }
+      - name: Open and merge a pull request with the reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain -- docs/deep-dive/evidence)" ]; then echo "reports unchanged"; exit 0; fi
+          # One branch for every run: a failed merge leaves one open PR that the next run updates.
+          branch="bench/reports"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add docs/deep-dive/evidence
+          git commit -m "Benchmark reports for ${GITHUB_SHA::10} (run ${GITHUB_RUN_ID})"
+          git push --force origin "$branch"
+          url=$(gh pr view "$branch" --json url,state --jq 'select(.state == "OPEN") | .url' 2>/dev/null || true)
+          [ -n "$url" ] || url=$(gh pr create --base main --head "$branch" \
+            --title "Benchmark reports for ${GITHUB_SHA::10}" \
+            --body "Reports from \`make bench-all\` on a GitHub-hosted \`ubuntu-24.04\` runner, commit ${GITHUB_SHA}. Run: ${run_url}. Opened and merged by .github/workflows/bench.yml.")
+          gh pr merge "$url" --repo "$GITHUB_REPOSITORY" --squash
+          git push origin --delete "$branch"
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
