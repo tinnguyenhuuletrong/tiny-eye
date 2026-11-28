@@ -130,8 +130,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
     extensions are downloaded over HTTPS (Makefile and Dockerfile).
   - A malformed TQS document reports the JSON path of the bad value (`queries[0].fn.op`) instead
     of `$`. A query body that is not JSON says what a body should be.
-  - Clear errors for a second node on the same file catalog (`another tiny-eye (PID n) already
-    uses ...`) and for `tiny-eye mcp` when the node is not running (`cannot reach tiny-eye at ...`).
+  - A second node on the same machine stops before it touches the first one's files: the port is
+    bound first, a held catalog or materialized-panels file names its holder and what the second
+    node needs of its own, and a held materialized-panels file is no longer moved aside (that
+    broke the running node). `tiny-eye mcp` says when the node is not running (`cannot reach
+    tiny-eye at ...`).
   - The effective configuration is logged at `debug` instead of `info` (`tiny-eye config` prints
     it). The ready banner shows this binary's absolute path in the MCP command and a query file
     that exists (`api/examples/error-logs.json`). Shutdown ends with a `stopped:` line.

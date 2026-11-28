@@ -455,6 +455,9 @@ impl Node {
                 kept.retain(|c| answering.contains(&c.alias));
                 res = self.swap_views(aliases(&kept)).await;
                 if res.is_err() && !kept.is_empty() {
+                    for c in &kept {
+                        why.insert(c.m.node_id.clone(), "rebuilding the query views with its copy failed");
+                    }
                     kept.clear();
                     res = self.swap_views(vec![]).await;
                 }

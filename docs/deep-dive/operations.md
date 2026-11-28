@@ -234,7 +234,7 @@ The catalog references data files by URL, so the catalog and the objects must ma
 | Start fails with `unknown key` or `invalid configuration` | Typo in the config file or a `TINY_EYE__` variable | Fix the key; check with `tiny-eye config` |
 | Start fails with `<file> does not validate` | A dashboard YAML is invalid | Fix the listed problems; validate with the dashboard schema in your editor |
 | Start fails with `binding 127.0.0.1:7070` | Port in use | Change `server.listen` |
-| Start fails with `another tiny-eye (PID n) already uses <catalog>` | A second node on the same machine uses the same file catalog | Stop the first one, or give the second its own `catalog.url` and `ingest.wal_dir` (and `server.listen`); to share data, run them as a [fleet](../examples/run-a-fleet.md) |
+| Start fails with `binding 127.0.0.1:7070 (is another tiny-eye running?)` or `another process (...) already uses <file>` | A second node on the same machine uses the same port or the same files | Stop the first one, or start the second from its own working directory (or give it its own `node.id`, `server.listen`, `catalog.url`, `ingest.wal_dir` and `materialize.path`); to share data, run them as a [fleet](../examples/run-a-fleet.md) |
 | `tiny-eye mcp` tools answer `cannot reach tiny-eye at <url>` | The node is not running, or `--url` points elsewhere | Start the node (`make run`) or fix `--url` |
 | Ingest answers `429` | Arena full: flushes are slow or failing | Check logs for `flush failed`, object-store reachability, `tiny_eye_hot_bytes`; raise `arena_limit` only with RAM to match |
 | Samples missing, `rejected_rows_total{reason="out_of_bounds"}` rising | Clock skew or backfill older than `max_sample_age` | Fix clocks; raise `ingest.max_sample_age` for backfills |

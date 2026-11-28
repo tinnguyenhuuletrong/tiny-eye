@@ -99,8 +99,8 @@ fn banner(listen: &str, exe: &str) -> String {
          Web UI        {url}\n  \
          OTLP/HTTP     OTEL_EXPORTER_OTLP_ENDPOINT={url}\n  \
          Remote-write  {url}/api/v1/write\n  \
-         Query (TQS)   curl {url}/api/v1/query -d @api/examples/error-logs.json\n  \
-         AI agents     claude mcp add tiny-eye -- {exe} mcp --url {url}\n",
+         Query (TQS)   curl {url}/api/v1/query -d @api/examples/error-logs.json   (from the repository root)\n  \
+         AI agents     claude mcp add tiny-eye -- \"{exe}\" mcp --url {url}\n",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -141,11 +141,14 @@ async fn main() -> Result<()> {
     tracing::debug!("effective config (tiny-eye config prints it):\n{}", cfg.redacted_yaml());
     let dashboards = engine::dashboards::load(&cfg.dashboards.dir)?;
     let listen = cfg.server.listen.clone();
+    // Bind first: a second node on a taken port stops here, before it opens (or moves aside) any
+    // file the running node uses.
+    let listener =
+        tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen} (is another tiny-eye running?)"))?;
     let node = Node::open(cfg).await?;
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let bg = tokio::spawn(node.clone().run_background(stop_rx));
     let state = server::AppState::new(node.clone(), dashboards)?;
-    let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;
     tracing::info!(%listen, "serving");
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "tiny-eye".into());
     eprintln!("{}", banner(&listen, &exe));

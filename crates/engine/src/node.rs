@@ -199,18 +199,19 @@ fn prefix_changed(e: &anyhow::Error, catalog: &str, data_path: &str) -> Option<a
     ))
 }
 
-/// DuckDB's "Conflicting lock is held in <program> (PID n)" when a second node opens the same
-/// file catalog: say what happened and what to change.
-fn lock_conflict(e: &anyhow::Error, catalog: &str) -> Option<anyhow::Error> {
+/// DuckDB's "Conflicting lock is held in <program> (PID n)" when a second process opens one of
+/// this node's files: name the holder and say what a second node needs of its own.
+fn lock_conflict(e: &anyhow::Error, file: &str) -> Option<anyhow::Error> {
     let text = format!("{e:#}");
     let held = text.split("Conflicting lock is held in ").nth(1)?;
-    let who = match held.split("(PID ").nth(1).and_then(|p| p.split(')').next()) {
-        Some(pid) => format!("another tiny-eye (PID {pid})"),
-        None => "another process".to_string(),
+    let who = match held.split(" by user").next().map(str::trim) {
+        Some(holder) if !holder.is_empty() => format!("another process ({holder})"),
+        _ => "another process".to_string(),
     };
     Some(anyhow!(
-        "{who} already uses {catalog}; stop it, or give this node its own catalog.url and ingest.wal_dir \
-         (to share data between nodes, run them as a fleet: docs/examples/run-a-fleet.md)"
+        "{who} already uses {file}; stop it, or start this node from its own working directory (or give it its own \
+         node.id, server.listen, catalog.url, ingest.wal_dir and materialize.path). To share data between nodes, run them \
+         as a fleet: docs/examples/run-a-fleet.md"
     ))
 }
 
@@ -272,8 +273,12 @@ impl Node {
             {
                 std::fs::create_dir_all(parent)?;
             }
-            // Derived data: a file that cannot be opened is moved aside and started again.
+            // Derived data: a file that cannot be opened is moved aside and started again, unless
+            // another process holds it: moving a live file aside would break that process.
             if let Err(e) = root.execute_batch(&format!("ATTACH {} AS mat", sql_str(mat_path))) {
+                if let Some(held) = lock_conflict(&anyhow!(e.to_string()), mat_path) {
+                    return Err(held);
+                }
                 let aside = format!("{mat_path}.broken-{epoch}");
                 tracing::warn!(path = %mat_path, moved_to = %aside, error = %e, "materialized panels file unusable; starting a new one");
                 let _ = std::fs::rename(mat_path, &aside);
@@ -1010,12 +1015,10 @@ mod tests {
         )
         .context("attaching DuckLake catalog data/catalog.ducklake");
         let msg = format!("{:#}", lock_conflict(&duck, "data/catalog.ducklake").expect("recognised"));
-        assert!(
-            msg.starts_with(
-                "another tiny-eye (PID 4242) already uses data/catalog.ducklake; stop it, or give this node its own catalog.url and ingest.wal_dir"
-            ),
-            "{msg}"
-        );
+        assert!(msg.starts_with("another process (/bin/tiny-eye (PID 4242)) already uses data/catalog.ducklake; stop it"), "{msg}");
+        for own in ["node.id", "server.listen", "catalog.url", "ingest.wal_dir", "materialize.path"] {
+            assert!(msg.contains(own), "{msg} should name {own}");
+        }
         assert!(lock_conflict(&anyhow!("IO Error: permission denied"), "c").is_none());
     }
 }
