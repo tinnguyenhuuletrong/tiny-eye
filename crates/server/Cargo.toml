@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "tiny-eye-bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "tiny-eye-fleet"
+path = "src/bin/fleet.rs"
+
 [dependencies]
 engine.workspace = true
 tqs.workspace = true
@@ -31,14 +35,14 @@ opentelemetry-proto.workspace = true
 ureq.workspace = true
 flate2 = "1"
 rand.workspace = true
-# used by the tiny-eye-bench binary
+# used by the tiny-eye-bench and tiny-eye-fleet binaries
 tempfile.workspace = true
 ulid.workspace = true
+duckdb.workspace = true
 
 [dev-dependencies]
 jsonschema = { version = "0.62", default-features = false }
 serde_norway.workspace = true
-duckdb.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
