@@ -2,6 +2,7 @@
 title: What is tiny-eye
 description: One Rust binary that ingests metrics, logs and traces, stores them as Parquet, and answers Prometheus-exact TQS queries.
 sidebar_position: 1
+slug: /
 ---
 
 tiny-eye is an observability engine in one Rust binary. It receives metrics, logs and traces,

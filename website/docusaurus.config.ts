@@ -64,7 +64,7 @@ const config: Config = {
     colorMode: { respectPrefersColorScheme: true },
     announcementBar: {
       id: "pre-release",
-      content: `tiny-eye is pre-release: single node, APIs may change. <a href="${baseUrl}docs/deep-dive/limitations-and-roadmap">Limitations</a>`,
+      content: `tiny-eye is pre-release: APIs and the storage layout may change. <a href="${baseUrl}docs/deep-dive/limitations-and-roadmap">Limitations</a>`,
       backgroundColor: "var(--te-surface)",
       textColor: "var(--ifm-font-color-base)",
       isCloseable: true,
@@ -75,7 +75,7 @@ const config: Config = {
       items: [
         { type: "doc", docId: "intro", label: "Docs", position: "left" },
         { to: "/docs/category/guides", label: "Guides", position: "left" },
-        { to: "/docs/category/concepts", label: "Concepts", position: "left" },
+        { to: "/docs/category/how-it-works", label: "How it works", position: "left" },
         { to: "/docs/category/reference", label: "Reference", position: "left" },
         { href: repoUrl, position: "right", className: "navbar-github", "aria-label": "GitHub repository" },
       ],
@@ -88,7 +88,7 @@ const config: Config = {
           items: [
             { label: "Get started", to: "/docs/category/get-started" },
             { label: "Guides", to: "/docs/category/guides" },
-            { label: "Concepts", to: "/docs/category/concepts" },
+            { label: "How it works", to: "/docs/category/how-it-works" },
             { label: "Reference", to: "/docs/category/reference" },
           ],
         },

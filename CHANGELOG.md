@@ -119,6 +119,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   the two fleet intervals.
 - `--role` other than `all` says that only `--role all` exists and that several nodes run as a
   fleet.
+- First-run experience:
+  - `tiny-eye --help` (`-h`, `help`) prints the usage and `--version` (`-V`) the version. An
+    unknown flag such as `--confg` or an unknown command fails with a pointer to `--help` instead
+    of starting a node with the defaults.
+  - `make run`, `make demo` and `make machine` rebuild only what changed: the web UI only when
+    `ui/`, its lockfile or `api/openapi.yaml` changed, `npm ci` only when the lockfile changed. A
+    restart with nothing changed no longer recompiles the server. They fetch only the DuckDB
+    extensions (new `make ext`); the test targets still fetch Prometheus too (`make tools`). The
+    extensions are downloaded over HTTPS (Makefile and Dockerfile).
+  - A malformed TQS document reports the JSON path of the bad value (`queries[0].fn.op`) instead
+    of `$`. A query body that is not JSON says what a body should be.
+  - Clear errors for a second node on the same file catalog (`another tiny-eye (PID n) already
+    uses ...`) and for `tiny-eye mcp` when the node is not running (`cannot reach tiny-eye at ...`).
+  - The effective configuration is logged at `debug` instead of `info` (`tiny-eye config` prints
+    it). The ready banner shows this binary's absolute path in the MCP command and a query file
+    that exists (`api/examples/error-logs.json`). Shutdown ends with a `stopped:` line.
+  - A fleet node logs `fleet: attached <node> ...` when another node's data becomes visible and
+    `fleet: dropped <node> (<reason>)` when it stops, once each.
+  - `make help` lists targets with digits in their names (`e2e`, `s3-up`, `bench-s3`). `make check`
+    runs the same steps as CI, `docs` included. The pre-commit hook runs clippy with the same
+    features as `make lint`, so the two share one build cache.
+  - Docs: the deep-dive section is called "How it works" (it collided with "Core concepts"),
+    `/docs/` opens the introduction, list rows returning strings is documented, and
+    `config/default.yaml` comments use plain words and doc links instead of spec references.
 
 ### Fixed
 

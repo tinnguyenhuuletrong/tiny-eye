@@ -14,12 +14,13 @@ Prefer a ready-made app with traffic? `make demo`, `make demo-app` and `make dem
 
 ## Prerequisites
 
-- **Rust stable** (1.90 or newer) and a C/C++ compiler. The first build compiles DuckDB and takes
-  several minutes.
+- **Rust** through [rustup](https://rustup.rs), and a C/C++ compiler. The repository pins the Rust
+  version in `rust-toolchain.toml`; run `rustup install` inside the clone to install it. The
+  first build compiles DuckDB and takes several minutes.
 - **Node.js 20+ and npm**. `make build` and `make run` build the web UI and embed it in the
   binary. The examples (demo shop, machine agent) need [Bun](https://bun.sh) 1.x.
 - **curl** and **jq** for the commands below.
-- **Docker** is optional. Only the S3 setup and the demo load test use it.
+- **Docker** is optional: only `make demo-load` and the S3 benchmarks use it.
 
 ## 1. Clone and fetch the pinned tools
 
@@ -42,8 +43,10 @@ make run
 ```
 
 `make run` builds the web UI and the release binary, then starts a single node with
-`config/dev.yaml`. It listens on `127.0.0.1:7070` and keeps its data under `./data`. When the log
-shows `serving listen=127.0.0.1:7070`, check it from the second terminal:
+`config/dev.yaml`. Later runs rebuild only what changed, so a restart with no changes takes a
+few seconds. The node listens on `127.0.0.1:7070` and keeps its data under `./data`. Wait for
+the line `tiny-eye 0.1.0 is ready` (the version may differ), followed by the addresses to use,
+then check it from the second terminal:
 
 ```bash
 curl -s localhost:7070/healthz
@@ -149,6 +152,9 @@ checkout POST /cart 1000.000ms status=2
   checkout charge card 800.000ms status=0
 ```
 
+List kinds return every value in `rows` as a string, numbers included (`"depth": "1"`). That is
+why the command converts `depth` with `tonumber` before using it as a number.
+
 :::tip
 The example uses a fixed trace id. If you send the trace a second time, change `traceId` in both
 spans, or the trace holds both copies and the waterfall shows its spans more than once.
@@ -163,8 +169,10 @@ curl -s localhost:7070/api/v1/query -d '{"tqs":"3","id":"logs","kind":"log_searc
   "limit":20}' | jq '.rows'
 ```
 
-A mistake in a document returns `400` with every problem, its code and its JSON path. To check
-a document without running it, send it to `/api/v1/validate` instead.
+A mistake in a document returns `400` with every problem, its code and its JSON path, for
+example `queries[0].fn.op` for an unknown function. A body that is not JSON returns one problem
+at `$` with the line and column of the parse error. To check a document without running it,
+send it to `/api/v1/validate` instead.
 
 ## 5. Look at a dashboard through the API
 
@@ -185,8 +193,10 @@ curl -s localhost:7070/api/v1/dashboards/tiny-eye-self \
   | curl -s localhost:7070/api/v1/query -d @- | jq '.series'
 ```
 
-This panel shows 0 until a Prometheus agent scrapes tiny-eye's own `/metrics` endpoint and
-remote-writes it back (see [Sending data](../examples/sending-data.md)).
+This dashboard stays empty (this panel shows 0) until something scrapes tiny-eye's own
+`/metrics` endpoint and remote-writes it back: point a Prometheus or Grafana Alloy agent at
+`http://127.0.0.1:7070/metrics` with remote-write to `/api/v1/write` (see
+[Sending data](../examples/sending-data.md)).
 
 ## 6. Open the web UI
 
