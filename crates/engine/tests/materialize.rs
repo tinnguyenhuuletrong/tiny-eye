@@ -18,7 +18,7 @@ fn config_with(dir: &std::path::Path, extra: &str) -> Config {
     let ext = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext");
     let yaml = format!(
         "duckdb: {{ extension_dir: {ext}, threads: 2, memory_limit: 1GB }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\n\
-         ingest: {{ wal_dir: {d}/wal, max_sample_age: 1d }}\nmaterialize: {{ path: {d}/mat.duckdb, resolution: 15s, settle: 5m{extra} }}\n\
+         ingest: {{ wal_dir: {d}/wal, max_sample_age: 1d }}\nfleet: {{ dir: {d}/fleet }}\nmaterialize: {{ path: {d}/mat.duckdb, resolution: 15s, settle: 5m{extra} }}\n\
          coordinator: {{ hot_grace: 1ms }}\n",
         d = dir.display()
     );

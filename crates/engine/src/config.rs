@@ -30,6 +30,8 @@ pub struct Config {
     pub ingest: Ingest,
     /// Checkpointer, compactor and retention (SPEC §6).
     pub coordinator: Coordinator,
+    /// Nodes sharing `storage.url`: publish this node's catalog copy, query the others' copies.
+    pub fleet: Fleet,
     /// Query execution limits (SPEC §7).
     pub query: Query,
     /// Bearer-token auth; scopes per operation come from api/openapi.yaml (`x-scope`).
@@ -43,12 +45,21 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
-    /// Unique node id; part of every file name and envelope.
+    /// Node id, unique among the nodes sharing `storage.url`. With `region` it names the node's
+    /// object prefix `<region>/<id>/`; empty falls back to the default.
     pub id: String,
-    /// Region label stamped on rows (one bucket per region, SPEC §12).
+    /// Region label stamped on rows (one bucket per region, SPEC §12); first part of the node's
+    /// object prefix. Empty falls back to the default.
     pub region: String,
     /// Tenant stamped on rows (single tenant in v1).
     pub tenant: String,
+}
+
+impl Node {
+    /// This node's own prefix in object storage: `<region>/<id>`.
+    pub fn prefix(&self) -> String {
+        format!("{}/{}", self.region, self.id)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -139,6 +150,23 @@ pub struct Coordinator {
     pub retention: Dur,
     /// How often retention runs.
     pub retention_interval: Dur,
+    /// A catalog snapshot is expired once a newer one has existed this long; only then are the
+    /// files no newer snapshot references deleted. At least `fleet.publish_interval +
+    /// fleet.refresh_interval + query.timeout`, so a catalog copy another node may still be
+    /// reading never names a deleted file.
+    pub snapshot_grace: Dur,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fleet {
+    /// Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.
+    pub publish_interval: Dur,
+    /// Look for the catalog copies of other nodes sharing `storage.url` this often and query their
+    /// data with this node's; `0s` = never. Copies older than `coordinator.snapshot_grace` are skipped.
+    pub refresh_interval: Dur,
+    /// Local directory for downloaded catalog copies (a subdirectory per node id, emptied at start).
+    pub dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -257,6 +285,11 @@ impl Dur {
     pub fn ms(&self) -> i64 {
         self.0.as_millis() as i64
     }
+
+    /// In the config grammar, as written in a file (`30s`, `10m`).
+    pub fn text(&self) -> String {
+        serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| format!("{}ms", self.ms()))
+    }
 }
 
 impl JsonSchema for Dur {
@@ -285,6 +318,10 @@ impl Serialize for Dur {
 impl<'de> Deserialize<'de> for Dur {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
+        // TQS durations are positive; a config interval may be `0s` ("never").
+        if s.strip_prefix('0').is_some_and(|u| ["ms", "s", "m", "h", "d", "w"].contains(&u)) {
+            return Ok(Dur(Duration::ZERO));
+        }
         tqs::parse_duration_ms(&s)
             .map(|ms| Dur(Duration::from_millis(ms as u64)))
             .ok_or_else(|| serde::de::Error::custom(format!("bad duration {s:?} (use ms, s, m, h, d, w)")))
@@ -319,7 +356,8 @@ impl Config {
     }
 
     pub fn from_layers(file: Option<&str>, env: &[(String, String)]) -> Result<Config> {
-        let mut v: Value = serde_norway::from_str(DEFAULT_YAML).context("embedded config/default.yaml")?;
+        let defaults: Value = serde_norway::from_str(DEFAULT_YAML).context("embedded config/default.yaml")?;
+        let mut v = defaults.clone();
         if let Some(text) = file {
             let over: Value = serde_norway::from_str(text).context("parsing config file")?;
             if !over.is_null() {
@@ -338,7 +376,20 @@ impl Config {
                 slot = m.get_mut(&key).expect("checked");
             }
             // Parse as YAML so numbers/bools/lists keep their type.
-            *slot = serde_norway::from_str(val).unwrap_or(Value::String(val.clone()));
+            *slot = if val.trim().is_empty() {
+                Value::String(val.clone())
+            } else {
+                serde_norway::from_str(val).unwrap_or(Value::String(val.clone()))
+            };
+        }
+        // Region and id name the node's object prefix: empty or null means "not set", never `//`.
+        for key in ["id", "region"] {
+            let unset = |x: Option<&Value>| x.is_none_or(|x| x.is_null() || x.as_str().is_some_and(|s| s.trim().is_empty()));
+            if unset(v.get("node").and_then(|n| n.get(key)))
+                && let (Some(d), Some(Value::Mapping(node))) = (defaults.get("node").and_then(|n| n.get(key)), v.get_mut("node"))
+            {
+                node.insert(Value::String(key.into()), d.clone());
+            }
         }
         let cfg: Config = serde_norway::from_value(v).context("invalid configuration")?;
         cfg.check()?;
@@ -346,6 +397,24 @@ impl Config {
     }
 
     fn check(&self) -> Result<()> {
+        for (key, v) in [("node.id", &self.node.id), ("node.region", &self.node.region)] {
+            if v == "." || v == ".." || !v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+                bail!("{key} {v:?} names an object storage prefix: use letters, digits, '.', '_' and '-' only");
+            }
+        }
+        let f = &self.fleet;
+        let need = f.publish_interval.0 + f.refresh_interval.0 + self.query.timeout.0;
+        if self.coordinator.snapshot_grace.0 < need {
+            bail!(
+                "coordinator.snapshot_grace ({}) must be at least fleet.publish_interval + fleet.refresh_interval + query.timeout \
+                 ({} + {} + {} = {}): another node may still be reading a catalog copy that names the files older snapshots referenced",
+                self.coordinator.snapshot_grace.text(),
+                f.publish_interval.text(),
+                f.refresh_interval.text(),
+                self.query.timeout.text(),
+                Dur(need).text()
+            );
+        }
         if self.query.workers == 0 || self.duckdb.threads == 0 {
             bail!("query.workers and duckdb.threads must be > 0");
         }
@@ -368,6 +437,25 @@ impl Config {
             std::sync::LazyLock::new(|| regex::Regex::new(r"(password=)\S+|(://[^:/@]+:)[^@]+(@)").expect("static regex"));
         c.catalog.url = PW.replace_all(&c.catalog.url, "${1}${2}<redacted>${3}").into_owned();
         serde_norway::to_string(&c).unwrap_or_else(|e| format!("<config not printable: {e}>"))
+    }
+
+    /// Settings that work but are likely not what was meant; logged at start.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut out = vec![];
+        let (i, c, f) = (&self.ingest, &self.coordinator, &self.fleet);
+        // Rows of another node reach this one at most this late; a materialized step stored
+        // before they arrive is not recomputed for them (late samples are only noted locally).
+        let lag = i.flush_interval.0 + c.checkpoint_interval.0 + f.publish_interval.0 + f.refresh_interval.0;
+        if !f.refresh_interval.0.is_zero() && self.materialize.settle.0 < lag {
+            out.push(format!(
+                "materialize.settle ({}) is shorter than the worst-case lag of another node's rows (ingest.flush_interval + \
+                 coordinator.checkpoint_interval + fleet.publish_interval + fleet.refresh_interval = {}): materialized panels \
+                 may store steps before every node's rows for them arrived",
+                self.materialize.settle.text(),
+                Dur(lag).text()
+            ));
+        }
+        out
     }
 
     pub fn is_s3(&self) -> bool {
@@ -458,6 +546,41 @@ mod tests {
             Config::from_layers(Some("catalog: { url: \"postgres:host=db user=te password=s3cret dbname=lake\" }\n"), &[]).expect("cfg");
         let y = c.redacted_yaml();
         assert!(!y.contains("s3cret") && y.contains("password=<redacted>"), "{y}");
+    }
+
+    #[test]
+    fn empty_region_or_id_fall_back_to_the_defaults() {
+        for file in ["node: { id: '', region: '' }\n", "node:\n  id:\n  region:\n"] {
+            let c = Config::from_layers(Some(file), &[]).expect("empty is not an error");
+            assert_eq!((c.node.id.as_str(), c.node.region.as_str()), ("node-0", "local"), "{file}");
+        }
+        let env = [("TINY_EYE__NODE__ID".to_string(), "".to_string()), ("TINY_EYE__NODE__REGION".into(), " ".into())];
+        let c = Config::from_layers(None, &env).expect("empty env values are not an error");
+        assert_eq!((c.node.id.as_str(), c.node.region.as_str()), ("node-0", "local"));
+        let c = Config::from_layers(Some("node: { id: n-1, region: eu-west.2 }\n"), &[]).expect("set values are kept");
+        assert_eq!((c.node.id.as_str(), c.node.region.as_str()), ("n-1", "eu-west.2"));
+        for bad in ["node: { id: a/b }", "node: { region: '..' }", "node: { region: 'eu west' }"] {
+            assert!(Config::from_layers(Some(bad), &[]).is_err(), "{bad}: not a single path segment");
+        }
+    }
+
+    #[test]
+    fn snapshot_grace_covers_publish_refresh_and_query_timeout() {
+        let e = Config::from_layers(Some("coordinator: { snapshot_grace: 89s }\n"), &[]).expect_err("30s + 30s + 30s > 89s");
+        assert!(format!("{e:#}").contains("coordinator.snapshot_grace (89s)"), "{e:#}");
+        Config::from_layers(Some("coordinator: { snapshot_grace: 90s }\n"), &[]).expect("exactly the sum is enough");
+        let off = "fleet: { publish_interval: 0s, refresh_interval: 0s }\ncoordinator: { snapshot_grace: ";
+        Config::from_layers(Some(&format!("{off}30s }}\n")), &[]).expect("fleet off: only the query timeout counts");
+        assert!(Config::from_layers(Some(&format!("{off}29s }}\n")), &[]).is_err());
+    }
+
+    #[test]
+    fn short_materialize_settle_warns_when_reading_other_nodes() {
+        assert!(Config::from_layers(None, &[]).expect("defaults").warnings().is_empty(), "defaults: 60s + 5s + 30s + 30s < 5m");
+        let c = Config::from_layers(Some("materialize: { settle: 2m }\n"), &[]).expect("valid");
+        assert!(c.warnings().iter().any(|w| w.contains("materialize.settle (2m)")), "{:?}", c.warnings());
+        let alone = Config::from_layers(Some("materialize: { settle: 2m }\nfleet: { refresh_interval: 0s }\n"), &[]).expect("valid");
+        assert!(alone.warnings().is_empty(), "no other node is read");
     }
 
     #[test]

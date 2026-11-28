@@ -386,7 +386,7 @@ async fn run(a: Args) -> Result<()> {
     };
     let yaml = format!(
         "duckdb: {{ extension_dir: {}, threads: 4, memory_limit: 8GB }}\n{storage}\ncatalog: {{ url: {d}/catalog.ducklake }}\n\
-         ingest: {{ wal_dir: {d}/wal, max_sample_age: 30d, flush_interval: 1h, arena_limit: 4GB }}\nmaterialize: {{ path: {d}/mat.duckdb }}\n\
+         ingest: {{ wal_dir: {d}/wal, max_sample_age: 30d, flush_interval: 1h, arena_limit: 4GB }}\nfleet: {{ dir: {d}/fleet }}\nmaterialize: {{ path: {d}/mat.duckdb }}\n\
          coordinator: {{ hot_grace: 1ms, compaction_delay: 1ms, checkpoint_interval: 1h, compaction_interval: 1w, retention_interval: 1w }}\nquery: {{ workers: 4 }}\n",
         root.join(".tools/duckdb_ext").display()
     );

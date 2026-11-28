@@ -73,6 +73,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   12h → 3m, 24h → 5m, 7d → 1h).
 - OTLP data points with the `NoRecordedValue` flag are stored as staleness markers, so a series
   that ends (a process exits) stops instead of repeating its last value for 5 minutes.
+- Fleet: nodes that share `storage.url` find each other there and answer queries over all their
+  data. Each node publishes a gzipped copy of its catalog (`fleet.publish_interval`) with a manifest
+  `_fleet/<node.id>.json`, and attaches the other nodes' copies read-only (`fleet.refresh_interval`);
+  a node alone works as before. Self-metrics `tiny_eye_fleet_nodes` and
+  `tiny_eye_fleet_oldest_copy_age_seconds`; `freshness_s` is the age of the oldest copy read.
+
+### Changed
+
+- Breaking: every node writes its objects under `<node.region>/<node.id>/` of `storage.url`
+  (`local/node-0/` by default) and envelopes as `commits/<epoch>-<seq>.json` there. Data written by
+  earlier builds is not read.
+- Retention expires a catalog snapshot once a newer one has existed for `coordinator.snapshot_grace`
+  (default 10m, was a fixed 10 minutes after the snapshot was created), validated to cover
+  `fleet.publish_interval + fleet.refresh_interval + query.timeout`.
 
 ### Fixed
 

@@ -12,7 +12,7 @@ use std::sync::Arc;
 fn config(dir: &std::path::Path, env: &[(&str, &str)]) -> Config {
     let ext = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext");
     let yaml = format!(
-        "duckdb: {{ extension_dir: {ext}, threads: 2, memory_limit: 1GB }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\ningest: {{ wal_dir: {d}/wal }}\nmaterialize: {{ path: {d}/mat.duckdb }}\ncoordinator: {{ hot_grace: 1ms, compaction_delay: 1ms }}\n",
+        "duckdb: {{ extension_dir: {ext}, threads: 2, memory_limit: 1GB }}\nstorage: {{ url: {d}/objects }}\ncatalog: {{ url: {d}/catalog.ducklake }}\ningest: {{ wal_dir: {d}/wal }}\nfleet: {{ dir: {d}/fleet }}\nmaterialize: {{ path: {d}/mat.duckdb }}\ncoordinator: {{ hot_grace: 1ms, compaction_delay: 1ms }}\n",
         d = dir.display()
     );
     let env: Vec<(String, String)> = env.iter().map(|(k, v)| (format!("TINY_EYE__{k}"), v.to_string())).collect();
@@ -234,7 +234,9 @@ const ENDLESS: &str = "SELECT count(*) FROM range(30000000000) a WHERE a.range %
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn abandoned_queries_are_interrupted() {
     let dir = tempfile::tempdir().unwrap();
-    let node = Node::open(config(dir.path(), &[("QUERY__WORKERS", "1"), ("QUERY__TIMEOUT", "1h")])).await.unwrap();
+    let node = Node::open(config(dir.path(), &[("QUERY__WORKERS", "1"), ("QUERY__TIMEOUT", "1h"), ("COORDINATOR__SNAPSHOT_GRACE", "2h")]))
+        .await
+        .unwrap();
     let n = node.clone();
     let h = tokio::spawn(async move { n.with_conn(|c| Ok(c.query_row(ENDLESS, [], |r| r.get::<_, i64>(0))?)).await });
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;

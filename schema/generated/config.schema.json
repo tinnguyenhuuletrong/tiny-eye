@@ -10,12 +10,12 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Unique node id; part of every file name and envelope.",
+          "description": "Node id, unique among the nodes sharing `storage.url`. With `region` it names the node's\nobject prefix `<region>/<id>/`; empty falls back to the default.",
           "type": "string",
           "default": "node-0"
         },
         "region": {
-          "description": "Region label stamped on rows (one bucket per region, SPEC §12).",
+          "description": "Region label stamped on rows (one bucket per region, SPEC §12); first part of the node's\nobject prefix. Empty falls back to the default.",
           "type": "string",
           "default": "local"
         },
@@ -195,10 +195,37 @@
           "description": "How often retention runs.",
           "$ref": "#/$defs/Duration",
           "default": "1h"
+        },
+        "snapshot_grace": {
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval +\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file.",
+          "$ref": "#/$defs/Duration",
+          "default": "10m"
         }
       },
       "additionalProperties": false,
       "description": "Checkpointer, compactor and retention (SPEC §6)."
+    },
+    "fleet": {
+      "type": "object",
+      "properties": {
+        "publish_interval": {
+          "description": "Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.",
+          "$ref": "#/$defs/Duration",
+          "default": "30s"
+        },
+        "refresh_interval": {
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies older than `coordinator.snapshot_grace` are skipped.",
+          "$ref": "#/$defs/Duration",
+          "default": "30s"
+        },
+        "dir": {
+          "description": "Local directory for downloaded catalog copies (a subdirectory per node id, emptied at start).",
+          "type": "string",
+          "default": "./data/fleet"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Nodes sharing `storage.url`: publish this node's catalog copy, query the others' copies."
     },
     "query": {
       "type": "object",
@@ -295,11 +322,11 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Unique node id; part of every file name and envelope.",
+          "description": "Node id, unique among the nodes sharing `storage.url`. With `region` it names the node's\nobject prefix `<region>/<id>/`; empty falls back to the default.",
           "type": "string"
         },
         "region": {
-          "description": "Region label stamped on rows (one bucket per region, SPEC §12).",
+          "description": "Region label stamped on rows (one bucket per region, SPEC §12); first part of the node's\nobject prefix. Empty falls back to the default.",
           "type": "string"
         },
         "tenant": {
@@ -482,6 +509,28 @@
         "retention_interval": {
           "description": "How often retention runs.",
           "$ref": "#/$defs/Duration"
+        },
+        "snapshot_grace": {
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval +\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file.",
+          "$ref": "#/$defs/Duration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Fleet": {
+      "type": "object",
+      "properties": {
+        "publish_interval": {
+          "description": "Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.",
+          "$ref": "#/$defs/Duration"
+        },
+        "refresh_interval": {
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies older than `coordinator.snapshot_grace` are skipped.",
+          "$ref": "#/$defs/Duration"
+        },
+        "dir": {
+          "description": "Local directory for downloaded catalog copies (a subdirectory per node id, emptied at start).",
+          "type": "string"
         }
       },
       "additionalProperties": false

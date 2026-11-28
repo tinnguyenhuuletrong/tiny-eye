@@ -9,7 +9,8 @@
 //!   in one transaction (idempotent through `applied_envelopes`); hourly compaction swaps
 //!   L0 → L1 atomically; retention drops expired files and DuckLake deletes the objects.
 //! Read path (SPEC §7): queries read views that union the lake with hot rows whose sequence is
-//!   above this node's committed watermark, so a row is counted exactly once (E7).
+//!   above this node's committed watermark, so a row is counted exactly once (E7), and with the
+//!   catalog copies of the other nodes sharing storage (see `fleet.rs`).
 
 use crate::config::{Config, Durability};
 use crate::metrics::Metrics;
@@ -97,7 +98,10 @@ type Sealed = BTreeMap<i64, (u64, Option<Instant>)>;
 
 pub struct Node {
     pub cfg: Config,
+    /// This node's own prefix `<region>/<id>/` of `storage.url`: data, envelopes, DuckLake data path.
     pub store: Store,
+    /// The root of `storage.url`, shared by the nodes of a fleet (`_fleet/` manifests).
+    pub shared: Store,
     pub metrics: Metrics,
     pub epoch: i64,
     /// Root connection: owns the in-memory database (hot tables, views) and the lake attach.
@@ -123,8 +127,13 @@ pub struct Node {
     replay_sources: Mutex<BTreeMap<i64, Vec<std::path::PathBuf>>>,
     /// Serialises flushes (the flusher task and `flush_now` from tests/benchmarks).
     flush_lock: tokio::sync::Mutex<()>,
-    /// Serialises catalog writes (single coordinator: checkpoint, compaction, retention).
-    catalog_lock: tokio::sync::Mutex<()>,
+    /// Serialises catalog writes (single coordinator: checkpoint, compaction, retention) and
+    /// publishing the catalog copy.
+    pub(crate) catalog_lock: tokio::sync::Mutex<()>,
+    /// Other nodes' attached catalog copies (see `fleet.rs`).
+    pub(crate) fleet: tokio::sync::Mutex<crate::fleet::State>,
+    /// Snapshot of this process's last publish.
+    pub(crate) published: Mutex<Option<i64>>,
     /// Materialized dashboard panels (see `materialize.rs`).
     pub(crate) mat: crate::materialize::Registry,
 }
@@ -178,15 +187,23 @@ impl Drop for InterruptOnDrop {
     }
 }
 
-fn sql_str(s: &str) -> String {
+pub(crate) fn sql_str(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
 impl Node {
     /// Open storage and catalog, create tables and views, replay the WAL.
     pub async fn open(cfg: Config) -> Result<Arc<Node>> {
-        let store = Store::from_config(&cfg)?;
+        let shared = Store::from_config(&cfg)?;
+        let store = shared.scoped(&cfg.node.prefix());
         let epoch = now_ms();
+        for w in cfg.warnings() {
+            tracing::warn!("{w}");
+        }
+        // Downloaded catalog copies of other nodes are only valid for this process.
+        let fleet_dir = std::path::Path::new(&cfg.fleet.dir).join(&cfg.node.id);
+        let _ = std::fs::remove_dir_all(&fleet_dir);
+        std::fs::create_dir_all(&fleet_dir).with_context(|| format!("creating {}", fleet_dir.display()))?;
         let settings = duck::DuckSettings {
             extension_dir: cfg.duckdb.extension_dir.clone(),
             threads: cfg.duckdb.threads,
@@ -237,7 +254,7 @@ impl Node {
             root.execute_batch(&t.ddl(&format!("lake.{}", t.name())))?;
             root.execute_batch(&format!("CREATE TABLE memory.main.hot_{} ({}, _seq BIGINT)", t.name(), t.ddl_columns()))?;
         }
-        Self::create_views(&root, &cfg, epoch)?;
+        Self::create_views(&root, &cfg.node.id, epoch, &[])?;
         let writer = Arc::new(Mutex::new(root.try_clone()?));
         let mut pool = vec![];
         for _ in 0..cfg.query.workers {
@@ -253,6 +270,7 @@ impl Node {
             replay_sources: Default::default(),
             cfg,
             store,
+            shared,
             metrics: Metrics::default(),
             epoch,
             root: Mutex::new(root),
@@ -265,6 +283,8 @@ impl Node {
             pool: Arc::new(Mutex::new(pool)),
             flush_lock: Default::default(),
             catalog_lock: Default::default(),
+            fleet: Default::default(),
+            published: Default::default(),
             mat: Default::default(),
         });
         node.replay_wal().await?;
@@ -272,30 +292,46 @@ impl Node {
         Ok(node)
     }
 
-    /// Views the TQS compiler reads: lake ∪ hot rows above the committed watermark.
-    fn create_views(conn: &Connection, cfg: &Config, epoch: i64) -> Result<()> {
+    /// Views the TQS compiler reads: lake ∪ hot rows above the committed watermark ∪ the tables
+    /// of every attached other-node catalog in `others` (aliases this node generated). Replaced
+    /// in one transaction, so a query sees either the old or the new set.
+    pub(crate) fn create_views(conn: &Connection, node_id: &str, epoch: i64, others: &[String]) -> Result<()> {
         let wm = format!(
             "(SELECT coalesce(max(seq_to), 0) FROM lake.applied_envelopes WHERE node_id = {} AND node_epoch = {epoch})",
-            sql_str(&cfg.node.id)
+            sql_str(node_id)
         );
-        for t in Table::ALL {
-            let cols = t.column_names().join(", ");
-            let n = t.name();
-            let union = format!("SELECT {cols} FROM lake.{n} UNION ALL SELECT {cols} FROM memory.main.hot_{n} WHERE _seq > {wm}");
-            let body = match t {
-                // One row per (series, flush) is stored; queries see one per series.
-                Table::MetricsSeries => format!(
-                    "SELECT series_id, any_value(metric_name) AS metric_name, any_value(metric_type) AS metric_type, any_value(labels) AS labels FROM ({union}) GROUP BY series_id"
-                ),
-                _ => union,
-            };
-            conn.execute_batch(&format!("CREATE OR REPLACE VIEW memory.main.{n} AS {body}"))?;
+        conn.execute_batch("BEGIN TRANSACTION")?;
+        let res = (|| -> Result<()> {
+            for t in Table::ALL {
+                let cols = t.column_names().join(", ");
+                let n = t.name();
+                let mut union = format!("SELECT {cols} FROM lake.{n} UNION ALL SELECT {cols} FROM memory.main.hot_{n} WHERE _seq > {wm}");
+                for a in others {
+                    union.push_str(&format!(" UNION ALL SELECT {cols} FROM {a}.{n}"));
+                }
+                let body = match t {
+                    // One row per (series, flush) is stored, on every node; queries see one per series.
+                    Table::MetricsSeries => format!(
+                        "SELECT series_id, any_value(metric_name) AS metric_name, any_value(metric_type) AS metric_type, any_value(labels) AS labels FROM ({union}) GROUP BY series_id"
+                    ),
+                    _ => union,
+                };
+                conn.execute_batch(&format!("CREATE OR REPLACE VIEW memory.main.{n} AS {body}"))?;
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
         }
         conn.execute_batch("USE memory.main")?;
         Ok(())
     }
 
-    fn lake_conn(&self) -> Result<Connection> {
+    pub(crate) fn lake_conn(&self) -> Result<Connection> {
         let c = self.root.lock().map_err(|_| anyhow!("root lock poisoned"))?.try_clone()?;
         c.execute_batch("USE memory.main")?;
         Ok(c)
@@ -497,10 +533,10 @@ impl Node {
         Ok(last)
     }
 
-    /// The envelope key is deterministic per (node, epoch, sequence), so the create-only PUT
-    /// turns a retry after a lost response into a no-op instead of a second commit.
+    /// The envelope key (under the node's prefix) is deterministic per (epoch, sequence), so the
+    /// create-only PUT turns a retry after a lost response into a no-op instead of a second commit.
     fn envelope_key(&self, seq: i64) -> String {
-        format!("commits/{}/{}-{:013}-{seq:012}.json", self.cfg.node.region, self.cfg.node.id, self.epoch)
+        format!("commits/{:013}-{seq:012}.json", self.epoch)
     }
 
     /// Export one sealed sequence per (table, hour), write it, and commit its envelope.
@@ -572,7 +608,7 @@ impl Node {
     // ------------------------------------------------------------------ coordinator
 
     async fn pending_envelopes(&self) -> Result<Vec<(String, Envelope)>> {
-        let mut keys = self.store.list(&format!("commits/{}/", self.cfg.node.region)).await?;
+        let mut keys = self.store.list("commits/").await?;
         keys.sort();
         let mut out = vec![];
         for k in keys {
@@ -771,6 +807,7 @@ impl Node {
         let conn = self.lake_conn()?;
         let store = self.store.clone();
         let cutoff_hour = (now - self.cfg.coordinator.retention.ms()) / 3_600_000;
+        let superseded_before = (now - self.cfg.coordinator.snapshot_grace.ms()) as f64 / 1000.0;
         tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut dropped = 0;
             for t in Table::ALL {
@@ -785,15 +822,27 @@ impl Node {
                     dropped += old.len();
                 }
             }
+            // ULIDs sort by time: keep a day of envelope ids for crash replay checks.
             conn.execute_batch(&format!(
-                "DELETE FROM lake.applied_envelopes WHERE envelope_id < {};
-                 CALL ducklake_expire_snapshots('lake', older_than => to_timestamp({}));
-                 CALL ducklake_cleanup_old_files('lake', cleanup_all => true);",
-                // ULIDs sort by time: keep a day of envelope ids for crash replay checks.
-                sql_str(&ulid::Ulid::from_parts((now - 86_400_000).max(0) as u64, 0).to_string()),
-                // Snapshots older than 10 min: no query (30 s timeout) can still be reading them.
-                (now - 600_000) / 1000
+                "DELETE FROM lake.applied_envelopes WHERE envelope_id < {}",
+                sql_str(&ulid::Ulid::from_parts((now - 86_400_000).max(0) as u64, 0).to_string())
             ))?;
+            // A snapshot is expired once a newer one has existed for `snapshot_grace`, not once it is
+            // that old: a long-lived snapshot was current until just now, and a query here or a
+            // catalog copy on another node (at most publish + refresh + query timeout old) may
+            // still read it. Files that only expired snapshots name are then deleted.
+            let expire: Vec<i64> = conn
+                .prepare(
+                    "SELECT snapshot_id FROM (SELECT snapshot_id, lead(snapshot_time) OVER (ORDER BY snapshot_id) AS next
+                     FROM ducklake_snapshots('lake')) WHERE next < to_timestamp(?) ORDER BY snapshot_id",
+                )?
+                .query_map([superseded_before], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            if !expire.is_empty() {
+                let list = expire.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+                conn.execute_batch(&format!("CALL ducklake_expire_snapshots('lake', versions => [{list}])"))?;
+            }
+            conn.execute_batch("CALL ducklake_cleanup_old_files('lake', cleanup_all => true)")?;
             Ok(dropped)
         })
         .await?
@@ -808,6 +857,10 @@ impl Node {
         let mut last_retain = Instant::now() - c.retention_interval.0;
         let mut last_mat = Instant::now();
         let mut mat_task: Option<tokio::task::JoinHandle<()>> = None;
+        let f = &self.cfg.fleet;
+        // Due at the first tick, so a starting node shows up in the fleet (and sees it) at once.
+        let (mut last_publish, mut last_refresh) = (Instant::now() - f.publish_interval.0, Instant::now() - f.refresh_interval.0);
+        let mut refresh_task: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             tokio::select! {
                 _ = tick.tick() => {}
@@ -823,6 +876,27 @@ impl Node {
                 if let Err(e) = self.checkpoint().await {
                     tracing::error!(error = %format!("{e:#}"), "checkpoint failed; will retry");
                 }
+            }
+            // After the checkpoint, so the copy holds what was just applied.
+            if !f.publish_interval.0.is_zero() && last_publish.elapsed() >= f.publish_interval.0 {
+                last_publish = Instant::now();
+                if let Err(e) = self.publish().await {
+                    tracing::error!(error = %format!("{e:#}"), "publishing the catalog copy failed; will retry");
+                }
+            }
+            // In its own task: downloads from object storage never delay flushes or checkpoints.
+            if !f.refresh_interval.0.is_zero()
+                && last_refresh.elapsed() >= f.refresh_interval.0
+                && refresh_task.as_ref().is_none_or(|h| h.is_finished())
+            {
+                last_refresh = Instant::now();
+                let node = self.clone();
+                refresh_task = Some(tokio::spawn(async move {
+                    if let Err(e) = node.refresh_fleet(now_ms()).await {
+                        node.metrics.fleet_errors.fetch_add(1, Ordering::Relaxed);
+                        tracing::error!(error = %format!("{e:#}"), "refreshing the fleet failed; will retry");
+                    }
+                }));
             }
             if last_compact.elapsed() >= c.compaction_interval.0 {
                 last_compact = Instant::now();

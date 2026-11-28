@@ -25,6 +25,7 @@ xxhash-rust.workspace = true
 futures.workspace = true
 regex.workspace = true
 tracing.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

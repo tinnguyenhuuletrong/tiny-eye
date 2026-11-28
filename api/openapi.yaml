@@ -211,8 +211,8 @@ components:
       properties:
         tqs: { type: string, const: "3" }
         id: { type: string }
-        snapshot_id: { type: integer, format: int64, description: DuckLake snapshot the query read }
-        freshness_s: { type: number, format: double, description: Seconds since the newest row the query could see was ingested (0 when the hot tail is included) }
+        snapshot_id: { type: integer, format: int64, description: This node's own DuckLake snapshot the query read }
+        freshness_s: { type: number, format: double, description: "Age in seconds of the oldest catalog copy of another node sharing storage that the query read (0 when the node is alone; its own rows are visible once acknowledged)" }
         partial_regions: { type: array, items: { type: string } }
         series:
           type: array

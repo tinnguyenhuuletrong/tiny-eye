@@ -9,6 +9,9 @@
 # Sizes: B, KB, MB, GB (powers of 1024). Durations: ms, s, m, h, d, w.
 
 node:
+  # Together they name this node's own prefix in object storage: <region>/<id>/ under storage.url.
+  # Letters, digits, '.', '_' and '-'; an empty value falls back to the default here.
+  # In a fleet (several nodes sharing storage.url) every node needs its own id.
   id: node-0
   region: local
   tenant: default
@@ -54,6 +57,18 @@ coordinator:
   compaction_delay: 10m     # compact an hour this long after it closes
   retention: 15d
   retention_interval: 1h
+  # A DuckLake snapshot is expired (and the files only it references deleted) once a newer one
+  # has existed this long. Must be >= fleet.publish_interval + fleet.refresh_interval +
+  # query.timeout, so no query on another node can still read a catalog copy that names them.
+  snapshot_grace: 10m
+
+fleet:
+  # Nodes that share storage.url find each other there and answer queries over all their data.
+  # Each node publishes a copy of its catalog (_fleet/<id>.json points at it) and attaches the
+  # copies of the others, read-only. A node alone finds only itself and works as before.
+  publish_interval: 30s     # publish this node's catalog copy this often; 0s = never
+  refresh_interval: 30s     # look for other nodes' copies this often; 0s = never
+  dir: ./data/fleet         # local copies of other nodes' catalogs (one subdirectory per node id)
 
 query:
   timeout: 30s

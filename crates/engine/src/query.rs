@@ -19,7 +19,10 @@ pub struct SeriesOut {
 #[derive(Debug, Clone, Serialize)]
 pub struct QueryOutput {
     pub id: String,
+    /// This node's own lake snapshot.
     pub snapshot_id: i64,
+    /// Age of the oldest other-node catalog copy the query read; 0 when the node is alone (its
+    /// own hot tail is part of every read: rows are visible once acknowledged).
     pub freshness_s: f64,
     pub series: Vec<SeriesOut>,
     pub rows: Vec<BTreeMap<String, String>>,
@@ -97,6 +100,8 @@ impl Node {
         self.metrics.queries.fetch_add(1, Ordering::Relaxed);
         let mat = if use_materialized && doc.kind == tqs::Kind::Timeseries { self.materialized_panel(json, r.step_ms) } else { None };
         let res = self.cfg.materialize.resolution.ms();
+        // This node's rows are all visible (hot tail); other nodes' only as of their catalog copies.
+        let freshness_s = self.fleet_freshness_s(now_ms());
         let res = self
             .with_conn(move |conn| {
                 conn.execute_batch("BEGIN TRANSACTION")?;
@@ -105,8 +110,7 @@ impl Node {
                     let mut out = QueryOutput {
                         id: doc.id.clone(),
                         snapshot_id,
-                        // The hot tail is part of every read: rows are visible once acknowledged.
-                        freshness_s: 0.0,
+                        freshness_s,
                         series: vec![],
                         rows: vec![],
                         rows_total: 0,
