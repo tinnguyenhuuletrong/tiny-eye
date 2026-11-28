@@ -102,6 +102,15 @@ impl Store {
         Ok(self.inner.get(&self.path(key)).await.with_context(|| format!("GET {key}"))?.bytes().await?)
     }
 
+    /// GET, unless the object is larger than `max` bytes (`None`; the body is not read).
+    pub async fn get_at_most(&self, key: &str, max: u64) -> Result<Option<Bytes>> {
+        let r = self.inner.get(&self.path(key)).await.with_context(|| format!("GET {key}"))?;
+        if r.meta.size > max {
+            return Ok(None);
+        }
+        Ok(Some(r.bytes().await?))
+    }
+
     pub async fn delete(&self, key: &str) -> Result<()> {
         match self.inner.delete(&self.path(key)).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
@@ -111,10 +120,18 @@ impl Store {
 
     /// Keys under `prefix`, relative to the store root.
     pub async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        Ok(self.list_modified(prefix).await?.into_iter().map(|(k, _)| k).collect())
+    }
+
+    /// Like [`Store::list`], with each object's last-modified time (unix ms) from the listing.
+    pub async fn list_modified(&self, prefix: &str) -> Result<Vec<(String, i64)>> {
         let p = self.path(prefix);
         let items: Vec<_> = self.inner.list(Some(&p)).try_collect().await.with_context(|| format!("LIST {prefix}"))?;
         let strip = if self.prefix.is_empty() { String::new() } else { format!("{}/", self.prefix) };
-        Ok(items.into_iter().map(|m| m.location.to_string().trim_start_matches(&strip).to_string()).collect())
+        Ok(items
+            .into_iter()
+            .map(|m| (m.location.to_string().trim_start_matches(&strip).to_string(), m.last_modified.timestamp_millis()))
+            .collect())
     }
 }
 

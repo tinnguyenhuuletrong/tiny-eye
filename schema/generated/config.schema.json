@@ -85,7 +85,7 @@
       "type": "object",
       "properties": {
         "url": {
-          "description": "A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).",
+          "description": "A DuckDB file path, or `postgres:<libpq conninfo>` (then both fleet intervals must be `0s`:\na fleet publishes and reads catalog files).",
           "type": "string",
           "default": "./data/catalog.ducklake"
         }
@@ -197,7 +197,7 @@
           "default": "1h"
         },
         "snapshot_grace": {
-          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval +\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file.",
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 2 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus their refresh interval and query timeout).",
           "$ref": "#/$defs/Duration",
           "default": "10m"
         }
@@ -210,18 +210,23 @@
       "properties": {
         "publish_interval": {
           "description": "Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.",
-          "$ref": "#/$defs/Duration",
+          "$ref": "#/$defs/Interval",
           "default": "30s"
         },
         "refresh_interval": {
-          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies older than `coordinator.snapshot_grace` are skipped.",
-          "$ref": "#/$defs/Duration",
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies too old to be safe are skipped (see\n`coordinator.snapshot_grace`).",
+          "$ref": "#/$defs/Interval",
           "default": "30s"
         },
         "dir": {
-          "description": "Local directory for downloaded catalog copies (a subdirectory per node id, emptied at start).",
+          "description": "Local directory for downloaded catalog copies: they live in `<dir>/<node.id>/` (this node's\nid), which is emptied at start.",
           "type": "string",
           "default": "./data/fleet"
+        },
+        "max_copy_bytes": {
+          "description": "A catalog copy of another node that unpacks to more than this is refused (copies come from\nshared storage and are not trusted).",
+          "$ref": "#/$defs/ByteSize",
+          "default": "256MB"
         }
       },
       "additionalProperties": false,
@@ -387,7 +392,7 @@
       "type": "object",
       "properties": {
         "url": {
-          "description": "A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).",
+          "description": "A DuckDB file path, or `postgres:<libpq conninfo>` (then both fleet intervals must be `0s`:\na fleet publishes and reads catalog files).",
           "type": "string"
         }
       },
@@ -511,7 +516,7 @@
           "$ref": "#/$defs/Duration"
         },
         "snapshot_grace": {
-          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval +\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file.",
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 2 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus their refresh interval and query timeout).",
           "$ref": "#/$defs/Duration"
         }
       },
@@ -522,18 +527,31 @@
       "properties": {
         "publish_interval": {
           "description": "Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.",
-          "$ref": "#/$defs/Duration"
+          "$ref": "#/$defs/Interval"
         },
         "refresh_interval": {
-          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies older than `coordinator.snapshot_grace` are skipped.",
-          "$ref": "#/$defs/Duration"
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies too old to be safe are skipped (see\n`coordinator.snapshot_grace`).",
+          "$ref": "#/$defs/Interval"
         },
         "dir": {
-          "description": "Local directory for downloaded catalog copies (a subdirectory per node id, emptied at start).",
+          "description": "Local directory for downloaded catalog copies: they live in `<dir>/<node.id>/` (this node's\nid), which is emptied at start.",
           "type": "string"
+        },
+        "max_copy_bytes": {
+          "description": "A catalog copy of another node that unpacks to more than this is refused (copies come from\nshared storage and are not trusted).",
+          "$ref": "#/$defs/ByteSize"
         }
       },
       "additionalProperties": false
+    },
+    "Interval": {
+      "description": "Duration: ms, s, m, h, d, w, e.g. 30s; 0s = never",
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m|h|d|w)$",
+      "examples": [
+        "30s",
+        "0s"
+      ]
     },
     "Query": {
       "type": "object",

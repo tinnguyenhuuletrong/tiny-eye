@@ -6,8 +6,9 @@
 //! Nothing is computed for the time before a panel was first seen (no backfill).
 //!
 //! A sample that arrives for a timestamp at or before the stored horizon (a sender's backlog
-//! after an outage, a retry) is noted by ingest; the next tick deletes the stored points from
-//! that timestamp on and computes them again, so stored points never miss accepted data.
+//! after an outage, a retry) is noted by ingest, and so are another node's rows when its catalog
+//! copy is attached (see `fleet.rs`); the next tick deletes the stored points from that timestamp
+//! on and computes them again, so stored points never miss accepted data.
 //!
 //! A query whose document is a registered panel (ignoring `id`, `title` and `time`) and whose
 //! step is a multiple of the resolution, and that overlaps the stored range, is answered on the
@@ -73,8 +74,8 @@ impl Default for Registry {
 }
 
 impl Registry {
-    /// Ingest saw a sample this old (at or before `now - settle`): stored steps from here on are
-    /// recomputed on the next tick.
+    /// Ingest (or a fleet refresh) made a sample this old visible (at or before `now - settle`):
+    /// stored steps from here on are recomputed on the next tick.
     pub(crate) fn note_late(&self, ts_ms: i64) {
         self.late.fetch_min(ts_ms, Ordering::Relaxed);
     }

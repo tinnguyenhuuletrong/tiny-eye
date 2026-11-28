@@ -25,6 +25,7 @@ pub struct Metrics {
     pub materialized_panels: AtomicU64,
     pub materialized_tick_ms: AtomicU64,
     pub fleet_publishes: AtomicU64,
+    /// Failed publishes, and refreshes that failed or left out a copy (each counted once).
     pub fleet_errors: AtomicU64,
     /// Other nodes whose catalog copies queries read, and the oldest copy's publish time (0 = none).
     pub fleet_nodes: AtomicU64,
@@ -86,7 +87,7 @@ impl Metrics {
         );
         counter(
             "fleet_errors_total",
-            "Failed fleet publishes, refreshes and catalog copy attaches.",
+            "Fleet publishes that failed, and refreshes that failed or left out another node's catalog copy (one per refresh).",
             vec![(String::new(), g(&self.fleet_errors))],
         );
         let oldest = g(&self.fleet_oldest_published_ms);

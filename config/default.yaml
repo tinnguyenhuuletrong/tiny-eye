@@ -30,7 +30,8 @@ storage:
     allow_http: false
 
 catalog:
-  # DuckLake metadata. A file path (single node) or "postgres:<libpq conninfo>" (cluster).
+  # DuckLake metadata. A file path, or "postgres:<libpq conninfo>" (then set both fleet
+  # intervals to 0s: a fleet publishes and reads catalog files).
   url: ./data/catalog.ducklake
 
 duckdb:
@@ -58,7 +59,7 @@ coordinator:
   retention: 15d
   retention_interval: 1h
   # A DuckLake snapshot is expired (and the files only it references deleted) once a newer one
-  # has existed this long. Must be >= fleet.publish_interval + fleet.refresh_interval +
+  # has existed this long. Must be >= fleet.publish_interval + 2 x fleet.refresh_interval +
   # query.timeout, so no query on another node can still read a catalog copy that names them.
   snapshot_grace: 10m
 
@@ -68,7 +69,8 @@ fleet:
   # copies of the others, read-only. A node alone finds only itself and works as before.
   publish_interval: 30s     # publish this node's catalog copy this often; 0s = never
   refresh_interval: 30s     # look for other nodes' copies this often; 0s = never
-  dir: ./data/fleet         # local copies of other nodes' catalogs (one subdirectory per node id)
+  dir: ./data/fleet         # copies of other nodes' catalogs live in <dir>/<node.id>/ (this node's id), emptied at start
+  max_copy_bytes: 256MB     # refuse another node's catalog copy that unpacks to more than this
 
 query:
   timeout: 30s

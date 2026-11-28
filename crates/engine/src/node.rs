@@ -187,6 +187,18 @@ impl Drop for InterruptOnDrop {
     }
 }
 
+/// DuckLake refuses a catalog whose stored DATA_PATH is not the one given: say why that happens
+/// here and what to do, instead of DuckLake's message.
+fn prefix_changed(e: &anyhow::Error, catalog: &str, data_path: &str) -> Option<anyhow::Error> {
+    let text = format!("{e:#}");
+    let old = text.split("does not match existing data path in the catalog \"").nth(1)?.split('"').next()?;
+    Some(anyhow!(
+        "the catalog {catalog} was written for objects under {old}, but this node writes under {data_path} (node.region/node.id \
+         changed, or data from a build before the fleet layout). Start with an empty data directory (move ./data aside), or set \
+         node.region and node.id back to the values that wrote it."
+    ))
+}
+
 pub(crate) fn sql_str(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
@@ -229,7 +241,10 @@ impl Node {
         {
             std::fs::create_dir_all(parent)?;
         }
-        duck::attach_lake(&root, &cfg.catalog.url, &format!("{}/lake/", store.url_prefix))?;
+        let data_path = format!("{}/lake/", store.url_prefix);
+        if let Err(e) = duck::attach_lake(&root, &cfg.catalog.url, &data_path) {
+            return Err(prefix_changed(&e, &cfg.catalog.url, &data_path).unwrap_or(e));
+        }
         root.execute_batch(APPLIED_DDL)?;
         let mat_path = &cfg.materialize.path;
         if mat_path.is_empty() {
@@ -878,22 +893,23 @@ impl Node {
                 }
             }
             // After the checkpoint, so the copy holds what was just applied.
-            if !f.publish_interval.0.is_zero() && last_publish.elapsed() >= f.publish_interval.0 {
+            if !f.publish_interval.is_off() && last_publish.elapsed() >= f.publish_interval.0 {
                 last_publish = Instant::now();
+                // Counted in fleet_errors by `publish`.
                 if let Err(e) = self.publish().await {
                     tracing::error!(error = %format!("{e:#}"), "publishing the catalog copy failed; will retry");
                 }
             }
             // In its own task: downloads from object storage never delay flushes or checkpoints.
-            if !f.refresh_interval.0.is_zero()
+            if !f.refresh_interval.is_off()
                 && last_refresh.elapsed() >= f.refresh_interval.0
                 && refresh_task.as_ref().is_none_or(|h| h.is_finished())
             {
                 last_refresh = Instant::now();
                 let node = self.clone();
                 refresh_task = Some(tokio::spawn(async move {
+                    // Counted in fleet_errors by `refresh_fleet`.
                     if let Err(e) = node.refresh_fleet(now_ms()).await {
-                        node.metrics.fleet_errors.fetch_add(1, Ordering::Relaxed);
                         tracing::error!(error = %format!("{e:#}"), "refreshing the fleet failed; will retry");
                     }
                 }));
