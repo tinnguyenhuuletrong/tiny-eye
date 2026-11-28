@@ -1,3 +1,6 @@
+# One exact version, used by local builds and CI alike (`rustup install` in the repo installs
+# it). Exact on purpose: CI's Rust cache key includes the rustc version, so "stable" threw
+# the whole cache away at every Rust release. Bump deliberately.
 [toolchain]
-channel = "stable"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]

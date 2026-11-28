@@ -7,10 +7,10 @@ this page covers the development setup, the daily loop and the rules that keep t
 
 You need:
 
-- **Rust stable** (pinned by `rust-toolchain.toml`, with `rustfmt` and `clippy`); install via [rustup](https://rustup.rs).
+- **Rust** via [rustup](https://rustup.rs). `rust-toolchain.toml` pins the exact version (with `rustfmt` and `clippy`), and `rustup install` (no arguments, run inside the repo) installs it. CI uses the same file; bump it on purpose, since a new version starts CI's Rust cache from scratch.
 - **Node.js 20+** for the web UI (`ui/`) and the documentation site (`website/`).
 - **[Bun](https://bun.sh) 1.x** for the examples (`examples/demo/app` and `examples/machine`, TypeScript). `make examples-lint` runs Biome (lint and format) and `tsc` on both; `bun run format` inside an example fixes style.
-- **Docker** (optional) for MinIO in the S3 benchmarks (`make s3-up`) and k6 in the demo (`make demo-load`).
+- **Docker** (optional): MinIO for `make bench-s3`, `make fleet-poc` and `make bench-all` (started by `make s3-up`), and k6 for the demo (`make demo-load`).
 
 Then, once:
 
@@ -53,7 +53,8 @@ make check   # lint + test (incl. e2e vs Prometheus and the schema sync check) +
    comes from config, not constants in code. A new knob gets its default in `config/default.yaml`.
 4. **Proven, not claimed.** Every semantic rule has a test that can fail: TQS against Prometheus
    point by point (`make conformance`, with a mutation check), storage assumptions (`make poc`),
-   the whole binary (`make e2e`), numbers (`make bench`). Results land in `docs/deep-dive/evidence/`.
+   the whole binary (`make e2e`), numbers (`make bench-all`, also run weekly on GitHub Actions). Results
+   land in `docs/deep-dive/evidence/`.
 
 ## Conventions
 

@@ -4,7 +4,7 @@ description: What tiny-eye's benchmark measures, the numbers it produced on one 
 sidebar_position: 6
 ---
 
-All numbers on this page come from `tiny-eye-bench` (`crates/server/src/bin/bench.rs`), written to [bench-local](evidence/bench-local.md) by `make bench` and to [bench-s3](evidence/bench-s3.md) by `make bench-s3`. They come from one run on one 8-CPU macOS laptop, with DuckDB v2.0.1. Read the caveats before using any number for sizing.
+All numbers on this page come from `tiny-eye-bench` (`crates/server/src/bin/bench.rs`), written to [bench-local](evidence/bench-local.md) by `make bench` and to [bench-s3](evidence/bench-s3.md) by `make bench-s3`. The numbers quoted on this page come from one run on an 8-CPU macOS laptop with DuckDB v2.0.1. The linked reports are refreshed by the weekly `bench` workflow on a GitHub-hosted runner (see [Where the benchmarks run](testing-and-evidence.md#where-the-benchmarks-run-make-bench-all)), so they hold the latest run and can differ from this page; each report generated since that workflow was added starts with a run block saying when, on which commit and on which machine it ran. Read the caveats before using any number for sizing.
 
 ## What the benchmark does
 
@@ -118,6 +118,7 @@ cargo test --release -p server --test profile -- --ignored --nocapture
 ```bash
 make bench       # local disk  -> docs/deep-dive/evidence/bench-local.md
 make bench-s3    # MinIO       -> docs/deep-dive/evidence/bench-s3.md
+make bench-all   # both + fleet-poc, as the scheduled GitHub Action runs them
 ```
 
 The binary also takes `--series`, `--hours`, `--traces`, `--s3 <endpoint>` and `--out <file>` (header of `bench.rs`). See [Testing and evidence](testing-and-evidence.md) for the other evidence suites.

@@ -364,14 +364,13 @@ async fn run(a: Args) -> Result<()> {
 
     let mut md = String::new();
     writeln!(md, "# Share-nothing fleet — proof of concept\n")?;
+    md.push_str(&shared::run_block());
     writeln!(
         md,
         "Every node keeps its own DuckLake catalog and object prefix and publishes a copy of its catalog; a read-only viewer \
          attaches all copies and queries them as one. Compared against a baseline node that holds every region's data in one \
-         catalog. Storage: {}. Machine: {} logical CPUs, {}. DuckDB {duck_version}.\n",
+         catalog. Storage: {}. DuckDB {duck_version}.\n",
         if s3 { "MinIO on the same host (S3 API, ~1 ms per request)" } else { "local disk" },
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
-        std::env::consts::OS,
     )?;
 
     // ------------------------------------------------------------------ 1. ingest
@@ -536,7 +535,7 @@ async fn run(a: Args) -> Result<()> {
          the `region` column, which the viewer reports per source region and the baseline as `all`).\n\n\
          | Query | Rows | GETs, caches off: baseline / viewer | Baseline p50 ms |",
         a.regions,
-        if all_equal { "yes" } else { "NO" }
+        if shared::check(all_equal) { "yes" } else { "NO" }
     )?;
     for (rtt, mode, ..) in &runs {
         write!(md, " {rtt} ms, {}: first / p50 |", if *mode == Mode::Remote { "remote" } else { "downloaded" })?;
@@ -600,8 +599,8 @@ async fn run(a: Args) -> Result<()> {
          intervals, not this work: at most `flush_interval` + `checkpoint_interval` + publish interval + viewer refresh interval.\n",
         p.copy_ms + p.gzip_ms,
         p.put_ms,
-        if before == 0 { "no" } else { "yes (unexpected)" },
-        if seen { "yes" } else { "**no**" },
+        if shared::check(before == 0) { "no" } else { "yes (unexpected)" },
+        if shared::check(seen) { "yes" } else { "**no**" },
         n = regions.len()
     )?;
 
@@ -680,5 +679,6 @@ async fn run(a: Args) -> Result<()> {
     } else {
         println!("{md}");
     }
+    shared::finish()?;
     Ok(())
 }

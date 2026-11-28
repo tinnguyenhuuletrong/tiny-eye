@@ -145,6 +145,12 @@ bench: tools ## Ingest + query + trace-lookup benchmark (local disk); writes doc
 bench-s3: tools s3-up ## Same benchmark with data on MinIO; writes docs/deep-dive/evidence/bench-s3.md
 	cargo run --release -p server --bin tiny-eye-bench -- --s3 http://127.0.0.1:19000 --out docs/deep-dive/evidence/bench-s3.md
 
+.PHONY: bench-all
+bench-all: ## Every benchmark, one after the other; what .github/workflows/bench.yml runs weekly. Each report starts with a run block
+	$(MAKE) bench
+	$(MAKE) bench-s3
+	$(MAKE) fleet-poc
+
 .PHONY: fleet-poc
 fleet-poc: tools s3-up ## Share-nothing nodes + read-only viewer over published catalogs (MinIO); writes docs/deep-dive/evidence/fleet-poc.md
 	cargo run --release -p server --bin tiny-eye-fleet -- --s3 http://127.0.0.1:19000 --out docs/deep-dive/evidence/fleet-poc.md

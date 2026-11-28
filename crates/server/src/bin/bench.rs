@@ -141,7 +141,7 @@ async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) ->
             "| `{name}` | {} | {r50:.1} | {m50:.1} / {m95:.1} | {:.1}× | {info} | {} |",
             a.len(),
             r50 / m50,
-            if equal { "yes" } else { "**no**" }
+            if shared::check(equal) { "yes" } else { "**no**" }
         )?;
     }
 
@@ -406,13 +406,12 @@ async fn run(a: Args) -> Result<()> {
 
     let mut md = String::new();
     writeln!(md, "# tiny-eye benchmark — {}\n", if a.s3.is_some() { "data on S3 (MinIO, same host)" } else { "data on local disk" })?;
+    md.push_str(&shared::run_block());
     writeln!(
         md,
-        "Machine: {} logical CPUs, {}. Engine: DuckDB {duck_version}, 4 DuckDB threads, durability `wal` (fsync per group). \
+        "Engine: DuckDB {duck_version}, 4 DuckDB threads, durability `wal` (fsync per group). \
          HTTP API in process, 4 concurrent remote-write clients.\n\nData: {} series ({} counters, {} gauges, 120 histogram buckets), \
          {} h at a 15 s scrape interval.\n",
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
-        std::env::consts::OS,
         sets.len(),
         a.series,
         a.series / 4,
@@ -515,5 +514,6 @@ async fn run(a: Args) -> Result<()> {
     } else {
         println!("{md}");
     }
+    shared::finish()?;
     Ok(())
 }

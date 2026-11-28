@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
 
 ### Added
 
+- Weekly benchmark on GitHub Actions (`.github/workflows/bench.yml`): runs `make bench-all` on a
+  GitHub-hosted runner and commits the reports through a pull request it merges itself. Every
+  report now opens with a run block (date, commit, machine, link to the run).
+- `make fleet-poc`: proof of concept for independent nodes, each with its own catalog, read together
+  from published catalog copies; report in `docs/deep-dive/evidence/fleet-poc.md`.
 - Single-node engine in one Rust binary with three crates (`tqs`, `engine`, `server`).
 - Ingest: Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs (protobuf and JSON,
   gzip), Loki push (JSON); sample-age bounds, secret attribute redaction, arena limit with 429.
