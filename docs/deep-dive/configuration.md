@@ -173,9 +173,9 @@ Relative paths are relative to the process's working directory.
 | `config/dev.yaml` | Local development (`make run`): extensions from `.tools/duckdb_ext`, `flush_interval: 10s`, `checkpoint_interval: 2s`, `hot_grace: 5s`. |
 | `examples/demo/tiny-eye.yaml` | The demo (`make demo`): data under `./data/demo`, the demo dashboards. |
 
-## Effective configuration at start
+## Effective configuration
 
-At start the node logs the effective configuration (after all layers) with secrets redacted. `tiny-eye config [--config <file>]` prints the same thing and exits. Redaction replaces non-empty `storage.s3.access_key_id` and `storage.s3.secret_access_key` with `<redacted>`, and masks a `password=` value or a `user:password@` part in `catalog.url`. The output is YAML in the config file's own grammar (sizes like `64MB`, durations like `1m`), so it can be saved and loaded back as a config file:
+`tiny-eye config [--config <file>]` prints the effective configuration (after all layers) with secrets redacted, and exits. A starting node logs the same thing at `debug` level (`RUST_LOG=debug`). Redaction replaces non-empty `storage.s3.access_key_id` and `storage.s3.secret_access_key` with `<redacted>`, and masks a `password=` value or a `user:password@` part in `catalog.url`. The output is YAML in the config file's own grammar (sizes like `64MB`, durations like `1m`), so it can be saved and loaded back as a config file:
 
 ```yaml
 node:

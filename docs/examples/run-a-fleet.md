@@ -240,6 +240,18 @@ fleet.publish_interval + fleet.refresh_interval` after they were acknowledged. W
 that is 60 s + 5 s + 30 s + 30 s: up to about 2 minutes. Shorter intervals mean fresher answers
 and more requests to the bucket.
 
+Each node logs one line when another node's data becomes visible and one when it stops, not one
+per refresh:
+
+```text
+INFO fleet: attached us-1 (region us, copy 3084 KB, age 1s)
+INFO fleet: dropped us-1 (its catalog copy is older than coordinator.snapshot_grace)
+```
+
+The size is the unpacked catalog copy on local disk. A drop names its reason: the copy is too
+old, it was rejected, attaching it failed, it does not answer queries, or the node no longer
+publishes a manifest.
+
 Every query response has `freshness_s`: the age, in seconds, of the oldest other-node catalog
 copy the query read. It is `0` on a node alone. It counts from the moment that copy was
 published, so rows that were still in the other node's memory at that time are older than it

@@ -32,6 +32,18 @@ fn problems(ps: Vec<tqs::Problem>) -> ProblemResponse {
     }
 }
 
+/// Problems of a query body. A body that is not JSON at all (`curl -d key=value`, a file name
+/// without `@`, YAML) gets a pointer to what a body should be.
+fn query_problems(body: &str, ps: Vec<tqs::Problem>) -> ProblemResponse {
+    let mut r = problems(ps);
+    if serde_json::from_str::<serde::de::IgnoredAny>(body).is_err() {
+        for p in r.problems.iter_mut().filter(|p| p.code == "schema" && p.path == "$") {
+            p.message.push_str("; the body must be a TQS JSON document (see docs/examples/query-cookbook.md)");
+        }
+    }
+    r
+}
+
 pub async fn run_query(State(st): State<AppState>, body: String) -> Response {
     match st.node.query(&body).await {
         Ok(o) => Json(QueryResponse {
@@ -53,13 +65,13 @@ pub async fn run_query(State(st): State<AppState>, body: String) -> Response {
             }),
         })
         .into_response(),
-        Err(QueryError::Invalid(ps)) => (StatusCode::BAD_REQUEST, Json(problems(ps))).into_response(),
+        Err(QueryError::Invalid(ps)) => (StatusCode::BAD_REQUEST, Json(query_problems(&body, ps))).into_response(),
         Err(QueryError::Failed(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("query failed: {e:#}\n")).into_response(),
     }
 }
 
 pub async fn validate_query(body: String) -> Json<ProblemResponse> {
-    Json(problems(engine::Node::parse_and_validate(&body, engine::node::now_ms()).err().unwrap_or_default()))
+    Json(query_problems(&body, engine::Node::parse_and_validate(&body, engine::node::now_ms()).err().unwrap_or_default()))
 }
 
 pub async fn discover_catalog(State(st): State<AppState>) -> Response {
@@ -212,4 +224,27 @@ pub async fn otlp_logs(State(st): State<AppState>, headers: HeaderMap, body: Byt
 pub async fn loki_push(State(st): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let rows = receivers::decompress(hdr(&headers, header::CONTENT_ENCODING), &body).and_then(|b| receivers::loki_push(&b));
     admit(&st, rows, StatusCode::NO_CONTENT).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn messages(body: &str) -> Vec<String> {
+        let ps = engine::Node::parse_and_validate(body, engine::node::now_ms()).err().unwrap_or_default();
+        query_problems(body, ps).problems.into_iter().map(|p| format!("{} {}: {}", p.code, p.path, p.message)).collect()
+    }
+
+    #[test]
+    fn a_body_that_is_not_json_says_what_a_body_is() {
+        let m = messages("query=up");
+        assert_eq!(m.len(), 1);
+        assert!(
+            m[0].starts_with("schema $: ") && m[0].ends_with("the body must be a TQS JSON document (see docs/examples/query-cookbook.md)"),
+            "{m:?}"
+        );
+        // JSON with a wrong shape: the problem's own path and message are enough.
+        let m = messages(r#"{"tqs":"3","id":"x"}"#);
+        assert!(!m[0].contains("must be a TQS JSON document"), "{m:?}");
+    }
 }

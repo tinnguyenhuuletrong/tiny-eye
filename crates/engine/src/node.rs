@@ -199,6 +199,21 @@ fn prefix_changed(e: &anyhow::Error, catalog: &str, data_path: &str) -> Option<a
     ))
 }
 
+/// DuckDB's "Conflicting lock is held in <program> (PID n)" when a second node opens the same
+/// file catalog: say what happened and what to change.
+fn lock_conflict(e: &anyhow::Error, catalog: &str) -> Option<anyhow::Error> {
+    let text = format!("{e:#}");
+    let held = text.split("Conflicting lock is held in ").nth(1)?;
+    let who = match held.split("(PID ").nth(1).and_then(|p| p.split(')').next()) {
+        Some(pid) => format!("another tiny-eye (PID {pid})"),
+        None => "another process".to_string(),
+    };
+    Some(anyhow!(
+        "{who} already uses {catalog}; stop it, or give this node its own catalog.url and ingest.wal_dir \
+         (to share data between nodes, run them as a fleet: docs/examples/run-a-fleet.md)"
+    ))
+}
+
 pub(crate) fn sql_str(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
@@ -212,10 +227,6 @@ impl Node {
         for w in cfg.warnings() {
             tracing::warn!("{w}");
         }
-        // Downloaded catalog copies of other nodes are only valid for this process.
-        let fleet_dir = std::path::Path::new(&cfg.fleet.dir).join(&cfg.node.id);
-        let _ = std::fs::remove_dir_all(&fleet_dir);
-        std::fs::create_dir_all(&fleet_dir).with_context(|| format!("creating {}", fleet_dir.display()))?;
         let settings = duck::DuckSettings {
             extension_dir: cfg.duckdb.extension_dir.clone(),
             threads: cfg.duckdb.threads,
@@ -243,8 +254,14 @@ impl Node {
         }
         let data_path = format!("{}/lake/", store.url_prefix);
         if let Err(e) = duck::attach_lake(&root, &cfg.catalog.url, &data_path) {
-            return Err(prefix_changed(&e, &cfg.catalog.url, &data_path).unwrap_or(e));
+            let explained = lock_conflict(&e, &cfg.catalog.url).or_else(|| prefix_changed(&e, &cfg.catalog.url, &data_path));
+            return Err(explained.unwrap_or(e));
         }
+        // Downloaded catalog copies of other nodes are only valid for this process. Cleared once
+        // the catalog is ours, so a second node started on the same catalog leaves them alone.
+        let fleet_dir = std::path::Path::new(&cfg.fleet.dir).join(&cfg.node.id);
+        let _ = std::fs::remove_dir_all(&fleet_dir);
+        std::fs::create_dir_all(&fleet_dir).with_context(|| format!("creating {}", fleet_dir.display()))?;
         root.execute_batch(APPLIED_DDL)?;
         let mat_path = &cfg.materialize.path;
         if mat_path.is_empty() {
@@ -979,5 +996,26 @@ impl Node {
 
     pub fn hot_bytes(&self) -> u64 {
         self.hot_bytes.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_second_node_on_the_same_catalog_is_told_what_to_change() {
+        let duck = anyhow!(
+            "IO Error: Could not set lock on file \"data/catalog.ducklake\": Conflicting lock is held in /bin/tiny-eye (PID 4242) by user me"
+        )
+        .context("attaching DuckLake catalog data/catalog.ducklake");
+        let msg = format!("{:#}", lock_conflict(&duck, "data/catalog.ducklake").expect("recognised"));
+        assert!(
+            msg.starts_with(
+                "another tiny-eye (PID 4242) already uses data/catalog.ducklake; stop it, or give this node its own catalog.url and ingest.wal_dir"
+            ),
+            "{msg}"
+        );
+        assert!(lock_conflict(&anyhow!("IO Error: permission denied"), "c").is_none());
     }
 }

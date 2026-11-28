@@ -470,8 +470,17 @@ fn resolve_point(p: &TimePoint, now_ms: i64) -> Option<i64> {
 }
 
 impl Tqs {
+    /// A malformed document is one `schema` problem at the path of the bad value
+    /// (`queries[0].fn.op`), or at `$` when the text is not JSON or the root itself is wrong.
     pub fn parse(json: &str) -> Result<Tqs, Problem> {
-        serde_json::from_str(json).map_err(|e| Problem { code: "schema", path: "$".into(), message: e.to_string() })
+        let schema = |path: String, e: serde_json::Error| Problem { code: "schema", path, message: e.to_string() };
+        let mut de = serde_json::Deserializer::from_str(json);
+        let doc = serde_path_to_error::deserialize(&mut de).map_err(|e| {
+            let path = e.path().to_string();
+            schema(if path == "." { "$".into() } else { path }, e.into_inner())
+        })?;
+        de.end().map_err(|e| schema("$".into(), e))?; // trailing characters
+        Ok(doc)
     }
 
     pub fn query(&self, name: &str) -> Option<&NamedQuery> {
@@ -878,6 +887,23 @@ mod tests {
         let doc = serde_json::json!({"tqs": "3", "id": "x", "kind": "timeseries", "time": {"from": "-1h"}, "vars": {"re": "(unclosed"},
             "queries": [{"name": "a", "metric": "m", "fn": {"op": "last"}, "match": [{"label": "l", "op": "=~", "value": "$re"}]}]});
         assert_eq!(codes(doc), vec!["regex"]);
+    }
+
+    #[test]
+    fn schema_problems_carry_the_json_path() {
+        let path = |json: &str| Tqs::parse(json).map(|_| ()).map_err(|p| (p.code, p.path));
+        let rate =
+            r#"{"tqs":"3","id":"x","kind":"timeseries","time":{"from":"-1h"},"queries":[{"name":"a","metric":"m","fn":{"op":"rat"}}]}"#;
+        assert_eq!(path(rate), Err(("schema", "queries[0].fn.op".into())), "unknown enum value");
+        assert_eq!(
+            path(&rate.replace(r#""op":"rat""#, r#""op":"rate","windw":"1m""#)),
+            Err(("schema", "queries[0].fn.windw".into())),
+            "unknown field"
+        );
+        assert_eq!(path(r#"{"tqs":"3","id":"x"}"#), Err(("schema", "$".into())), "missing field at the root");
+        assert_eq!(path("query=up"), Err(("schema", "$".into())), "not JSON");
+        assert_eq!(path(&format!("{rate} x").replace(r#""op":"rat""#, r#""op":"rate""#)), Err(("schema", "$".into())), "trailing text");
+        assert!(path(&rate.replace(r#""op":"rat""#, r#""op":"rate","window":"1m""#)).is_ok());
     }
 
     #[test]

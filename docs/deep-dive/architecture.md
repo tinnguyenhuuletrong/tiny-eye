@@ -17,7 +17,7 @@ Each process of the `tiny-eye` binary (`crates/server/src/main.rs`) is one compl
 | Query | TQS validation, compilation and execution on a pool of DuckDB connections | `crates/engine/src/query.rs`, `crates/tqs` |
 | UI and MCP | The web UI is compiled into the binary. `tiny-eye mcp` is a stdio bridge to the HTTP API | `crates/server/src/web.rs`, `crates/server/src/mcp.rs` |
 
-Other subcommands: `tiny-eye config` prints the effective configuration with secrets redacted, and `tiny-eye schemas` writes the generated editor and agent grammars. Any `--role` other than `all` is refused with a message that only `--role all` exists and that several nodes run as a fleet. Several nodes are run as a [fleet](#several-nodes-a-fleet), not as separate roles.
+Other subcommands: `tiny-eye config` prints the effective configuration with secrets redacted, and `tiny-eye schemas` writes the generated editor and agent grammars. `tiny-eye --help` prints the usage, which is defined once in `crates/server/src/main.rs` (`USAGE`); the parser refuses any flag not listed there. Any `--role` other than `all` is refused with a message that only `--role all` exists and that several nodes run as a fleet. Several nodes are run as a [fleet](#several-nodes-a-fleet), not as separate roles.
 
 Shutdown is graceful. On SIGINT or SIGTERM the HTTP server stops accepting requests and the background loop stops. `Node::flush_and_checkpoint` then writes and applies everything still buffered. If both succeed, a clean stop leaves nothing in the WAL. If either fails, the process exits with the error. The next start recovers whatever was not applied, either from the WAL or from the pending envelope.
 

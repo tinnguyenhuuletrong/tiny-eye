@@ -161,6 +161,9 @@ struct Copied {
     seen: Seen,
 }
 
+/// Why a copy past its publisher's `coordinator.snapshot_grace` leaves the views.
+const STALE: &str = "its catalog copy is older than coordinator.snapshot_grace";
+
 /// What this node has attached of the others (guarded by one async lock: refreshes are serial).
 #[derive(Default)]
 pub(crate) struct State {
@@ -316,6 +319,8 @@ impl Node {
         let grace = self.cfg.coordinator.snapshot_grace.ms();
         let mut left_out = false;
         let mut found: Vec<Manifest> = vec![];
+        // Why a node's copy may leave the views, for the one "fleet: dropped" line.
+        let mut why: HashMap<String, &'static str> = HashMap::new();
         let listed = tokio::time::timeout_at(deadline, self.shared.list_modified("_fleet/")).await.unwrap_or_else(|_| Err(past_limit()));
         let list_failed = match listed {
             // Nothing is known about the others: keep what is attached while it is fresh.
@@ -364,6 +369,9 @@ impl Node {
                     "skipping a fleet catalog copy too old to read safely: files it names may be deleted (see coordinator.snapshot_grace)"
                 );
             }
+            if !fresh {
+                why.insert(m.node_id.clone(), STALE);
+            }
             fresh
         });
         found.sort_by(|a, b| a.node_id.cmp(&b.node_id));
@@ -386,6 +394,7 @@ impl Node {
             let fresh_prev = prev.filter(|c| self.fresh(&c.m, now));
             let rkey = (manifest_key(&m.node_id), m.epoch, m.snapshot_id);
             if st.rejected.contains(&rkey) {
+                why.insert(m.node_id.clone(), "its catalog copy was rejected");
                 next.extend(fresh_prev);
                 continue;
             }
@@ -410,9 +419,11 @@ impl Node {
                     // Detached (if it got that far) and deleted below.
                     st.retired.push((alias, path, Instant::now()));
                     if is_rejected(&e) {
+                        why.insert(m.node_id.clone(), "its catalog copy was rejected");
                         st.rejected.insert(rkey);
                         tracing::error!(node = %m.node_id, snapshot = m.snapshot_id, error = %format!("{e:#}"), "rejecting another node's catalog copy");
                     } else {
+                        why.insert(m.node_id.clone(), "attaching its catalog copy failed");
                         tracing::warn!(node = %m.node_id, error = %format!("{e:#}"), "attaching a fleet catalog copy failed; keeping the previous one");
                     }
                     next.extend(fresh_prev);
@@ -422,9 +433,13 @@ impl Node {
 
         // Against the clock once more: the refresh itself took time.
         let now_swap = now + started.elapsed().as_millis() as i64;
+        for c in next.iter().filter(|c| !self.fresh(&c.m, now_swap)) {
+            why.insert(c.m.node_id.clone(), STALE);
+        }
         let mut kept: Vec<Attached> = next.iter().filter(|c| self.fresh(&c.m, now_swap)).cloned().collect();
         let aliases = |v: &[Attached]| v.iter().map(|c| c.alias.clone()).collect::<Vec<_>>();
         let old = aliases(&st.attached);
+        let old_nodes: Vec<String> = st.attached.iter().map(|c| c.m.node_id.clone()).collect();
         let (now_i, after_queries) = (Instant::now(), Instant::now() + self.cfg.query.timeout.0);
         if old != aliases(&kept) {
             let mut res = self.swap_views(aliases(&kept)).await;
@@ -434,6 +449,9 @@ impl Node {
                 left_out = true;
                 tracing::warn!(error = %format!("{e:#}"), "swapping the query views failed; rebuilding them from the copies that answer");
                 let answering = self.answering(aliases(&kept)).await;
+                for c in kept.iter().filter(|c| !answering.contains(&c.alias)) {
+                    why.insert(c.m.node_id.clone(), "its catalog copy does not answer queries");
+                }
                 kept.retain(|c| answering.contains(&c.alias));
                 res = self.swap_views(aliases(&kept)).await;
                 if res.is_err() && !kept.is_empty() {
@@ -455,6 +473,16 @@ impl Node {
         st.retired
             .extend(next.into_iter().filter(|c| !in_views.contains(&c.alias) && !old.contains(&c.alias)).map(|c| (c.alias, c.path, now_i)));
         st.attached = kept;
+        // One line when another node's data becomes visible here, and one when it stops: not on
+        // every refresh (a new snapshot of an attached node is silent).
+        for c in st.attached.iter().filter(|c| !old_nodes.contains(&c.m.node_id)) {
+            let kb = std::fs::metadata(&c.path).map(|f| f.len().div_ceil(1024)).unwrap_or(0);
+            let age_s = (now - c.m.published_at_ms).max(0) / 1000;
+            tracing::info!("fleet: attached {} (region {}, copy {kb} KB, age {age_s}s)", c.m.node_id, c.m.region);
+        }
+        for n in old_nodes.iter().filter(|n| !st.attached.iter().any(|c| &c.m.node_id == *n)) {
+            tracing::info!("fleet: dropped {n} ({})", why.get(n).copied().unwrap_or("it no longer publishes a manifest"));
+        }
 
         let now_i = Instant::now();
         let (due, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut st.retired).into_iter().partition(|r| r.2 <= now_i);

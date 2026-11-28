@@ -11,7 +11,7 @@ The coordinator half of `crates/engine/src/node.rs` (`checkpoint`, `release_hot`
 D3: DuckLake is the catalog. tiny-eye writes the Parquet files itself and registers them. From then on, DuckLake owns their lifecycle: snapshots, statistics-based pruning, and deletion.
 
 - `duck::attach_lake` runs `ATTACH IF NOT EXISTS 'ducklake:<catalog.url>' AS lake (DATA_PATH '<storage url>/<region>/<id>/lake/')`.
-- `catalog.url` is either a file path, which gives a DuckDB-file catalog (the single-node default, `./data/catalog.ducklake`), or `postgres:<libpq conninfo>`, which loads `postgres_scanner` and keeps the metadata in PostgreSQL. The research ran DuckLake on PostgreSQL 16 (E3). The tests and benchmarks here use the file catalog. The effective config printed at start redacts `password=` and URL credentials in the conninfo.
+- `catalog.url` is either a file path, which gives a DuckDB-file catalog (the single-node default, `./data/catalog.ducklake`), or `postgres:<libpq conninfo>`, which loads `postgres_scanner` and keeps the metadata in PostgreSQL. The research ran DuckLake on PostgreSQL 16 (E3). The tests and benchmarks here use the file catalog. The effective config (`tiny-eye config`) redacts `password=` and URL credentials in the conninfo.
 - Files are registered with `CALL ducklake_add_data_files('lake', '<table>', '<absolute url>')`. They live outside `DATA_PATH` under our own keys, with absolute paths (D9). Each node has its own catalog, which names only that node's files; nodes sharing a bucket read each other's catalogs through published copies ([Run a fleet](../examples/run-a-fleet.md)). DuckLake records per-file min/max statistics, which is what prunes files during queries.
 
 ### Single coordinator, serialized writes

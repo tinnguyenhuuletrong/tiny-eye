@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../schema/generated/dashboard.schema.json
-# The engine watching itself (scrape tiny-eye's /metrics into tiny-eye with any Prometheus agent).
+# The engine watching itself. Empty until a Prometheus or Alloy agent scrapes tiny-eye's /metrics
+# with job="tiny-eye" and remote-writes it to /api/v1/write (docs/examples/sending-data.md).
 id: tiny-eye-self
 title: tiny-eye self-monitoring
 vars:
