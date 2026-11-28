@@ -141,7 +141,7 @@ async fn materialized_panels(node: &Arc<Node>, t0: i64, now: i64, hours: i64) ->
             "| `{name}` | {} | {r50:.1} | {m50:.1} / {m95:.1} | {:.1}× | {info} | {} |",
             a.len(),
             r50 / m50,
-            if equal { "yes" } else { "**no**" }
+            if shared::check(equal) { "yes" } else { "**no**" }
         )?;
     }
 
@@ -514,5 +514,6 @@ async fn run(a: Args) -> Result<()> {
     } else {
         println!("{md}");
     }
+    shared::finish()?;
     Ok(())
 }

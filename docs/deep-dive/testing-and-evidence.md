@@ -78,24 +78,27 @@ See [API and code generation](api-and-codegen.md).
 
 ### Where the benchmarks run (`make bench-all`)
 
-`make bench-all` runs `make bench`, `make bench-s3` and `make fleet-poc` one after the other. It needs Docker for MinIO.
+`make bench-all` runs `make bench`, `make bench-s3` and `make fleet-poc` one after the other, even under `make -j`, so they don't compete for CPU. It needs Docker for MinIO.
 
-- **Every Monday on GitHub Actions.** The `bench` workflow (`.github/workflows/bench.yml`) runs `make bench-all` on a GitHub-hosted `ubuntu-latest` runner. Every run uses the same machine type, so reports can be compared week to week. The workflow opens a pull request with the new reports and merges it itself. You can also start it by hand from the Actions tab (**Run workflow**).
-- **On your machine.** `make bench-all` writes the same reports. Commit them only if the numbers are meant to replace the CI ones.
+- **Every Monday on GitHub Actions.** The `bench` workflow (`.github/workflows/bench.yml`) runs `make bench-all` on a GitHub-hosted `ubuntu-24.04` runner. Each run gets the same runner class (4 vCPUs, 16 GB RAM), but the CPU model can differ between runs, so compare trends rather than single numbers; the run block records the CPU. The workflow uploads the reports as a run artifact, opens a pull request with them, merges it itself, then starts `pages.yml` to redeploy the site. If a report records a broken equality (materialized points differ from raw, or fleet results differ from one node), the benchmark exits with an error: the run fails, nothing is merged, and the artifact keeps the failing report. It runs only on `main`, because the reports land there. You can also start it by hand from the Actions tab (**Run workflow**).
+- **On your machine.** `make bench-all` writes the same reports, stamped `local machine`. Don't commit them: the weekly run owns these files. `git restore docs/deep-dive/evidence` discards a local run.
 
-Every report starts with a run block, the proof of that run:
+Every report starts with a run block, the record of that run. A local run:
 
 ```text
 > **Run:** 2026-11-28 10:30 UTC · commit `448c00e9bf` · local machine · 8 logical CPUs (Apple M1 Pro), 16 GB RAM, macos
 ```
 
-On GitHub Actions, `local machine` becomes the runner and a link to the run. `(uncommitted changes)` after the commit means the code had local edits.
+A run on GitHub Actions replaces `local machine` with the runner image and a link to the run, for example ``GitHub Actions, `ubuntu24` 20261124.1 runner ([run 123…](…/actions/runs/123…))``. That link leads to the run's logs and the uploaded reports (GitHub keeps both for 90 days), which is what lets anyone check the committed numbers. `(uncommitted changes)` after the commit means the code had local edits when the benchmark ran; reports written earlier in the same run don't count.
 
-The workflow needs one repository setting: **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**.
+The workflow needs two things from the repository:
+
+- **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or opening the pull request fails.
+- `main` must accept that pull request without required reviews or status checks. A pull request opened by the workflow starts no CI, so a required check would never report and the merge step would fail.
 
 ## What CI runs
 
-`.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu with stable Rust: `make tools`, `make lint` (rustfmt check, clippy with warnings as errors), `make test`, `make conformance`. `make check` runs `lint`, `test` and `conformance` locally. The benchmarks are not run in CI.
+`.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu with stable Rust: `make tools`, `make lint` (rustfmt check, clippy with warnings as errors), `make test`, `make conformance`. `make check` runs `lint`, `test` and `conformance` locally. The benchmarks don't run on pushes or pull requests; the separate `bench` workflow runs them weekly (see [Where the benchmarks run](#where-the-benchmarks-run-make-bench-all)).
 
 ## Latest results
 
@@ -105,8 +108,10 @@ The workflow needs one repository setting: **Settings → Actions → General �
 | End to end | 20/20 panels equal to Prometheus | [End to end](evidence/e2e.md) |
 | Benchmark, local disk | about 1.65 M samples/s remote-write; 6 h `sum by (rate)` panel about 0.58 s p50 | [Local disk](evidence/bench-local.md) |
 | Benchmark, MinIO | same ingest rate; absent trace id needs 2 GETs after compaction (22 before) | [MinIO](evidence/bench-s3.md) |
-| Fleet proof of concept, MinIO | 9/9 queries equal to one node across 6 viewer setups; downloading catalog copies refreshes in 0.25 s at 50 ms round trip | [Fleet](evidence/fleet-poc.md) |
+| Fleet proof of concept, MinIO | 9/9 queries equal to one node in 6 read setups (0, 50, 150 ms round trip × catalog copies read remotely or downloaded); downloading catalog copies refreshes in 0.25 s at 50 ms round trip | [Fleet](evidence/fleet-poc.md) |
 | PoC, node, contract tests | pass (run by `make test`) | none |
+
+The benchmark figures in this table come from one laptop run; the linked reports hold the latest weekly run.
 
 The evidence pages are generated; rerun the target to refresh them.
 

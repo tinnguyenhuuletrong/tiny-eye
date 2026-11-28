@@ -4,7 +4,7 @@ description: What tiny-eye's benchmark measures, the numbers it produced on one 
 sidebar_position: 6
 ---
 
-All numbers on this page come from `tiny-eye-bench` (`crates/server/src/bin/bench.rs`), written to [bench-local](evidence/bench-local.md) by `make bench` and to [bench-s3](evidence/bench-s3.md) by `make bench-s3`. Each report starts with a run block that says when, on which commit and on which machine it ran. The committed reports come from the weekly `bench` GitHub Action (`.github/workflows/bench.yml`, a GitHub-hosted `ubuntu-latest` runner, so runs compare with each other); `make bench-all` runs the same benchmarks locally. Numbers quoted on this page may come from an earlier run than the current report. Read the caveats before using any number for sizing.
+All numbers on this page come from `tiny-eye-bench` (`crates/server/src/bin/bench.rs`), written to [bench-local](evidence/bench-local.md) by `make bench` and to [bench-s3](evidence/bench-s3.md) by `make bench-s3`. The numbers quoted on this page come from one run on an 8-CPU macOS laptop with DuckDB v2.0.1. The linked reports are refreshed by the weekly `bench` workflow on a GitHub-hosted runner (see [Where the benchmarks run](testing-and-evidence.md#where-the-benchmarks-run-make-bench-all)), so they hold the latest run and can differ from this page; each report generated since that workflow was added starts with a run block saying when, on which commit and on which machine it ran. Read the caveats before using any number for sizing.
 
 ## What the benchmark does
 

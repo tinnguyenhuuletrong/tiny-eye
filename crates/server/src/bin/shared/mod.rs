@@ -13,6 +13,23 @@ use std::time::Instant;
 
 pub const SCRAPE: i64 = 15_000;
 
+static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record a correctness check (an equality the report states). Returns `ok` for the report text.
+pub fn check(ok: bool) -> bool {
+    if !ok {
+        FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    ok
+}
+
+/// Call after the report is written: a failed check fails the run, so no workflow publishes a
+/// report that contradicts a claim without anyone noticing.
+pub fn finish() -> anyhow::Result<()> {
+    anyhow::ensure!(!FAILED.load(std::sync::atomic::Ordering::Relaxed), "a correctness check failed; see the report");
+    Ok(())
+}
+
 pub fn pct(xs: &mut [f64], p: f64) -> f64 {
     xs.sort_by(|a, b| a.total_cmp(b));
     xs[((xs.len() as f64 - 1.0) * p).round() as usize]
@@ -292,7 +309,10 @@ pub fn run_block() -> String {
     };
     let env = |k: &str| std::env::var(k).unwrap_or_default();
     let commit = sh("git", &["rev-parse", "--short=10", "HEAD"]);
-    let dirty = if sh("git", &["status", "--porcelain", "--untracked-files=no"]).is_empty() { "" } else { " (uncommitted changes)" };
+    let commit = if commit.is_empty() { "unknown".to_string() } else { commit };
+    // Reports written earlier in the same `make bench-all` are not code changes.
+    let changed = sh("git", &["status", "--porcelain", "--untracked-files=no", "--", ":(top)", ":(top,exclude)docs/deep-dive/evidence"]);
+    let dirty = if changed.is_empty() { "" } else { " (uncommitted changes)" };
     let (cpu, mem_bytes) = if cfg!(target_os = "macos") {
         (sh("sysctl", &["-n", "machdep.cpu.brand_string"]), sh("sysctl", &["-n", "hw.memsize"]).parse::<u64>().unwrap_or(0))
     } else {
@@ -305,8 +325,9 @@ pub fn run_block() -> String {
     };
     let where_ = if env("GITHUB_ACTIONS") == "true" {
         format!(
-            "GitHub Actions, `{}` runner ([run {}]({}/{}/actions/runs/{}))",
-            env("RUNNER_OS").to_lowercase(),
+            "GitHub Actions, `{}` {} runner ([run {}]({}/{}/actions/runs/{}))",
+            env("ImageOS"),
+            env("ImageVersion"),
             env("GITHUB_RUN_ID"),
             env("GITHUB_SERVER_URL"),
             env("GITHUB_REPOSITORY"),

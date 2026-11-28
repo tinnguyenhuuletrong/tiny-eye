@@ -535,7 +535,7 @@ async fn run(a: Args) -> Result<()> {
          the `region` column, which the viewer reports per source region and the baseline as `all`).\n\n\
          | Query | Rows | GETs, caches off: baseline / viewer | Baseline p50 ms |",
         a.regions,
-        if all_equal { "yes" } else { "NO" }
+        if shared::check(all_equal) { "yes" } else { "NO" }
     )?;
     for (rtt, mode, ..) in &runs {
         write!(md, " {rtt} ms, {}: first / p50 |", if *mode == Mode::Remote { "remote" } else { "downloaded" })?;
@@ -599,8 +599,8 @@ async fn run(a: Args) -> Result<()> {
          intervals, not this work: at most `flush_interval` + `checkpoint_interval` + publish interval + viewer refresh interval.\n",
         p.copy_ms + p.gzip_ms,
         p.put_ms,
-        if before == 0 { "no" } else { "yes (unexpected)" },
-        if seen { "yes" } else { "**no**" },
+        if shared::check(before == 0) { "no" } else { "yes (unexpected)" },
+        if shared::check(seen) { "yes" } else { "**no**" },
         n = regions.len()
     )?;
 
@@ -679,5 +679,6 @@ async fn run(a: Args) -> Result<()> {
     } else {
         println!("{md}");
     }
+    shared::finish()?;
     Ok(())
 }

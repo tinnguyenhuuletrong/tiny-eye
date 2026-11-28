@@ -432,7 +432,7 @@ Watch it on `/metrics`: `tiny_eye_materialized_stored_points`, `tiny_eye_materia
 
 ## Performance
 
-All numbers from one `make bench` run ([report](evidence/bench-local.md#materialized-panels)):
+All numbers from one `make bench` run on an 8-core laptop ([report](evidence/bench-local.md#materialized-panels); it holds the latest weekly run, so its numbers can differ):
 in process, warm caches, 10 runs after a warm-up, 6 h of data for 2,620 series. In short:
 6 h panels over many series read 10–12× faster, materialized reads stay near 40 ms from 1 h to
 6 h ranges, and the background cost is 30 ms per panel every 15 s.

@@ -156,15 +156,15 @@ native histograms, span events and links. Full list:
 Every claim comes from a test that can fail; reports are generated into
 [`docs/deep-dive/evidence/`](docs/deep-dive/evidence). The benchmarks run every Monday on a
 GitHub-hosted runner ([`bench` workflow](.github/workflows/bench.yml)), which commits fresh
-reports; each report opens with a run block (date, commit, machine, link to the run).
+reports; each new report opens with a run block (date, commit, machine, link to the run).
 
 | Claim | How | Result |
 | --- | --- | --- |
 | TQS returns what Prometheus returns | `make conformance`: 34 metric cases, real panel shapes, spans, logs, traces, validation and injection cases, a mutation check | [105/105 cases, 16/16 mutants caught](docs/deep-dive/evidence/tqs-coverage.md) |
 | The whole binary returns what Prometheus returns | `make e2e`: the same remote-written samples in Prometheus 3.16 and tiny-eye, spread over Parquet, a pending envelope and RAM | [20/20 panels equal](docs/deep-dive/evidence/e2e.md) |
 | Acknowledged data survives a crash | `crates/engine/tests/node.rs`: crash without flush, WAL replay, retried flushes, no double counting | pass |
-| Ingest and query speed (8-core laptop, 2,620 series × 6 h; the report holds the latest run) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
-| Materialized panels answer exactly what raw queries answer, faster | `crates/engine/tests/materialize.rs` (12 query shapes, late data, restarts) and `make bench` | 6 h `sum by (rate)`: [443 ms raw, 38 ms materialized, every point equal](docs/deep-dive/evidence/bench-local.md#materialized-panels) |
+| Ingest and query speed (2,620 series × 6 h) | `make bench`, weekly on GitHub Actions | [latest report](docs/deep-dive/evidence/bench-local.md); one 8-core laptop run: about 1.6 M samples/s remote-write, 6 h `sum by (rate)` about 0.6 s, histogram p99 about 70 ms, trace by id 11 ms |
+| Materialized panels answer exactly what raw queries answer, faster | `crates/engine/tests/materialize.rs` (12 query shapes, late data, restarts) and `make bench` | 6 h `sum by (rate)`: [every point equal](docs/deep-dive/evidence/bench-local.md#materialized-panels); one laptop run: 443 ms raw, 38 ms materialized |
 | Trace lookups on S3 stay cheap | `make bench-s3` (MinIO) | absent trace id: [22 GETs before compaction, 2 after](docs/deep-dive/evidence/bench-s3.md) |
 | Independent nodes can be queried as one (proof of concept) | `make fleet-poc` (MinIO): 3 nodes, each with its own catalog, read together from published catalog copies | [9/9 queries equal to one node](docs/deep-dive/evidence/fleet-poc.md); warm latency the same |
 

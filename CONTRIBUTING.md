@@ -10,7 +10,7 @@ You need:
 - **Rust stable** (pinned by `rust-toolchain.toml`, with `rustfmt` and `clippy`); install via [rustup](https://rustup.rs).
 - **Node.js 20+** for the web UI (`ui/`) and the documentation site (`website/`).
 - **[Bun](https://bun.sh) 1.x** for the examples (`examples/demo/app` and `examples/machine`, TypeScript). `make examples-lint` runs Biome (lint and format) and `tsc` on both; `bun run format` inside an example fixes style.
-- **Docker** (optional) for MinIO in the S3 benchmarks and the fleet proof of concept (`make s3-up`, used by `make bench-s3`, `make fleet-poc` and `make bench-all`) and k6 in the demo (`make demo-load`).
+- **Docker** (optional): MinIO for `make bench-s3`, `make fleet-poc` and `make bench-all` (started by `make s3-up`), and k6 for the demo (`make demo-load`).
 
 Then, once:
 
