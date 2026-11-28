@@ -17,8 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: "rustfmt, clippy" }
+      - run: rustup toolchain install # the exact version and components in rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
         with:
           # Only main saves the Rust cache (about 1.2 GB); pull requests restore it. When every
