@@ -28,6 +28,19 @@ CREATE OR REPLACE VIEW memory.main.<t> AS
 
 `metrics_series` wraps the union in `SELECT series_id, any_value(metric_name), any_value(metric_type), any_value(labels) ... GROUP BY series_id`, because one row is stored per (series, flush) and queries need one per series.
 
+### Other nodes of a fleet
+
+When other nodes share `storage.url` ([Run a fleet](../examples/run-a-fleet.md)), `Node::refresh_fleet` checks their published catalog copies as untrusted input ([Security](security.md#nodes-of-a-fleet)), attaches the ones that pass read-only under aliases `fleet_<n>`, and `create_views` adds one branch per copy:
+
+```sql
+  ... UNION ALL SELECT <columns> FROM fleet_1.<t>
+      UNION ALL SELECT <columns> FROM fleet_2.<t>
+```
+
+The views are replaced in one transaction, so a query sees the old set of copies or the new one, never a mix. Another node's rows need no watermark: its copy holds only rows its catalog committed, and its hot tail is not read. A replaced copy is detached only after `query.timeout`, so a query that started before the swap can finish on it. A node alone attaches nothing and keeps exactly the single-node views (`a_node_alone_is_unchanged` in `crates/engine/tests/fleet.rs`).
+
+The compiler is unchanged: it still reads the four plain names. `fleet_answers_like_one_node_that_received_everything` checks that rate, per-series, gauge, table, spans and trace queries over two nodes equal the answers of one node that received all the data.
+
 Why the watermark: a hot row whose sequence is committed is also in a lake file. A plain union would count it twice. The research's naive union double counted 60,000 rows (E7). The watermark is the highest `seq_to` this node, in this epoch, has in the catalog. Flushes commit sequences strictly in order ([Write path](write-path.md)), so every sequence at or below it is in the lake and every sequence above it is not. The subquery sits inside the view, so it is evaluated in the same transaction as the lake scan, against the same DuckLake snapshot. That is D8, "watermark read in the scan's catalog transaction".
 
 ```mermaid
@@ -48,7 +61,7 @@ A previous epoch's rows are never in the hot tables (WAL replay re-tags them wit
 
 ## One read transaction per query
 
-Every TQS query runs between `BEGIN TRANSACTION` and `COMMIT` on its connection. DuckLake pins one snapshot for the transaction, so a query that reads several tables, or reads `applied_envelopes` through the watermark subquery, sees one consistent catalog state even while a checkpoint or compaction commits (spec section 7.1, E7). The response's `snapshot_id` is that snapshot. `freshness_s` is always `0.0`: the hot tail is local and part of every read, so a row is visible as soon as it is acknowledged.
+Every TQS query runs between `BEGIN TRANSACTION` and `COMMIT` on its connection. DuckLake pins one snapshot for the transaction, so a query that reads several tables, or reads `applied_envelopes` through the watermark subquery, sees one consistent catalog state even while a checkpoint or compaction commits (spec section 7.1, E7). The response's `snapshot_id` is that snapshot: this node's own catalog. Attached copies of other nodes are fixed files, so they do not change during the query either. `freshness_s` is the age in seconds of the oldest other-node copy the query read, counted from its publish time, and `0.0` on a node alone. The node's own hot tail is part of every read, so its own rows are visible as soon as they are acknowledged.
 
 The discovery endpoint (`Node::catalog`, `GET /api/v1/catalog`) does not open an explicit transaction. Its statements are independent and bounded: at most 500 metrics with their label keys and up to 50 values per label, plus services with up to 50 span names and their log line counts over the last 24 hours.
 

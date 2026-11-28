@@ -194,8 +194,8 @@ One binary, roles by flag: `--role=all` (single node), `ingest`, `query`, `coord
 | D6 | Percentiles in stored partials are log-bucket histograms merged with `SUM`. | E8 ≤ 1.01 % error; P t-digest state is not storable |
 | D7 | Conditional writes for envelopes and the lease; every catalog write is fenced. | E1 |
 | D8 | Per-node watermark for hot tails, read in the scan's catalog transaction. | E7 |
-| D9 | One catalog, one bucket per region, absolute file paths. | E3, E4 |
-| D10 | Laptop mode reads a catalog snapshot file from S3. | E9 |
+| D9 | One catalog, one bucket per region, absolute file paths. *2026-11-28: superseded by the fleet: one catalog per node, one bucket shared by every node, absolute file paths. Each node publishes a gzipped copy of its catalog to the bucket and queries the others' copies read-only (`docs/examples/run-a-fleet.md`).* | E3, E4; `crates/engine/tests/fleet.rs`, `docs/deep-dive/evidence/fleet-poc.md` |
+| D10 | Laptop mode reads a catalog snapshot file from S3. *2026-11-28: superseded by the fleet: a laptop runs a normal node on the shared bucket and attaches the published catalog copies.* | E9 |
 | D11 | **TQS 3 is the only query language.** Metric functions reproduce Prometheus semantics. | M01–M33, R01–R11, MUT |
 | D12 | Ship DuckDB extensions with the binary, pinned to the bundled DuckDB version. | P the extension host was unreachable |
 | D13 | Apache-2.0; no AGPL code. | U |
@@ -217,6 +217,8 @@ s3://telemetry-<region>/
 ```
 
 DuckLake stores paths and column statistics; it does not parse the hierarchy E3. The hierarchy serves humans, lifecycle backstops and residency audits.
+
+*2026-11-28: superseded by the fleet layout. Every node writes under its own prefix `<region>/<node_id>/` of one shared bucket: `<table>/…` data, `commits/<epoch>-<seq>.json` envelopes, `lake/`, and `_fleet/catalog.ducklake.gz` (its published catalog copy). The root holds one manifest `_fleet/<node_id>.json` per node. There is no lease object. See `docs/deep-dive/storage-format.md`.*
 
 ### 4.2 Parquet writer settings
 
@@ -403,6 +405,8 @@ Scanning a 60k-row Arrow batch through DuckDB's `arrow()` table function took �
 The coordinator exports the snapshot every 5 min (default) E9: 1. Flush inlined rows (`ducklake_flush_inlined_data`). This is required: PostgreSQL stores inlined rows in backend-specific types, so copying them makes an unreadable DuckDB catalog. 2. Copy the `ducklake_*` metadata tables except `ducklake_inlined_data_*`. 3. Create an empty `ducklake_inlined_data_tables`. 4. PUT with `If-Match`.
 
 Measured: attach 44 ms, trace lookup 28 ms, writes refused E9. This depends on DuckLake internals, so it is gated by E9 in CI on every DuckLake upgrade. Freshness is export interval + flush interval, with no hot tail [→ Q19](#questions).
+
+*2026-11-28: superseded by the fleet. Every node exports its catalog every `fleet.publish_interval` (30 s) with `COPY FROM DATABASE` of DuckLake's metadata database into a fresh DuckDB file (tested with the DuckDB-file catalog), gzipped (about 43 to 74 KB for 6 hours of data at the proof of concept's scale; it grows with the number of files), and every node, a laptop included, attaches the others' copies read-only every `fleet.refresh_interval`. Retention keeps a superseded snapshot for `coordinator.snapshot_grace` (≥ publish + 2 × refresh + query timeout), so no attached copy names a deleted file. The CI gate is `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs`. See `docs/examples/run-a-fleet.md`.*
 
 ---
 
@@ -745,7 +749,7 @@ These assume 2–3 engineers; the estimates are ranges.
 | --- | --- | --- |
 | M1 (6–8 wk) single-node metrics | remote-write + OTLP metrics; `wal`; writer, flusher, envelopes; batched checkpointer; compactor; retention; `crates/tqs` from research; TQS HTTP API | wired test (§15.3) on the AI router and jobs panels; kill -9 loses no acked sample |
 | M2 (6–8 wk) traces + logs + agents | OTLP traces/logs, Loki push; span compactor; `traces_index`; list kinds; MCP; laptop export; auth | T/L cases on real S3; MCP scenarios |
-| M3 (4–6 wk) cluster | roles, lease + fence, hot-tail RPC, `replicated` | E7 across processes; partition tests |
+| M3 (4–6 wk) cluster | roles, lease + fence, hot-tail RPC, `replicated` *(2026-11-28: superseded by the fleet: identical `--role all` nodes sharing one bucket, each with its own catalog, querying the others' published catalog copies; no roles, lease or hot-tail RPC; `replicated` not built. See `docs/examples/run-a-fleet.md`)* | E7 across processes; partition tests *(fleet: answers over two nodes equal one node with all the data, `crates/engine/tests/fleet.rs`)* |
 | M4 (4–6 wk) dashboards + alerts | panel/dashboard store, variables, alert evaluator, materialized panels, Grafana plugin or UI (→ Q11) | every Margince panel rendered; alerts fire on fixtures |
 | M5 (\~4 wk) multi-region | per-region buckets and secrets, catalog replicas, residency | cross-region traces and totals exact |
 
@@ -785,7 +789,7 @@ Each question has a proposed default; nothing blocks M1 except Q7 and Q11.
 | Q16 | Empty label value = absent label (Prometheus rule)? | Yes | Affects `!=""` filters R10 |
 | Q17 | Log masking rules are a fixed, versioned list (no per-tenant rules in v1)? | Yes | Stable `pattern_hash` across nodes |
 | Q18 | Are the limits right: 10 queries, 11,000 points, regex 256, formula 512, `limit` 5,000? | Yes | Agent cost control |
-| Q19 | Laptop mode: snapshot export (internals-coupled, 5 min fresh) or a read-only PostgreSQL role? | Snapshot export + CI gate | Network access vs coupling |
+| Q19 | Laptop mode: snapshot export (internals-coupled, 5 min fresh) or a read-only PostgreSQL role? | Snapshot export + CI gate *(2026-11-28: resolved as snapshot export for every node, the fleet; CI gate `ducklake_metadata_database_keeps_its_name`)* | Network access vs coupling |
 | Q20 | Wired test target: local Margince dev stack only, or also a shared environment (private repo only)? | Local stack | Public-repo rules forbid naming running installs |
 
 Contents
@@ -1183,6 +1187,8 @@ Each has a proposed default. Answer by number; nothing blocks milestone 1 except
     Proposed default
 
     Snapshot export + CI gate
+
+    2026-11-28: resolved as snapshot export for every node (the fleet); CI gate `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs`.
 
     Why it matters
 

@@ -10,19 +10,19 @@ The coordinator half of `crates/engine/src/node.rs` (`checkpoint`, `release_hot`
 
 D3: DuckLake is the catalog. tiny-eye writes the Parquet files itself and registers them. From then on, DuckLake owns their lifecycle: snapshots, statistics-based pruning, and deletion.
 
-- `duck::attach_lake` runs `ATTACH IF NOT EXISTS 'ducklake:<catalog.url>' AS lake (DATA_PATH '<storage prefix>/lake/')`.
+- `duck::attach_lake` runs `ATTACH IF NOT EXISTS 'ducklake:<catalog.url>' AS lake (DATA_PATH '<storage url>/<region>/<id>/lake/')`.
 - `catalog.url` is either a file path, which gives a DuckDB-file catalog (the single-node default, `./data/catalog.ducklake`), or `postgres:<libpq conninfo>`, which loads `postgres_scanner` and keeps the metadata in PostgreSQL. The research ran DuckLake on PostgreSQL 16 (E3). The tests and benchmarks here use the file catalog. The effective config printed at start redacts `password=` and URL credentials in the conninfo.
-- Files are registered with `CALL ducklake_add_data_files('lake', '<table>', '<absolute url>')`. They live outside `DATA_PATH` under our own keys, with absolute paths (D9). DuckLake records per-file min/max statistics, which is what prunes files during queries.
+- Files are registered with `CALL ducklake_add_data_files('lake', '<table>', '<absolute url>')`. They live outside `DATA_PATH` under our own keys, with absolute paths (D9). Each node has its own catalog, which names only that node's files; nodes sharing a bucket read each other's catalogs through published copies ([Run a fleet](../examples/run-a-fleet.md)). DuckLake records per-file min/max statistics, which is what prunes files during queries.
 
 ### Single coordinator, serialized writes
 
-Every catalog write takes `catalog_lock`, an async mutex: checkpoint, compaction and retention never overlap. The spec instead uses a lease object (conditional PUT with `If-Match`) plus a `coordinator_fence` row in every transaction (section 6.2, D7). Those exist to stop two processes from both believing they coordinate. With exactly one process that cannot happen, so the mutex gives the same guarantee. The research left one race untested: a compaction swap concurrent with an ingest add on the same table. The lock rules that race out by construction.
+Every catalog write takes `catalog_lock`, an async mutex: checkpoint, compaction, retention and publishing the fleet catalog copy never overlap. The spec instead uses a lease object (conditional PUT with `If-Match`) plus a `coordinator_fence` row in every transaction (section 6.2, D7). Those exist to stop two processes from both believing they coordinate. With exactly one process per catalog that cannot happen, so the mutex gives the same guarantee. In a fleet every node still writes only its own catalog. The research left one race untested: a compaction swap concurrent with an ingest add on the same table. The lock rules that race out by construction.
 
 ## Checkpoint
 
 `Node::checkpoint()` runs every `coordinator.checkpoint_interval` (5 s) and in `flush_and_checkpoint()`:
 
-1. **List.** `commits/<region>/` is listed and sorted by key. With the zero-padded `<node>-<epoch>-<seq>` keys, that is commit order per node. Each object is fetched and parsed, and any `format` other than 1 fails the checkpoint with both versions named.
+1. **List.** `commits/` under the node's own prefix `<region>/<id>/` is listed and sorted by key. With the zero-padded `<epoch>-<seq>` keys, that is commit order. Each object is fetched and parsed, and any `format` other than 1 fails the checkpoint with both versions named.
 2. **Nothing pending.** If the list is empty, it calls `release_hot()` and returns 0.
 3. **Apply, in one transaction.**
 
@@ -51,7 +51,7 @@ Registering a file twice must never happen anyway. DuckLake deletes registered f
 The spec marks "batching all pending envelopes into one transaction per tick" as U. tiny-eye builds it, so each tick creates one catalog snapshot however many flushes happened. The benchmark measured 50 ms for a checkpoint on local disk and 93 ms on MinIO ([Performance](performance.md)).
 
 :::warning A poison envelope blocks all checkpoints
-Because one failure rolls back the whole batch, an envelope that can never apply stalls every later envelope. Examples: a file that was deleted, a schema mismatch after a `tables.yaml` change, an unknown table. The node keeps serving: views still show hot rows above the old watermark. But `hot_bytes` stops falling and ingest eventually answers 429. The error is logged every `checkpoint_interval` ("checkpoint failed; will retry"). The fix is operational: repair or move the offending object under `commits/<region>/`.
+Because one failure rolls back the whole batch, an envelope that can never apply stalls every later envelope. Examples: a file that was deleted, a schema mismatch after a `tables.yaml` change, an unknown table. The node keeps serving: views still show hot rows above the old watermark. But `hot_bytes` stops falling and ingest eventually answers 429. The error is logged every `checkpoint_interval` ("checkpoint failed; will retry"). The fix is operational: repair or move the offending object under `<region>/<id>/commits/`.
 :::
 
 ## Releasing hot rows
@@ -117,8 +117,19 @@ Notes for maintainers:
 
 1. `cutoff_hour = (now - coordinator.retention) / 3600000` (default retention 15 days). For each table, every registered file whose key hour is below the cutoff is removed with `DELETE FROM lake.<table> WHERE filename IN (...)`.
 2. `DELETE FROM lake.applied_envelopes WHERE envelope_id < '<ULID of now - 1 day>'`. ULIDs sort by time, so this keeps one day of envelope ids for the crash-replay checks of the checkpoint and the WAL replay.
-3. `CALL ducklake_expire_snapshots('lake', older_than => to_timestamp(<now - 10 min>))`. No query can still read a snapshot that old, because the query timeout defaults to 30 s.
+3. **Expire superseded snapshots.** A snapshot is expired once a *newer* snapshot has existed for `coordinator.snapshot_grace` (default 10 min): the snapshot ids whose successor's `snapshot_time` is older than `now - snapshot_grace` go to `CALL ducklake_expire_snapshots('lake', versions => [...])`. The newest snapshot is never expired.
 4. `CALL ducklake_cleanup_old_files('lake', cleanup_all => true)`. DuckLake deletes the objects that no live snapshot references. That covers both expired data and the L0 files swapped out by compaction.
+
+### The snapshot grace
+
+The rule used to be "expire snapshots older than 10 minutes". That is unsafe for a snapshot that stays current for a long time, for example on a quiet node: it is old, but it was the live state until a moment ago, and a query (or another node's catalog copy) may still name its files. Counting from when a snapshot was *replaced* fixes that.
+
+The grace must cover the oldest reader:
+
+- a query on this node, at most `query.timeout` (30 s);
+- a query on another node that reads this node's published copy. The check allows `fleet.publish_interval + 3 × fleet.refresh_interval` for a copy to be published, found by the other node (one refresh may take up to a refresh interval) and replaced there, and a query on it can run `query.timeout` more.
+
+So the configuration is refused unless `snapshot_grace >= fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout` (150 s with the defaults; the default grace is 10 min). The grace protects copies that other nodes read, so every node of a fleet should use the same grace, intervals and `query.timeout`. The publisher also writes its grace into the manifest (`snapshot_grace_ms`), and other nodes skip a manifest older than the smaller of that and their own grace, so they never attach a copy whose files may already be gone. That comparison uses the earlier of the publisher's timestamp and the bucket's last-modified time against the reader's clock, so keep the nodes' clocks synced with NTP. `retention_on_one_node_keeps_copies_readable_within_the_grace` in `crates/engine/tests/fleet.rs` compacts one node while another reads its copy: within the grace the replaced L0 files are kept and the answers are unchanged, past it they are deleted and the stale manifest is skipped. With the old rule the test fails.
 
 DuckLake deletes files it did not write, including files outside its `DATA_PATH` (E6, research finding 3). Retention therefore needs no object listing of its own. The rules that follow from this: never register an object twice, give the process delete rights on the bucket, and treat S3 lifecycle rules only as a backstop (the spec suggests retention plus 7 days) and as the cleaner for orphaned uploads.
 
@@ -135,6 +146,7 @@ Retention works at whole-file, whole-hour granularity, judged by the key's hour.
 | `coordinator.compaction_delay` | `10m` | An hour is compacted this long after it closes |
 | `coordinator.retention` | `15d` | Data older than this is dropped |
 | `coordinator.retention_interval` | `1h` | How often retention runs |
+| `coordinator.snapshot_grace` | `10m` | A snapshot is expired once a newer one has existed this long; at least `fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout` |
 
 ## What the tests prove
 
@@ -144,3 +156,4 @@ Retention works at whole-file, whole-hour granularity, judged by the key's hour.
 | PoC P3 + P4 `p3_compaction_swap_and_p4_retention` | Five L0 files swapped for one L1 in one transaction: same row count, same `sum(value)`, one file, `positive_delta` filled. After snapshot expiry and cleanup, DuckLake deleted all five L0 files and kept the L1 (E6) |
 | `ingest_flush_checkpoint_compact_retain` | Checkpoint applies one envelope. A second checkpoint after the grace releases every hot row. Compaction of two flushes in one hour keeps 63 points and deduplicates `metrics_series` to 3 rows. Retention in the far future empties the table |
 | `failed_flush_is_retried_and_loses_nothing` | Hot rows are released only after their sequence is committed |
+| `retention_on_one_node_keeps_copies_readable_within_the_grace` (`fleet.rs`) | Retention keeps the files a superseded snapshot names for `snapshot_grace`, so another node's catalog copy stays readable; past the grace they are deleted |

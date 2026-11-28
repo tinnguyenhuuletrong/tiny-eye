@@ -78,9 +78,9 @@ Response `200`: `QueryResponse`.
 | :--- | :--- | :--- |
 | `tqs` | `"3"` | |
 | `id` | string | The document `id` |
-| `snapshot_id` | integer | DuckLake snapshot the query read |
-| `freshness_s` | number | Seconds since the newest visible row was ingested; `0` because the hot tail is included |
-| `partial_regions` | string[] | Always empty in single-node mode |
+| `snapshot_id` | integer | This node's own DuckLake snapshot the query read |
+| `freshness_s` | number | Age in seconds of the oldest catalog copy of another node sharing storage that the query read (`0` when the node is alone; its own rows are visible once acknowledged) |
+| `partial_regions` | string[] | Always empty |
 | `series` | `Series[]` | `timeseries` / `table` kinds: `{output, key, labels, points}`, `points` are `[epoch_ms, value]` |
 | `rows` | object[] | List kinds: each row maps column to text |
 | `rows_total` | integer | Points (series kinds) or rows (list kinds) |

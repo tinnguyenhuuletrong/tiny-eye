@@ -1,4 +1,13 @@
 //! Object storage (local disk or S3) and the key layout of SPEC §4.1.
+//!
+//! Every node writes under its own prefix `<node.region>/<node.id>/` of `storage.url`, so nodes
+//! sharing one bucket (a fleet) never collide:
+//!
+//!   <region>/<id>/<table>/tenant=<t>/date=<d>/hour=<h>/<level>-<ulid>-<node>.parquet   data
+//!   <region>/<id>/commits/<epoch>-<seq>.json                                          envelopes
+//!   <region>/<id>/lake/                                                               DuckLake data path
+//!   <region>/<id>/_fleet/catalog.ducklake.gz                                          published catalog copy
+//!   _fleet/<id>.json                                                                  fleet manifest (shared root)
 
 use crate::config::Config;
 use anyhow::{Context, Result};
@@ -48,6 +57,17 @@ impl Store {
         }
     }
 
+    /// The same storage seen from `sub/` (a node's own prefix `<region>/<id>` inside the root that
+    /// every node of a fleet shares).
+    pub fn scoped(&self, sub: &str) -> Store {
+        let sub = sub.trim_matches('/');
+        Store {
+            inner: self.inner.clone(),
+            url_prefix: format!("{}/{sub}", self.url_prefix),
+            prefix: if self.prefix.is_empty() { sub.to_string() } else { format!("{}/{sub}", self.prefix) },
+        }
+    }
+
     fn path(&self, key: &str) -> Path {
         if self.prefix.is_empty() { Path::from(key) } else { Path::from(format!("{}/{key}", self.prefix)) }
     }
@@ -82,6 +102,17 @@ impl Store {
         Ok(self.inner.get(&self.path(key)).await.with_context(|| format!("GET {key}"))?.bytes().await?)
     }
 
+    /// GET with the object's last-modified time (unix ms), unless the object is larger than
+    /// `max` bytes (`None`; the body is not read).
+    pub async fn get_at_most(&self, key: &str, max: u64) -> Result<Option<(Bytes, i64)>> {
+        let r = self.inner.get(&self.path(key)).await.with_context(|| format!("GET {key}"))?;
+        if r.meta.size > max {
+            return Ok(None);
+        }
+        let modified = r.meta.last_modified.timestamp_millis();
+        Ok(Some((r.bytes().await.with_context(|| format!("GET {key}"))?, modified)))
+    }
+
     pub async fn delete(&self, key: &str) -> Result<()> {
         match self.inner.delete(&self.path(key)).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
@@ -91,10 +122,18 @@ impl Store {
 
     /// Keys under `prefix`, relative to the store root.
     pub async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        Ok(self.list_modified(prefix).await?.into_iter().map(|(k, _)| k).collect())
+    }
+
+    /// Like [`Store::list`], with each object's last-modified time (unix ms) from the listing.
+    pub async fn list_modified(&self, prefix: &str) -> Result<Vec<(String, i64)>> {
         let p = self.path(prefix);
         let items: Vec<_> = self.inner.list(Some(&p)).try_collect().await.with_context(|| format!("LIST {prefix}"))?;
         let strip = if self.prefix.is_empty() { String::new() } else { format!("{}/", self.prefix) };
-        Ok(items.into_iter().map(|m| m.location.to_string().trim_start_matches(&strip).to_string()).collect())
+        Ok(items
+            .into_iter()
+            .map(|m| (m.location.to_string().trim_start_matches(&strip).to_string(), m.last_modified.timestamp_millis()))
+            .collect())
     }
 }
 
@@ -112,7 +151,8 @@ pub fn date_of_hour(hour: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// `<table>/tenant=<t>/date=<d>/hour=<h>/<level>-<ulid>-<node>.parquet` (SPEC §4.1).
+/// `<table>/tenant=<t>/date=<d>/hour=<h>/<level>-<ulid>-<node>.parquet` (SPEC §4.1), relative to
+/// the node's own prefix.
 pub fn data_key(table: &str, tenant: &str, hour: i64, level: &str, node: &str) -> String {
     format!(
         "{table}/tenant={tenant}/date={}/hour={:02}/{level}-{}-{node}.parquet",
@@ -142,6 +182,34 @@ pub fn hour_of_key(key: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn scoped_store_writes_under_its_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = format!("storage: {{ url: {} }}\n", dir.path().display());
+        let root = Store::from_config(&Config::from_layers(Some(&yaml), &[]).unwrap()).unwrap();
+        let node = root.scoped("eu/n1");
+        node.put("commits/x.json", Bytes::from_static(b"{}")).await.unwrap();
+        assert!(dir.path().join("eu/n1/commits/x.json").is_file());
+        assert_eq!(node.list("commits/").await.unwrap(), vec!["commits/x.json".to_string()]);
+        assert_eq!(root.list("eu/").await.unwrap(), vec!["eu/n1/commits/x.json".to_string()]);
+        assert_eq!(node.url("k"), format!("{}/eu/n1/k", root.url_prefix));
+        assert_eq!(node.key_of(&node.url("a/b")).as_deref(), Some("a/b"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn get_at_most_skips_larger_objects_without_reading_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = format!("storage: {{ url: {} }}\n", dir.path().display());
+        let s = Store::from_config(&Config::from_layers(Some(&yaml), &[]).unwrap()).unwrap();
+        s.put("k", Bytes::from(vec![7u8; 100])).await.unwrap();
+        assert!(s.get_at_most("k", 99).await.unwrap().is_none(), "one byte over");
+        let (b, modified) = s.get_at_most("k", 100).await.unwrap().expect("exactly the limit");
+        assert_eq!(b.len(), 100);
+        assert!((modified - crate::node::now_ms()).abs() < 60_000, "last-modified from the store: {modified}");
+    }
 
     #[test]
     fn hour_round_trips_through_key() {

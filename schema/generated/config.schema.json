@@ -10,12 +10,12 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Unique node id; part of every file name and envelope.",
+          "description": "Node id, unique among the nodes sharing `storage.url`. With `region` it names the node's\nobject prefix `<region>/<id>/`; empty falls back to the default.",
           "type": "string",
           "default": "node-0"
         },
         "region": {
-          "description": "Region label stamped on rows (one bucket per region, SPEC §12).",
+          "description": "Region label stamped on rows (one bucket per region, SPEC §12); first part of the node's\nobject prefix. Empty falls back to the default.",
           "type": "string",
           "default": "local"
         },
@@ -85,7 +85,7 @@
       "type": "object",
       "properties": {
         "url": {
-          "description": "A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).",
+          "description": "A DuckDB file path, or `postgres:<libpq conninfo>` (then both fleet intervals must be `0s`:\na fleet publishes and reads catalog files).",
           "type": "string",
           "default": "./data/catalog.ducklake"
         }
@@ -195,10 +195,42 @@
           "description": "How often retention runs.",
           "$ref": "#/$defs/Duration",
           "default": "1h"
+        },
+        "snapshot_grace": {
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 3 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus twice their refresh interval and their query timeout).",
+          "$ref": "#/$defs/Duration",
+          "default": "10m"
         }
       },
       "additionalProperties": false,
       "description": "Checkpointer, compactor and retention (SPEC §6)."
+    },
+    "fleet": {
+      "type": "object",
+      "properties": {
+        "publish_interval": {
+          "description": "Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.",
+          "$ref": "#/$defs/Interval",
+          "default": "30s"
+        },
+        "refresh_interval": {
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. A refresh gives up the listing and downloads not done\nwithin this time. Copies too old to be safe are skipped (see `coordinator.snapshot_grace`).",
+          "$ref": "#/$defs/Interval",
+          "default": "30s"
+        },
+        "dir": {
+          "description": "Local directory for downloaded catalog copies: they live in `<dir>/<node.id>/` (this node's\nid), which is emptied at start.",
+          "type": "string",
+          "default": "./data/fleet"
+        },
+        "max_copy_bytes": {
+          "description": "A catalog copy of another node that unpacks to more than this is refused (copies come from\nshared storage and are not trusted).",
+          "$ref": "#/$defs/ByteSize",
+          "default": "256MB"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Nodes sharing `storage.url`: publish this node's catalog copy, query the others' copies."
     },
     "query": {
       "type": "object",
@@ -295,11 +327,11 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Unique node id; part of every file name and envelope.",
+          "description": "Node id, unique among the nodes sharing `storage.url`. With `region` it names the node's\nobject prefix `<region>/<id>/`; empty falls back to the default.",
           "type": "string"
         },
         "region": {
-          "description": "Region label stamped on rows (one bucket per region, SPEC §12).",
+          "description": "Region label stamped on rows (one bucket per region, SPEC §12); first part of the node's\nobject prefix. Empty falls back to the default.",
           "type": "string"
         },
         "tenant": {
@@ -360,7 +392,7 @@
       "type": "object",
       "properties": {
         "url": {
-          "description": "A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).",
+          "description": "A DuckDB file path, or `postgres:<libpq conninfo>` (then both fleet intervals must be `0s`:\na fleet publishes and reads catalog files).",
           "type": "string"
         }
       },
@@ -482,9 +514,44 @@
         "retention_interval": {
           "description": "How often retention runs.",
           "$ref": "#/$defs/Duration"
+        },
+        "snapshot_grace": {
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 3 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus twice their refresh interval and their query timeout).",
+          "$ref": "#/$defs/Duration"
         }
       },
       "additionalProperties": false
+    },
+    "Fleet": {
+      "type": "object",
+      "properties": {
+        "publish_interval": {
+          "description": "Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.",
+          "$ref": "#/$defs/Interval"
+        },
+        "refresh_interval": {
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. A refresh gives up the listing and downloads not done\nwithin this time. Copies too old to be safe are skipped (see `coordinator.snapshot_grace`).",
+          "$ref": "#/$defs/Interval"
+        },
+        "dir": {
+          "description": "Local directory for downloaded catalog copies: they live in `<dir>/<node.id>/` (this node's\nid), which is emptied at start.",
+          "type": "string"
+        },
+        "max_copy_bytes": {
+          "description": "A catalog copy of another node that unpacks to more than this is refused (copies come from\nshared storage and are not trusted).",
+          "$ref": "#/$defs/ByteSize"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Interval": {
+      "description": "Duration: ms, s, m, h, d, w, e.g. 30s; 0s = never",
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m|h|d|w)$",
+      "examples": [
+        "30s",
+        "0s"
+      ]
     },
     "Query": {
       "type": "object",

@@ -16,3 +16,5 @@ dashboards:
   dir: examples/demo/dashboards
 materialize:
   path: ./data/demo/materialized.duckdb
+fleet:
+  dir: ./data/demo/fleet

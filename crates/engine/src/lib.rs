@@ -3,6 +3,7 @@
 pub mod config;
 pub mod dashboards;
 pub mod duck;
+pub mod fleet;
 pub mod ids;
 pub mod materialize;
 pub mod metrics;

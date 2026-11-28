@@ -20,6 +20,7 @@ does not have yet. Nothing in the second group is shipped.
 | [Maintenance only rewrites what changed](#maintenance-only-rewrites-what-changed) | Built | [Catalog and maintenance](../deep-dive/catalog-and-maintenance.md), [MinIO benchmark](../deep-dive/evidence/bench-s3.md) |
 | [One binary, defined by YAML](#one-binary-defined-by-yaml) | Built | [API and code generation](../deep-dive/api-and-codegen.md) |
 | [Materialized panels, maintained incrementally](#materialized-panels-maintained-incrementally) | Built (phase 1) | [Materialized panels](../deep-dive/materialized-panels.md), [benchmark](../deep-dive/evidence/bench-local.md#materialized-panels) |
+| [Nodes share a bucket, not a coordinator](#nodes-share-a-bucket-not-a-coordinator) | Built | [Run a fleet](../examples/run-a-fleet.md), [fleet proof of concept](../deep-dive/evidence/fleet-poc.md) |
 
 ## Your telemetry is open Parquet you own
 
@@ -70,7 +71,9 @@ A write is acknowledged once its rows are in the write-ahead log and the in-memo
 Queries read the lake and the hot tail through one view per table. A per-node watermark,
 read in the same catalog transaction as the scan, makes sure a row that is both committed and
 still in RAM is counted exactly once. There is no wait for a flush: a sample is visible to the
-next query, and responses report `freshness_s: 0`.
+next query on the node that received it, and a single node reports `freshness_s: 0`. The other
+nodes of a fleet see it up to about 2 minutes later
+([below](#nodes-share-a-bucket-not-a-coordinator)).
 
 The e2e run above compares against Prometheus while part of the data lives only in RAM. See
 [Query engine](../deep-dive/query-engine.md#views-the-lake-plus-the-hot-tail-counted-once) and
@@ -141,6 +144,28 @@ every raw sample on every refresh.
 
 How it works, how to use it, when it helps and what it costs:
 [Materialized panels](../deep-dive/materialized-panels.md).
+
+## Nodes share a bucket, not a coordinator
+
+Run one node per region or cluster, or one on your laptop, and point them all at the same
+bucket. They form a fleet: every node publishes a small gzipped copy of its catalog there and
+attaches the copies of the others, read-only. Any node then answers queries over the data of
+all of them. There is no coordinator, no peers list and no extra role. A node alone answers
+exactly as before (it still publishes a small copy every 30 s; set both `fleet.*_interval` to
+`0s` to turn that off).
+
+- **Same answers as one node.** `crates/engine/tests/fleet.rs` checks that queries over two
+  nodes equal the answers of one node that received all the data, and that retention on one node
+  keeps the files a copy on another node reads for `coordinator.snapshot_grace`.
+- **Cheap to share.** A catalog copy was about 43 to 74 KB gzipped for 6 hours of data at the
+  proof of concept's scale (it grows with the number of files), and queries over three copies
+  matched a single node holding everything in the
+  [proof of concept](../deep-dive/evidence/fleet-poc.md).
+- **Stated limits.** Other nodes see a node's rows after flush, checkpoint, publish and refresh,
+  up to about 2 minutes with the defaults, not at once. Senders label their own region, as with
+  Prometheus `external_labels`.
+
+How to run one and what each node sees: [Run a fleet](../examples/run-a-fleet.md).
 
 ## Designed, not built yet: rollups
 

@@ -36,6 +36,7 @@ snap = "1"
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "metrics", "logs", "trace", "with-serde"] }
 ureq = { version = "3", default-features = false, features = ["json"] }
 tempfile = "3"
+flate2 = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

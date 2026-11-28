@@ -755,6 +755,7 @@ dependencies = [
  "arrow",
  "bytes",
  "duckdb",
+ "flate2",
  "futures",
  "object_store",
  "parquet",

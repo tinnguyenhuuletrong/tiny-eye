@@ -111,6 +111,28 @@ Telemetry may contain text written by anyone (log lines, span names, attribute v
 
 Any `</data` inside the body is escaped as `<\/data`, so telemetry cannot close the block early. Results with an HTTP status of 400 or more are flagged `isError: true`. Agents should still treat everything inside the block as data, not instructions. See [AI agents and MCP](../examples/ai-agents-mcp.md).
 
+## Nodes of a fleet
+
+The nodes of a [fleet](../examples/run-a-fleet.md) never talk to each other; they share one bucket. Object-storage permissions are the boundary between them. Every node, a laptop node included, needs:
+
+- read access to the whole `storage.url`, to read the other nodes' manifests, catalog copies and data files;
+- write and delete access to its own `<node.region>/<node.id>/` prefix (flushes, compaction, retention and its published copy);
+- write access to `_fleet/`, for its manifest.
+
+A node that can write to another node's prefix can change what that node's copy says, so give each node a key scoped to its own prefix where the store allows it.
+
+A node treats every other node's manifest and catalog copy as untrusted input. It does not read a manifest larger than 64 KiB or one that does not name itself (`_fleet/<node_id>.json`). It downloads the copy and rejects it when:
+
+- the manifest's `catalog_key` is not under the publisher's own prefix;
+- the copy is larger than `fleet.max_copy_bytes` (256 MB by default), compressed or once decompressed;
+- the copy is not a gzipped DuckDB file or not a DuckLake catalog;
+- its metadata database, opened as a plain DuckDB file before DuckLake reads it, holds anything but tables named `ducklake_*` in `main`: no views, macros, sequences, types, indexes, generated columns or other schemas, so attaching it cannot run code in this node's queries. DuckLake reads every inlined-data table the catalog names as a table, else as a file pattern, so each one must exist;
+- the catalog defines views or macros;
+- its tables or columns differ from this build's schema;
+- it names data files outside the publisher's prefix (`<storage.url>/<region>/<id>/`, with the trailing slash), so one node cannot make another read a third node's files under its own name.
+
+A rejected copy is left out of the answers, logged with the reason and counted in `tiny_eye_fleet_errors_total` once; it is not downloaded again for the same snapshot, and the publisher's previous copy is kept while it is fresh. The rest of the fleet keeps answering. The manifests themselves are trusted for who published what and when, except that a reader takes the earlier of the manifest's publish time and the bucket's last-modified time, so a manifest cannot make a copy look younger than the bucket saw it written. They are not signed, so a key that can write to `_fleet/` can hide another node or make it look stale.
+
 ## Error bodies
 
 | Situation | Status | Body |
@@ -133,11 +155,11 @@ Any `</data` inside the body is escaped as `<\/data`, so telemetry cannot close 
 ## What is not built
 
 - **TLS.** The server speaks plain HTTP. Terminate TLS at a reverse proxy or load balancer.
-- **mTLS between nodes.** Only single-node mode exists (cluster is milestone M3).
+- **mTLS between nodes.** Not needed so far: the nodes of a fleet never talk to each other, they only share the bucket (see [Nodes of a fleet](#nodes-of-a-fleet)).
 - **Multi-tenant isolation.** One tenant per node (`node.tenant`); tokens are not tied to a tenant (spec question Q8).
 - **Token features.** No expiry, no rotation without restart, no per-token rate limits, no audit log.
 - **CORS.** No CORS headers are sent; the UI is served from the same origin.
-- **Read-only laptop mode** with a tenant-scoped object-storage key, and **erasure** (rewriting files to delete data).
+- **Read-only laptop mode** with a tenant-scoped object-storage key (a laptop can run a normal fleet node, which needs the same read, write and delete access as any node; a read-only key is not tested), and **erasure** (rewriting files to delete data).
 - **Dependency licence checks** in CI.
 
 See [Limitations and roadmap](limitations-and-roadmap.md).

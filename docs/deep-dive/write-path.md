@@ -80,8 +80,8 @@ sequenceDiagram
 3. **`write_sequence(s)`**, on a cloned connection:
    - For each table, `SELECT DISTINCT <hour_sql>::BIGINT FROM memory.main.hot_<t> WHERE _seq = s` lists the hours present.
    - For each hour: `SELECT * EXCLUDE (_seq) FROM memory.main.hot_<t> WHERE _seq = s AND <hour_sql> = h <dedup_sql> ORDER BY <sort columns>`, read as Arrow (`query_arrow`) and encoded by `parquet::write`. DuckDB does the sort and the `QUALIFY` dedup, and our writer adds the encodings and bloom filters. One file per (table, hour) means a late sample only ever lands in its own hour's partition.
-   - Each file is PUT to `<table>/tenant=/date=/hour=/l0-<ulid>-<node>.parquet`. Its absolute URL, size and row count go into a `FileEntry`.
-   - An envelope with a fresh ULID `envelope_id` and `seq_to = s` is written with `Store::put_new` to `commits/<region>/<node>-<epoch>-<seq>.json`.
+   - Each file is PUT to `<table>/tenant=/date=/hour=/l0-<ulid>-<node>.parquet` under the node's own prefix `<region>/<id>/`. Its absolute URL, size and row count go into a `FileEntry`.
+   - An envelope with a fresh ULID `envelope_id` and `seq_to = s` is written with `Store::put_new` to `<region>/<id>/commits/<epoch>-<seq>.json`.
 4. **After the envelope exists**, the WAL segment `s` is removed, any old segments replayed into `s` are removed, and `s` leaves `unflushed`. The hot rows stay. They are released by the checkpointer after the commit plus `hot_grace` ([Catalog and maintenance](catalog-and-maintenance.md)).
 
 ### Why the envelope key is deterministic
@@ -103,7 +103,7 @@ Between flush and compaction, a cross-sequence retry of metric samples is double
 `Node::open` ends with `replay_wal()`:
 
 1. List every `*.wal` file as `(epoch, seq, path)`, oldest first.
-2. Collect the `(node_epoch, seq_to)` pairs of this node in `lake.applied_envelopes`, plus the envelopes still pending under `commits/<region>/`.
+2. Collect the `(node_epoch, seq_to)` pairs of this node in `lake.applied_envelopes`, plus the envelopes still pending under the node's `commits/`.
 3. For each segment of an earlier epoch:
    - If its `(epoch, seq)` is applied or pending, its rows are already in object storage. Delete the file.
    - Otherwise read every complete record and append it to the hot tables tagged with the current open sequence (1 in a new process). Add the bytes to the open batch and `hot_bytes`, and record the file under `replay_sources[1]`.

@@ -24,6 +24,12 @@ pub struct Metrics {
     pub materialized_stored: AtomicU64,
     pub materialized_panels: AtomicU64,
     pub materialized_tick_ms: AtomicU64,
+    pub fleet_publishes: AtomicU64,
+    /// Failed publishes, and refreshes that failed or left out a copy (each counted once).
+    pub fleet_errors: AtomicU64,
+    /// Other nodes whose catalog copies queries read, and the oldest copy's publish time (0 = none).
+    pub fleet_nodes: AtomicU64,
+    pub fleet_oldest_published_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -73,6 +79,25 @@ impl Metrics {
             "materialized_trimmed_points_total",
             "Stored points dropped because a panel passed materialize.max_points_per_panel.",
             vec![(String::new(), g(&self.materialized_trimmed))],
+        );
+        counter(
+            "fleet_publishes_total",
+            "Catalog copies published for the other nodes of the fleet.",
+            vec![(String::new(), g(&self.fleet_publishes))],
+        );
+        counter(
+            "fleet_errors_total",
+            "Fleet publishes that failed, and refreshes that failed or left out another node's catalog copy (one per refresh).",
+            vec![(String::new(), g(&self.fleet_errors))],
+        );
+        let oldest = g(&self.fleet_oldest_published_ms);
+        let age = if oldest == 0 { 0.0 } else { (crate::node::now_ms() - oldest as i64).max(0) as f64 / 1000.0 };
+        let _ = writeln!(
+            s,
+            "# HELP tiny_eye_fleet_nodes Other nodes sharing storage whose data queries read.\n# TYPE tiny_eye_fleet_nodes gauge\ntiny_eye_fleet_nodes {}\n\
+             # HELP tiny_eye_fleet_oldest_copy_age_seconds Age of the oldest other-node catalog copy queries read (0 when alone).\n\
+             # TYPE tiny_eye_fleet_oldest_copy_age_seconds gauge\ntiny_eye_fleet_oldest_copy_age_seconds {age}",
+            g(&self.fleet_nodes)
         );
         for (name, help, v) in [
             ("materialized_stored_points", "Points now stored for materialized panels.", &self.materialized_stored),

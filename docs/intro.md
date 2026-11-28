@@ -44,7 +44,9 @@ tiny-eye keeps all three signals in one place and one format:
 
 ![The Shop overview dashboard of the demo](./assets/ui-dashboard.jpg)
 
-tiny-eye runs as a single node today (`--role all`). Cluster roles are not built yet. See
+Each tiny-eye process is one complete node (`--role all`). Several nodes that share one bucket
+form a [fleet](examples/run-a-fleet.md): every node answers queries over the data of all of them,
+with no coordinator. What is not built yet is in
 [Limitations and roadmap](deep-dive/limitations-and-roadmap.md).
 
 ## How data flows

@@ -17,3 +17,5 @@ dashboards:
   dir: examples/machine/dashboards
 materialize:
   path: ./data/machine/materialized.duckdb
+fleet:
+  dir: ./data/machine/fleet

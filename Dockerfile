@@ -54,6 +54,7 @@ ENV TINY_EYE__SERVER__LISTEN=0.0.0.0:7070 \
     TINY_EYE__CATALOG__URL=/data/catalog.ducklake \
     TINY_EYE__INGEST__WAL_DIR=/data/wal \
     TINY_EYE__MATERIALIZE__PATH=/data/materialized.duckdb \
+    TINY_EYE__FLEET__DIR=/data/fleet \
     TINY_EYE__DASHBOARDS__DIR=/etc/tiny-eye/dashboards
 USER tinyeye
 WORKDIR /data

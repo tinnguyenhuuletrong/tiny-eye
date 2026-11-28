@@ -33,7 +33,7 @@ prost.workspace = true
 snap.workspace = true
 opentelemetry-proto.workspace = true
 ureq.workspace = true
-flate2 = "1"
+flate2.workspace = true
 rand.workspace = true
 # used by the tiny-eye-bench and tiny-eye-fleet binaries
 tempfile.workspace = true

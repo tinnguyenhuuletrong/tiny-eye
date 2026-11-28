@@ -20,7 +20,7 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
   },
   {
     title: "Queryable once acknowledged",
-    text: "Queries read the lake and the in-memory hot tail together, each row counted once.",
+    text: "On the node that received them, rows are queryable at once: queries read the lake and the in-memory hot tail together, each row counted once.",
     anchor: "acknowledged-means-queryable",
   },
   {
@@ -37,6 +37,11 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
     title: "Materialized panels",
     text: "Mark a panel materialize: true; long-range reads use stored points, up to 12× faster on aggregations, same answer.",
     anchor: "materialized-panels-maintained-incrementally",
+  },
+  {
+    title: "A fleet without a coordinator",
+    text: "Nodes that share a bucket attach each other's published catalogs; any node answers over all their data, with other nodes' rows up to about 2 minutes behind.",
+    anchor: "nodes-share-a-bucket-not-a-coordinator",
   },
 ];
 

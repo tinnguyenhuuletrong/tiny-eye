@@ -82,7 +82,7 @@ async fn start(name: &str, region: &str, dir: &Path, storage: &str, ext: &str) -
     let yaml = format!(
         "node: {{ id: {name}-n0, region: {region} }}\nduckdb: {{ extension_dir: {ext}, threads: 4, memory_limit: 4GB }}\n{storage}\n\
          catalog: {{ url: {d}/catalog.ducklake }}\n\
-         ingest: {{ wal_dir: {d}/wal, max_sample_age: 30d, flush_interval: 1h, arena_limit: 4GB }}\nmaterialize: {{ path: '' }}\n\
+         ingest: {{ wal_dir: {d}/wal, max_sample_age: 30d, flush_interval: 1h, arena_limit: 4GB }}\nfleet: {{ dir: {d}/fleet }}\nmaterialize: {{ path: '' }}\n\
          coordinator: {{ hot_grace: 1ms, compaction_delay: 1ms, checkpoint_interval: 1h, compaction_interval: 1w, retention_interval: 1w }}\n\
          query: {{ workers: 2 }}\n"
     );
@@ -219,10 +219,11 @@ impl Viewer {
         for r in regions {
             let alias = format!("{}_g{}", r.name.replace('-', "_"), self.generation);
             let loc = match self.mode {
-                Mode::Remote => self.store.url(&format!("{}/{SNAPSHOT_KEY}", r.name)),
+                // Each node's storage.url is `<root>/<name>`; its objects are under `<region>/<id>/` there.
+                Mode::Remote => self.store.url(&format!("{}/{}/{SNAPSHOT_KEY}", r.name, r.node.cfg.node.prefix())),
                 Mode::Download => {
                     let t = Instant::now();
-                    let gz = self.store.get(&format!("{}/{SNAPSHOT_KEY}.gz", r.name)).await?;
+                    let gz = self.store.get(&format!("{}/{}/{SNAPSHOT_KEY}.gz", r.name, r.node.cfg.node.prefix())).await?;
                     let mut bytes = vec![];
                     std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&gz[..]), &mut bytes)?;
                     let p = self.dir.join(format!("{alias}.ducklake"));

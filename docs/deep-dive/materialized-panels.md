@@ -237,7 +237,18 @@ flowchart LR
    points are stored up to 09:55, and a sample for 09:40 arrives. The next tick deletes every
    panel's points from 09:40 on and computes them again. Late data is not tracked per metric.
    So a sender that is always about `settle` behind keeps the newest minutes of every panel
-   recomputing.
+   recomputing. In a [fleet](../examples/run-a-fleet.md), rows that become visible from another
+   node count as late data too: another node's late samples, a node that joins the fleet, or a
+   node that comes back after a stop make the stored steps they touch recompute. The earliest new
+   sample comes from the per-file statistics of the copy, so the manifest carries nothing extra.
+   Only files added since the copy the stored points already include count: same publisher
+   catalog (the uuid of its `main` schema), same or later snapshot, and still within the grace.
+   The node records that copy per other node in `mat.fleet_seen`, in the same transaction as the
+   rewind it caused, so another node's restart with the same catalog, or this node's own restart,
+   recomputes nothing that is not new. A node seen for the first time, a new catalog or a copy
+   older than the grace makes all stored steps recompute once, and so does a file without
+   statistics (the rewind starts at the earliest stored step). A node leaving is not handled:
+   steps already stored keep its rows.
 4. **Reads.** A `timeseries` query uses the store when all three hold:
    - its key matches a registered panel;
    - its step is a multiple of the resolution;
@@ -715,8 +726,12 @@ points start again. `coordinator.retention` deletes stored points older than the
 - **The response grid.** A materialized read answers on the step-aligned grid (multiples of the
   step) plus the point at `to`. A raw query's grid starts at `from`. Both give the same value at
   the same timestamp.
-- **Node-local.** The store belongs to one node. A late sample is noticed by the node that
-  ingests it — the only node today.
+- **Node-local.** The store belongs to one node. In a [fleet](../examples/run-a-fleet.md) a
+  node's panels also cover the other nodes' rows, which arrive up to
+  `ingest.flush_interval + coordinator.checkpoint_interval + fleet.publish_interval +
+  fleet.refresh_interval` late (up to about 2 minutes with the defaults). Rows from another node
+  for steps that are already stored make those steps recompute, as a late sample does (see
+  [Late data](#how-it-works)). A `settle` longer than that lag avoids most of these recomputes.
 - **The UI's ranges.** 1 h, 6 h, 24 h and 7 d read from the store; 15 min does not (5 s step).
   Any other range does when its step is a multiple of 15 s.
 - **Not the spec's partials.** Spans and logs measures, and percentiles merged across regions,

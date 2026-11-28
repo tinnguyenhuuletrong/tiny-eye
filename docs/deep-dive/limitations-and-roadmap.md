@@ -4,23 +4,34 @@ description: What tiny-eye does not do yet, where it deviates from the specifica
 sidebar_position: 14
 ---
 
-tiny-eye implements the specification's milestone M1 (single-node metrics) and most of M2 (traces, logs, agents, auth) as one binary in single-node mode. This page lists what is missing, where the implementation knowingly differs from the spec, and the decisions taken on the spec's open questions.
+tiny-eye implements the specification's milestone M1 (single-node metrics) and most of M2 (traces, logs, agents, auth) as one binary. In place of the spec's cluster (M3), several nodes can share one bucket as a [fleet](../examples/run-a-fleet.md) and answer queries over each other's data. This page lists what is missing, where the implementation knowingly differs from the spec, and the decisions taken on the spec's open questions.
 
 ## Not built, by milestone
 
 ### M2: traces, logs, agents
 
 - `traces_index` (a per-trace summary table for faster trace search).
-- Laptop / agent mode: snapshot export of the catalog for local querying (E9).
+- A read-only laptop / agent mode. A laptop can instead run a normal node in the [fleet](../examples/run-a-fleet.md) and read the published catalog copies. It is a full node: anything sent to it is written under its own prefix, and it needs read, write and delete access like any node. Running it with a read-only storage key is not tested.
 - MCP over streamable HTTP; only the stdio bridge (`tiny-eye mcp`) exists.
 - The MCP tools `get_trace_waterfall`, `search_logs`, `correlate_anomalies` and `save_panel`. The first two are covered by `run_tqs` with `kind: trace` and `kind: log_search`.
 - Span events and links are not stored.
 
-### M3: cluster
+### M3: cluster, replaced by the fleet
 
-- Roles other than `--role all`, lease and fencing, the hot-tail RPC between nodes, and `replicated` durability. A `postgres:` catalog URL is accepted, but multi-node operation is not built.
+The spec's cluster (separate roles, a leased coordinator per region, a hot-tail RPC) is not built. A **fleet** is built instead: every node is a full `--role all` node with its own catalog and object prefix, publishes a copy of its catalog to the shared bucket, and queries the copies of the others ([Run a fleet](../examples/run-a-fleet.md), proven by `crates/engine/tests/fleet.rs`). What that leaves out, on purpose or not yet:
+
+- **Other nodes' hot tails are not visible.** A node sees another node's rows only after they are flushed, checkpointed, published and refreshed: up to about 2 minutes with the defaults. There is no hot-tail RPC.
+- **One bucket per fleet.** Every node shares one `storage.url`. Separate buckets per region (and their secrets) are not supported.
+- **No coordinator.** No roles, lease or fencing; nothing checks the fleet as a whole. Duplicate `node.id`s are detected only through the manifests: the newest process wins, and the older one stops publishing and logs an error until the newer one's manifest has not been written for `coordinator.snapshot_grace`. The check reads the manifest, then writes its own, so two processes starting together can both write once before the next publish settles it. A node with `fleet.publish_interval: 0s` writes no manifest, so a clash with its id is never detected.
+- **No deduplication across nodes.** A sample retried to two nodes of one region is kept twice; duplicates are removed only within one node's files.
+- **Mixed builds.** A catalog copy whose tables or columns differ from the reader's schema is left out of its answers, so during a rolling upgrade that changes the schema, nodes on different builds do not see each other's data.
+- **Local disk across hosts** works only with a shared mount at the same absolute path on every host: the copies name absolute file paths.
+- **No region label.** Senders must label their region or cluster on metrics, as with Prometheus `external_labels`.
+- **A stopped node drops out.** Its data leaves the others' answers once its manifest is older than `coordinator.snapshot_grace` (10 minutes); its files stay in the bucket.
+- **Materialized panels keep a departed node's rows.** A node joining makes stored steps recompute; a node leaving does not, so steps already stored keep its rows until retention drops them.
+- `replicated` durability. A `postgres:` catalog URL is accepted only on a node alone (both `fleet.*_interval` set to `0s`); a catalog shared by several nodes is not built.
 - OTLP over gRPC and Loki protobuf push (only OTLP/HTTP and Loki JSON push exist).
-- mTLS between nodes.
+- mTLS between nodes (nodes do not talk to each other; they only share the bucket).
 
 ### M4: dashboards and alerts
 
@@ -31,7 +42,7 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 
 ### M5: multi-region
 
-- Per-region buckets and secrets, catalog replicas, residency (`in-region-only`). `node.region` is stamped on rows and envelopes, but one node serves one region; `partial_regions` is always empty.
+- Per-region buckets and secrets, catalog replicas, residency (`in-region-only`). `node.region` is stamped on rows and names the node's object prefix, and a fleet can have nodes in several regions sharing one bucket; `partial_regions` is always empty.
 
 ### Not tied to a milestone
 
@@ -57,7 +68,7 @@ Limits of phase 1, by design:
 - **Shapes.** Timeseries metric queries whose points depend only on their own timestamp: not
   `table`, `fill: zero`, `top` ranked over the range, `$__range`/`$__interval`, or spans/logs
   measures.
-- **Node-local.** The store belongs to one node; there is one node today.
+- **Node-local.** The store belongs to one node. In a fleet a node's panels include other nodes' rows, and stored steps are recomputed when another node's late rows, a joining node or a returning node become visible.
 
 Not built from section 9.1: the mergeable `view_partials` state fed from flush envelopes, which
 would add spans and logs measures and percentiles merged across regions (log-bucket histograms,
@@ -67,9 +78,8 @@ D6), and alert rules evaluated on the same state.
 
 From `README.md` and the code:
 
-- **Response fields.** `freshness_s` is always 0 (every read includes the hot tail); `partial_regions` is always empty; `bytes_scanned` is missing; `elapsed_ms` and `rows` are additions.
+- **Response fields.** `freshness_s` is the age of the oldest other-node catalog copy read (0 on a node alone), not the spec's "seconds since the newest visible row"; `partial_regions` is always empty; `bytes_scanned` is missing; `elapsed_ms` and `rows` are additions.
 - **Result labels** are parsed from the series key, so a label value containing `,` is split ambiguously (the `key` is exact).
-- **OTLP points** flagged "no recorded value" are stored as values.
 - **`kind: trace` without `time`** probes every span file; pass a time range (the spec assumes one).
 - **Duplicates.** Samples with the same series and timestamp (a retried request) are removed at flush and compaction (`unique` in `schema/tables.yaml`); two copies can coexist briefly in the hot tail.
 - **Error text.** `500` responses carry the engine's error text; front the API with a proxy before exposing it.
@@ -101,7 +111,7 @@ The spec (§16) lists 20 questions with proposed defaults. tiny-eye uses the pro
 | Q16 | Empty label value equals absent label? | Yes | Implemented (remote-write drops empty labels; matchers treat absent as `""`) |
 | Q17 | Fixed, versioned log masking rules? | Yes | Fixed list, `pattern_version` 1 |
 | Q18 | Limits: 10 queries, 11,000 points, regex 256, formula 512, `limit` 5,000? | Yes | Implemented |
-| Q19 | Laptop mode: snapshot export or read-only PostgreSQL role? | Snapshot export + CI gate | Not built |
+| Q19 | Laptop mode: snapshot export or read-only PostgreSQL role? | Snapshot export + CI gate | Resolved by the fleet: every node publishes a gzipped copy of its catalog (a snapshot export) and any node, a laptop included, attaches the others' copies. The copy uses DuckLake's internal metadata database name; `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs` is the CI gate |
 | Q20 | Wired test target: local stack only, or also shared? | Local stack | E2E and conformance run locally on synthetic, Margince-shaped data |
 
 ## Roadmap
@@ -109,9 +119,9 @@ The spec (§16) lists 20 questions with proposed defaults. tiny-eye uses the pro
 A short, ordered view of what is next, based on the gaps above:
 
 1. **Web UI.** Finish the Preact UI (dashboards, Explore, traces, logs) and a build target that embeds it into the binary.
-2. **Cluster (M3).** Roles, lease and fencing, hot-tail RPC, `replicated` durability, OTLP gRPC.
+2. **Beyond the fleet.** OTLP gRPC; `replicated` durability; a read-only laptop node with a read-only storage key. The fleet replaced the spec's cluster roles, lease and hot-tail RPC.
 3. **Alerts and materialized panels (M4).** Evaluator with Alertmanager v2; the [partials design for materialized panels](#materialized-panels) fed from ingest envelopes into `view_partials`, read by both panels and alert rules (phase 1, stored panel points, is built).
 4. **Operability.** Missing self-metrics, `bytes_scanned`, a published container image, licence checks in CI.
-5. **Multi-region (M5)** and laptop snapshot export.
+5. **Multi-region (M5):** separate buckets per region and residency.
 
 See [Testing and evidence](testing-and-evidence.md) for what is proven today.

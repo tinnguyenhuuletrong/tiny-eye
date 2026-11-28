@@ -1,5 +1,7 @@
-//! `tiny-eye` — one binary (SPEC §3). Single-node mode (`--role all`) runs ingest, coordinator
-//! and query together; `mcp` runs the stdio MCP bridge against a running node.
+//! `tiny-eye` — one binary (SPEC §3). A node (`--role all`, the only role) runs ingest,
+//! coordinator and query together; several nodes sharing `storage.url` form a fleet and answer
+//! over each other's data (docs/examples/run-a-fleet.md). `mcp` runs the stdio MCP bridge against
+//! a running node.
 //!
 //!   tiny-eye [--config <file.yaml>]
 //!   tiny-eye mcp --url http://127.0.0.1:7070 [--token-env VAR]
@@ -59,7 +61,7 @@ async fn main() -> Result<()> {
     if let Some(role) = arg(&args, "--role")
         && role != "all"
     {
-        bail!("--role {role}: only single-node mode (--role all) is built; cluster roles are milestone M3");
+        bail!("--role {role}: only --role all exists; to run several nodes, share storage.url as a fleet (docs/examples/run-a-fleet.md)");
     }
     let cfg = Config::load(config_path.as_deref())?;
     tracing::info!("effective config:\n{}", cfg.redacted_yaml());

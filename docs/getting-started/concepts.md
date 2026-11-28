@@ -99,6 +99,11 @@ A query reads the lake plus the hot rows the lake does not have yet (above a per
 watermark). Each row is counted once. Committed rows stay in RAM for `coordinator.hot_grace`
 after the catalog has them, then are released.
 
+Every query response carries `freshness_s`. On a single node it is `0`: everything acknowledged
+is visible. When several nodes share one bucket as a [fleet](../examples/run-a-fleet.md), a node
+also reads the other nodes' published data, up to about 2 minutes behind, and `freshness_s` is
+the age of the oldest copy it read.
+
 ## Flush and checkpoint
 
 A **flush** happens every `ingest.flush_interval` (60 s by default) or when the open batch
@@ -117,13 +122,14 @@ The same `tiny-eye` binary has a few subcommands:
 
 | Command | What it does |
 | --- | --- |
-| `tiny-eye [--config file.yaml]` | Runs a node. Single-node mode (`--role all`) runs ingest, coordinator and query in one process. |
+| `tiny-eye [--config file.yaml]` | Runs a node (`--role all`): ingest, coordinator and query in one process. |
 | `tiny-eye mcp --url http://127.0.0.1:7070 [--token-env VAR]` | Runs the MCP stdio bridge for AI agents against a running node. |
 | `tiny-eye config [--config file.yaml]` | Prints the effective configuration, secrets redacted. |
 | `tiny-eye schemas [--root .]` | Regenerates editor and agent grammars (`make schemas`). |
 
-Separate ingest, coordinator and query roles for a cluster are planned but not built; any
-`--role` other than `all` is refused at start.
+There are no separate ingest, coordinator and query roles; any `--role` other than `all` is
+refused at start with a message that only `--role all` exists. To run several nodes, point them at one bucket: they form a
+[fleet](../examples/run-a-fleet.md) and each answers queries over the data of all of them.
 
 ## Where things live in the repository
 

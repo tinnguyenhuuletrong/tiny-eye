@@ -30,6 +30,8 @@ pub struct Config {
     pub ingest: Ingest,
     /// Checkpointer, compactor and retention (SPEC §6).
     pub coordinator: Coordinator,
+    /// Nodes sharing `storage.url`: publish this node's catalog copy, query the others' copies.
+    pub fleet: Fleet,
     /// Query execution limits (SPEC §7).
     pub query: Query,
     /// Bearer-token auth; scopes per operation come from api/openapi.yaml (`x-scope`).
@@ -43,12 +45,21 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
-    /// Unique node id; part of every file name and envelope.
+    /// Node id, unique among the nodes sharing `storage.url`. With `region` it names the node's
+    /// object prefix `<region>/<id>/`; empty falls back to the default.
     pub id: String,
-    /// Region label stamped on rows (one bucket per region, SPEC §12).
+    /// Region label stamped on rows (one bucket per region, SPEC §12); first part of the node's
+    /// object prefix. Empty falls back to the default.
     pub region: String,
     /// Tenant stamped on rows (single tenant in v1).
     pub tenant: String,
+}
+
+impl Node {
+    /// This node's own prefix in object storage: `<region>/<id>`.
+    pub fn prefix(&self) -> String {
+        format!("{}/{}", self.region, self.id)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -82,7 +93,8 @@ pub struct S3 {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
-    /// A DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster).
+    /// A DuckDB file path, or `postgres:<libpq conninfo>` (then both fleet intervals must be `0s`:
+    /// a fleet publishes and reads catalog files).
     pub url: String,
 }
 
@@ -139,6 +151,29 @@ pub struct Coordinator {
     pub retention: Dur,
     /// How often retention runs.
     pub retention_interval: Dur,
+    /// A catalog snapshot is expired once a newer one has existed this long; only then are the
+    /// files no newer snapshot references deleted. At least `fleet.publish_interval + 3 ×
+    /// fleet.refresh_interval + query.timeout`, so a catalog copy another node may still be
+    /// reading never names a deleted file (readers drop a copy older than the smaller of their own
+    /// and the publisher's grace minus twice their refresh interval and their query timeout).
+    pub snapshot_grace: Dur,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fleet {
+    /// Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.
+    pub publish_interval: Interval,
+    /// Look for the catalog copies of other nodes sharing `storage.url` this often and query their
+    /// data with this node's; `0s` = never. A refresh gives up the listing and downloads not done
+    /// within this time. Copies too old to be safe are skipped (see `coordinator.snapshot_grace`).
+    pub refresh_interval: Interval,
+    /// Local directory for downloaded catalog copies: they live in `<dir>/<node.id>/` (this node's
+    /// id), which is emptied at start.
+    pub dir: String,
+    /// A catalog copy of another node that unpacks to more than this is refused (copies come from
+    /// shared storage and are not trusted).
+    pub max_copy_bytes: ByteSize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -257,6 +292,11 @@ impl Dur {
     pub fn ms(&self) -> i64 {
         self.0.as_millis() as i64
     }
+
+    /// In the config grammar, as written in a file (`30s`, `10m`).
+    pub fn text(&self) -> String {
+        serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| format!("{}ms", self.ms()))
+    }
 }
 
 impl JsonSchema for Dur {
@@ -283,12 +323,68 @@ impl Serialize for Dur {
 }
 
 impl<'de> Deserialize<'de> for Dur {
+    /// Positive, like TQS durations: `0s` is refused (only an [`Interval`] may be off).
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         tqs::parse_duration_ms(&s)
             .map(|ms| Dur(Duration::from_millis(ms as u64)))
-            .ok_or_else(|| serde::de::Error::custom(format!("bad duration {s:?} (use ms, s, m, h, d, w)")))
+            .ok_or_else(|| serde::de::Error::custom(format!("bad duration {s:?} (use ms, s, m, h, d, w; greater than 0)")))
     }
+}
+
+/// A [`Dur`] that may also be `0s`, meaning "never" (the fleet intervals).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interval(pub Duration);
+
+impl Interval {
+    pub fn is_off(&self) -> bool {
+        self.0.is_zero()
+    }
+
+    pub fn text(&self) -> String {
+        if self.is_off() { "0s".into() } else { Dur(self.0).text() }
+    }
+}
+
+impl JsonSchema for Interval {
+    fn schema_name() -> Cow<'static, str> {
+        "Interval".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type": "string", "pattern": "^[0-9]+(ms|s|m|h|d|w)$", "description": "Duration: ms, s, m, h, d, w, e.g. 30s; 0s = never", "examples": ["30s", "0s"]})
+    }
+}
+
+impl Serialize for Interval {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.text())
+    }
+}
+
+impl<'de> Deserialize<'de> for Interval {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        if s.strip_prefix('0').is_some_and(|u| ["ms", "s", "m", "h", "d", "w"].contains(&u)) {
+            return Ok(Interval(Duration::ZERO));
+        }
+        tqs::parse_duration_ms(&s)
+            .map(|ms| Interval(Duration::from_millis(ms as u64)))
+            .ok_or_else(|| serde::de::Error::custom(format!("bad interval {s:?} (use ms, s, m, h, d, w; 0s = never)")))
+    }
+}
+
+/// Region and id name an object storage prefix (`<region>/<id>/`) and a manifest
+/// (`_fleet/<id>.json`): one path segment, never `_fleet`.
+pub fn check_id(key: &str, v: &str) -> Result<()> {
+    if v.is_empty()
+        || v == "."
+        || v == ".."
+        || v == "_fleet"
+        || !v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        bail!("{key} {v:?} names an object storage prefix: use letters, digits, '.', '_' and '-' only (not '.', '..' or '_fleet')");
+    }
+    Ok(())
 }
 
 fn merge(base: &mut Value, over: Value) {
@@ -319,7 +415,8 @@ impl Config {
     }
 
     pub fn from_layers(file: Option<&str>, env: &[(String, String)]) -> Result<Config> {
-        let mut v: Value = serde_norway::from_str(DEFAULT_YAML).context("embedded config/default.yaml")?;
+        let defaults: Value = serde_norway::from_str(DEFAULT_YAML).context("embedded config/default.yaml")?;
+        let mut v = defaults.clone();
         if let Some(text) = file {
             let over: Value = serde_norway::from_str(text).context("parsing config file")?;
             if !over.is_null() {
@@ -338,7 +435,20 @@ impl Config {
                 slot = m.get_mut(&key).expect("checked");
             }
             // Parse as YAML so numbers/bools/lists keep their type.
-            *slot = serde_norway::from_str(val).unwrap_or(Value::String(val.clone()));
+            *slot = if val.trim().is_empty() {
+                Value::String(val.clone())
+            } else {
+                serde_norway::from_str(val).unwrap_or(Value::String(val.clone()))
+            };
+        }
+        // Region and id name the node's object prefix: empty or null means "not set", never `//`.
+        for key in ["id", "region"] {
+            let unset = |x: Option<&Value>| x.is_none_or(|x| x.is_null() || x.as_str().is_some_and(|s| s.trim().is_empty()));
+            if unset(v.get("node").and_then(|n| n.get(key)))
+                && let (Some(d), Some(Value::Mapping(node))) = (defaults.get("node").and_then(|n| n.get(key)), v.get_mut("node"))
+            {
+                node.insert(Value::String(key.into()), d.clone());
+            }
         }
         let cfg: Config = serde_norway::from_value(v).context("invalid configuration")?;
         cfg.check()?;
@@ -346,6 +456,31 @@ impl Config {
     }
 
     fn check(&self) -> Result<()> {
+        check_id("node.id", &self.node.id)?;
+        check_id("node.region", &self.node.region)?;
+        let f = &self.fleet;
+        if self.catalog.url.starts_with("postgres:") && !(f.publish_interval.is_off() && f.refresh_interval.is_off()) {
+            bail!(
+                "catalog.url is a postgres: catalog, but a fleet publishes and reads DuckDB catalog files: set fleet.publish_interval \
+                 and fleet.refresh_interval to 0s (a fleet needs the file catalog)"
+            );
+        }
+        // A reader drops a copy older than grace - 2 × refresh_interval - query.timeout; this keeps
+        // that cutoff at least publish_interval + refresh_interval (a copy is at most one publish
+        // interval old when listed, and a refresh takes at most one refresh interval), so a live
+        // publisher is never dropped.
+        let need = f.publish_interval.0 + 3 * f.refresh_interval.0 + self.query.timeout.0;
+        if self.coordinator.snapshot_grace.0 < need {
+            bail!(
+                "coordinator.snapshot_grace ({}) must be at least fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout \
+                 ({} + 3 × {} + {} = {}): another node may still be reading a catalog copy that names the files older snapshots referenced",
+                self.coordinator.snapshot_grace.text(),
+                f.publish_interval.text(),
+                f.refresh_interval.text(),
+                self.query.timeout.text(),
+                Dur(need).text()
+            );
+        }
         if self.query.workers == 0 || self.duckdb.threads == 0 {
             bail!("query.workers and duckdb.threads must be > 0");
         }
@@ -368,6 +503,25 @@ impl Config {
             std::sync::LazyLock::new(|| regex::Regex::new(r"(password=)\S+|(://[^:/@]+:)[^@]+(@)").expect("static regex"));
         c.catalog.url = PW.replace_all(&c.catalog.url, "${1}${2}<redacted>${3}").into_owned();
         serde_norway::to_string(&c).unwrap_or_else(|e| format!("<config not printable: {e}>"))
+    }
+
+    /// Settings that work but are likely not what was meant; logged at start.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut out = vec![];
+        let (i, c, f) = (&self.ingest, &self.coordinator, &self.fleet);
+        // Rows of another node reach this one at most this late; a materialized step stored before
+        // they arrive is recomputed when they do (see fleet.rs), which costs a recompute each time.
+        let lag = i.flush_interval.0 + c.checkpoint_interval.0 + f.publish_interval.0 + f.refresh_interval.0;
+        if !f.refresh_interval.is_off() && self.materialize.settle.0 < lag {
+            out.push(format!(
+                "materialize.settle ({}) is shorter than the worst-case lag of another node's rows (ingest.flush_interval + \
+                 coordinator.checkpoint_interval + fleet.publish_interval + fleet.refresh_interval = {}): materialized panels \
+                 store steps before every node's rows for them arrived and recompute them when the rows show up",
+                self.materialize.settle.text(),
+                Dur(lag).text()
+            ));
+        }
+        out
     }
 
     pub fn is_s3(&self) -> bool {
@@ -454,10 +608,93 @@ mod tests {
 
     #[test]
     fn catalog_passwords_are_redacted() {
-        let c =
-            Config::from_layers(Some("catalog: { url: \"postgres:host=db user=te password=s3cret dbname=lake\" }\n"), &[]).expect("cfg");
+        let c = Config::from_layers(
+            Some("catalog: { url: \"postgres:host=db user=te password=s3cret dbname=lake\" }\nfleet: { publish_interval: 0s, refresh_interval: 0s }\n"),
+            &[],
+        )
+        .expect("cfg");
         let y = c.redacted_yaml();
         assert!(!y.contains("s3cret") && y.contains("password=<redacted>"), "{y}");
+    }
+
+    #[test]
+    fn empty_region_or_id_fall_back_to_the_defaults() {
+        for file in ["node: { id: '', region: '' }\n", "node:\n  id:\n  region:\n"] {
+            let c = Config::from_layers(Some(file), &[]).expect("empty is not an error");
+            assert_eq!((c.node.id.as_str(), c.node.region.as_str()), ("node-0", "local"), "{file}");
+        }
+        let env = [("TINY_EYE__NODE__ID".to_string(), "".to_string()), ("TINY_EYE__NODE__REGION".into(), " ".into())];
+        let c = Config::from_layers(None, &env).expect("empty env values are not an error");
+        assert_eq!((c.node.id.as_str(), c.node.region.as_str()), ("node-0", "local"));
+        let c = Config::from_layers(Some("node: { id: n-1, region: eu-west.2 }\n"), &[]).expect("set values are kept");
+        assert_eq!((c.node.id.as_str(), c.node.region.as_str()), ("n-1", "eu-west.2"));
+        for bad in [
+            "node: { id: a/b }",
+            "node: { region: '..' }",
+            "node: { region: 'eu west' }",
+            "node: { id: _fleet }",
+            "node: { region: _fleet }",
+        ] {
+            assert!(Config::from_layers(Some(bad), &[]).is_err(), "{bad}: not a single path segment");
+        }
+    }
+
+    #[test]
+    fn snapshot_grace_covers_publish_three_refreshes_and_query_timeout() {
+        let e = Config::from_layers(Some("coordinator: { snapshot_grace: 149s }\n"), &[]).expect_err("30s + 3 × 30s + 30s > 149s");
+        assert!(
+            format!("{e:#}").contains(
+                "coordinator.snapshot_grace (149s) must be at least fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout \
+                 (30s + 3 × 30s + 30s = 150s)"
+            ),
+            "{e:#}"
+        );
+        Config::from_layers(Some("coordinator: { snapshot_grace: 150s }\n"), &[]).expect("exactly the sum is enough");
+        let off = "fleet: { publish_interval: 0s, refresh_interval: 0s }\ncoordinator: { snapshot_grace: ";
+        Config::from_layers(Some(&format!("{off}30s }}\n")), &[]).expect("fleet off: only the query timeout counts");
+        assert!(Config::from_layers(Some(&format!("{off}29s }}\n")), &[]).is_err());
+        let reader = "fleet: { publish_interval: 0s, refresh_interval: 10s }\ncoordinator: { snapshot_grace: ";
+        Config::from_layers(Some(&format!("{reader}60s }}\n")), &[]).expect("a node that only reads: 3 × 10s + 30s");
+        assert!(Config::from_layers(Some(&format!("{reader}59s }}\n")), &[]).is_err());
+    }
+
+    #[test]
+    fn zero_is_refused_for_every_duration_but_the_fleet_intervals() {
+        for bad in [
+            "coordinator: { retention: 0s }",
+            "materialize: { resolution: 0s }",
+            "query: { timeout: 0s }",
+            "ingest: { flush_interval: 0ms }",
+            "coordinator: { checkpoint_interval: 0m }",
+            "coordinator: { snapshot_grace: 0s }",
+            "materialize: { settle: 0s }",
+        ] {
+            let e = Config::from_layers(Some(bad), &[]).expect_err(bad);
+            assert!(format!("{e:#}").contains("greater than 0"), "{bad}: {e:#}");
+        }
+        let c =
+            Config::from_layers(Some("fleet: { publish_interval: 0s, refresh_interval: 0ms }"), &[]).expect("fleet intervals may be off");
+        assert!(c.fleet.publish_interval.is_off() && c.fleet.refresh_interval.is_off());
+        let back = Config::from_layers(Some(&c.redacted_yaml()), &[]).expect("printed back as 0s");
+        assert!(back.fleet.publish_interval.is_off());
+    }
+
+    #[test]
+    fn a_postgres_catalog_needs_the_fleet_off() {
+        let pg = "catalog: { url: 'postgres:host=db dbname=lake' }\n";
+        let e = Config::from_layers(Some(pg), &[]).expect_err("fleet on by default");
+        assert!(format!("{e:#}").contains("set fleet.publish_interval and fleet.refresh_interval to 0s"), "{e:#}");
+        assert!(Config::from_layers(Some(&format!("{pg}fleet: {{ publish_interval: 0s }}\n")), &[]).is_err(), "refresh still on");
+        Config::from_layers(Some(&format!("{pg}fleet: {{ publish_interval: 0s, refresh_interval: 0s }}\n")), &[]).expect("fleet off");
+    }
+
+    #[test]
+    fn short_materialize_settle_warns_when_reading_other_nodes() {
+        assert!(Config::from_layers(None, &[]).expect("defaults").warnings().is_empty(), "defaults: 60s + 5s + 30s + 30s < 5m");
+        let c = Config::from_layers(Some("materialize: { settle: 2m }\n"), &[]).expect("valid");
+        assert!(c.warnings().iter().any(|w| w.contains("materialize.settle (2m)")), "{:?}", c.warnings());
+        let alone = Config::from_layers(Some("materialize: { settle: 2m }\nfleet: { refresh_interval: 0s }\n"), &[]).expect("valid");
+        assert!(alone.warnings().is_empty(), "no other node is read");
     }
 
     #[test]
