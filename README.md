@@ -13,8 +13,8 @@ disk or S3 and answers queries that return the same points as Prometheus.
   <img src="docs/assets/getting-started.gif" alt="Starting tiny-eye and the demo shop, then the web UI: a live dashboard, layout editing, Explore, a trace waterfall and log patterns" width="100%">
 </a>
 
-> **Pre-release.** Single-node mode works end to end and is tested against Prometheus. APIs may
-> still change; cluster mode is not built yet. See [Status](#status).
+> **Pre-release.** A node works end to end and is tested against Prometheus; several nodes can
+> share one bucket as a fleet. APIs and the storage layout may still change. See [Status](#status).
 
 ## How it works
 
@@ -66,6 +66,10 @@ The answer is the same as the raw query's. Details:
   incrementally (spec section 9.1): the same answer, 10–12× faster on long-range
   aggregations once the range is stored (2–4× for quantiles and gauges, none for a single series).
   See [Materialized panels](#materialized-panels) above.
+- **A fleet without a coordinator.** Point several nodes (one per region, or one on your laptop)
+  at the same bucket. Each publishes a small copy of its catalog there and queries the others'
+  copies, so any node answers over all their data. A node alone needs no setup.
+  See [Run a fleet](docs/examples/run-a-fleet.md).
 
 ## Quick start
 
@@ -136,19 +140,22 @@ The full docs are at **[tinnguyenhuuletrong.github.io/tiny-eye](https://tinnguye
 | | |
 | --- | --- |
 | Get started | [Quickstart](docs/getting-started/quickstart.md) · [Installation](docs/getting-started/installation.mdx) · [Concepts](docs/getting-started/concepts.md) |
-| Guides | [Demo shop](docs/examples/demo-shop.md) · [Sending data](docs/examples/sending-data.md) · [Query cookbook](docs/examples/query-cookbook.md) · [Dashboards as code](docs/examples/dashboards-as-code.md) · [AI agents (MCP)](docs/examples/ai-agents-mcp.md) |
+| Guides | [Demo shop](docs/examples/demo-shop.md) · [Sending data](docs/examples/sending-data.md) · [Query cookbook](docs/examples/query-cookbook.md) · [Dashboards as code](docs/examples/dashboards-as-code.md) · [AI agents (MCP)](docs/examples/ai-agents-mcp.md) · [Run a fleet](docs/examples/run-a-fleet.md) |
 | Concepts | [Architecture](docs/deep-dive/architecture.md) · [Write path](docs/deep-dive/write-path.md) · [Storage format](docs/deep-dive/storage-format.md) · [Query engine](docs/deep-dive/query-engine.md) · [Materialized panels](docs/deep-dive/materialized-panels.md) · [TQS reference](docs/deep-dive/tqs-reference.md) · [Configuration](docs/deep-dive/configuration.md) · [Operations](docs/deep-dive/operations.md) · [Security](docs/deep-dive/security.md) |
 | Reference | [HTTP API](docs/reference/http-api.md) · [MCP tools](docs/reference/mcp-tools.md) · [Editor grammars](docs/reference/editor-grammars.md) |
 
 ## Status
 
-**Works today (single node):** Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs
+**Works today:** Prometheus remote-write 1.0, OTLP/HTTP metrics, traces and logs
 (protobuf and JSON), Loki JSON push; WAL durability with replay; flush, checkpoint, compaction and
 retention; TQS 3 with Prometheus staleness semantics; YAML dashboards with save from the UI and
-materialized panels; the web UI; MCP; bearer-token scopes; self-metrics.
+materialized panels; the web UI; MCP; bearer-token scopes; self-metrics; a fleet of nodes sharing
+one bucket and querying each other's data.
 
-**Not built yet:** cluster mode, OTLP gRPC, Loki protobuf push, alerting, a Grafana data source,
-native histograms, span events and links. Full list:
+**Not built yet:** the spec's cluster roles (separate ingest and query nodes, a leased
+coordinator, other nodes' hot tails visible at once; the fleet sees another node's rows about
+2 minutes after it acknowledged them), separate buckets per region, OTLP gRPC, Loki protobuf push,
+alerting, a Grafana data source, native histograms, span events and links. Full list:
 [Limitations and roadmap](docs/deep-dive/limitations-and-roadmap.md).
 
 ## Evidence
@@ -164,6 +171,7 @@ Every claim comes from a test that can fail; reports are generated into
 | Ingest and query speed (8-core laptop, 2,620 series × 6 h) | `make bench` | remote-write [1.65 M samples/s](docs/deep-dive/evidence/bench-local.md); 6 h `sum by (rate)` 0.58 s; histogram p99 73 ms; trace by id 11 ms |
 | Materialized panels answer exactly what raw queries answer, faster | `crates/engine/tests/materialize.rs` (12 query shapes, late data, restarts) and `make bench` | 6 h `sum by (rate)`: [443 ms raw, 38 ms materialized, every point equal](docs/deep-dive/evidence/bench-local.md#materialized-panels) |
 | Trace lookups on S3 stay cheap | `make bench-s3` (MinIO) | absent trace id: [22 GETs before compaction, 2 after](docs/deep-dive/evidence/bench-s3.md) |
+| Nodes sharing a bucket answer like one node holding everything | `crates/engine/tests/fleet.rs` (queries over two nodes vs one node, freshness, retention within the grace, stale and duplicate nodes) and `make fleet-poc` (3 nodes on MinIO with added latency, measured with the proof of concept's read-only viewer) | pass; [every query equal to the single node, catalog copy 43 KB gzipped](docs/deep-dive/evidence/fleet-poc.md) |
 
 ## Development
 

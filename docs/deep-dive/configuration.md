@@ -25,16 +25,22 @@ Every section refuses unknown keys, so a typo never silently becomes a default:
 - an env var naming an unknown key fails with, for example, `env TINY_EYE__INGEST__NOPE: unknown key ingest.nope`;
 - a bad size or duration fails with `bad size "64XB" (use B, KB, MB, GB)` or `bad duration ... (use ms, s, m, h, d, w)`.
 
-After parsing, two checks run: `query.workers` and `duckdb.threads` must be greater than 0, and so must `ingest.flush_bytes` and `ingest.row_group_rows`.
+After parsing, these checks run:
+
+- `node.id` and `node.region` name an object-storage prefix, so they may hold only letters, digits, `.`, `_` and `-` (and may not be `.` or `..`). An empty or null value falls back to the default (`node-0`, `local`), so it never makes an empty path segment.
+- `coordinator.snapshot_grace` must be at least `fleet.publish_interval + fleet.refresh_interval + query.timeout` (see [`fleet`](#fleet)).
+- `query.workers` and `duckdb.threads` must be greater than 0, and so must `ingest.flush_bytes` and `ingest.row_group_rows`.
+
+One more check only warns. When the node reads other nodes' data (`fleet.refresh_interval` is not `0s`) and `materialize.settle` is shorter than `ingest.flush_interval + coordinator.checkpoint_interval + fleet.publish_interval + fleet.refresh_interval`, the start logs a warning: materialized panels may store steps before every node's rows for them have arrived.
 
 ### Sizes and durations
 
 | Kind | Grammar | Examples |
 | :--- | :--- | :--- |
 | Size | whole number followed by `B`, `KB`, `MB` or `GB` (powers of 1024) | `512KB`, `64MB`, `1GB` |
-| Duration | positive whole number followed by `ms`, `s`, `m`, `h`, `d` or `w` | `250ms`, `60s`, `10m`, `15d` |
+| Duration | whole number followed by `ms`, `s`, `m`, `h`, `d` or `w` | `250ms`, `60s`, `10m`, `15d`, `0s` |
 
-Durations use the same grammar as TQS durations. Fractions and combined units (`1h30m`) are not accepted. `duckdb.memory_limit` is passed to DuckDB as text (for example `4GB`).
+Durations use the same grammar as TQS durations, plus zero (`0s`), which the `fleet` intervals read as "never". Fractions and combined units (`1h30m`) are not accepted. `duckdb.memory_limit` is passed to DuckDB as text (for example `4GB`).
 
 ## Keys
 
@@ -42,8 +48,8 @@ Durations use the same grammar as TQS durations. Fractions and combined units (`
 
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
-| `node.id` | string | `node-0` | Unique node id; part of every data file name and envelope key. |
-| `node.region` | string | `local` | Region label stamped on every ingested row; envelopes are written under `commits/<region>/`. |
+| `node.id` | string | `node-0` | Node id, unique among the nodes sharing `storage.url`. Part of every data file name, and second part of the node's object prefix `<region>/<id>/`. Letters, digits, `.`, `_`, `-`; empty falls back to the default. |
+| `node.region` | string | `local` | Region label stamped on every ingested row and part of each series' identity. First part of the node's object prefix. Same characters as `node.id`; empty falls back to the default. |
 | `node.tenant` | string | `default` | Tenant stamped on every row and used in data file keys (single tenant in v1). |
 
 ### `server`
@@ -56,7 +62,7 @@ Durations use the same grammar as TQS durations. Fractions and combined units (`
 
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
-| `storage.url` | string | `./data/objects` | Where Parquet files and commit envelopes go: a relative path, `file:///abs/dir`, or `s3://bucket/prefix`. |
+| `storage.url` | string | `./data/objects` | Root of the object store: a relative or absolute path, `file:///abs/dir`, or `s3://bucket/prefix`. The node writes under `<node.region>/<node.id>/` of it; nodes of a [fleet](../examples/run-a-fleet.md) share one root. |
 | `storage.s3.endpoint` | string | `""` | Empty for AWS; for example `http://127.0.0.1:19000` for MinIO (path-style requests). |
 | `storage.s3.region` | string | `us-east-1` | S3 region. |
 | `storage.s3.access_key_id` | string, secret | `""` | Prefer the env var `TINY_EYE__STORAGE__S3__ACCESS_KEY_ID`. |
@@ -69,7 +75,7 @@ The S3 keys apply only when `storage.url` starts with `s3://`. DuckDB reads S3 o
 
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
-| `catalog.url` | string | `./data/catalog.ducklake` | DuckLake catalog: a DuckDB file path (single node) or `postgres:<libpq conninfo>` (cluster). The parent directory of a file path is created. |
+| `catalog.url` | string | `./data/catalog.ducklake` | This node's DuckLake catalog: a DuckDB file path or `postgres:<libpq conninfo>`. The parent directory of a file path is created. Every node has its own catalog, also in a fleet. |
 
 ### `duckdb`
 
@@ -102,6 +108,25 @@ The S3 keys apply only when `storage.url` starts with `s3://`. DuckDB reads S3 o
 | `coordinator.compaction_delay` | duration | `10m` | Compact an hour this long after it closes. |
 | `coordinator.retention` | duration | `15d` | Data older than this is deleted. |
 | `coordinator.retention_interval` | duration | `1h` | How often retention runs. |
+| `coordinator.snapshot_grace` | duration | `10m` | A catalog snapshot is expired, and the files only it names are deleted, once a newer snapshot has existed this long. Must be at least `fleet.publish_interval + fleet.refresh_interval + query.timeout`. Other nodes skip a manifest older than this. |
+
+### `fleet`
+
+Nodes that share `storage.url` find each other there and answer queries over all their data. A node alone finds only itself and works as before. See [Run a fleet](../examples/run-a-fleet.md).
+
+| Key | Type | Default | Meaning |
+| :--- | :--- | :--- | :--- |
+| `fleet.publish_interval` | duration | `30s` | Publish a copy of this node's catalog (`<region>/<id>/_fleet/catalog.ducklake.gz` and the manifest `_fleet/<id>.json`) this often. `0s` = never: other nodes do not see this node. |
+| `fleet.refresh_interval` | duration | `30s` | Look for the other nodes' copies this often, download the changed ones and query them with this node's data. `0s` = never. |
+| `fleet.dir` | path | `./data/fleet` | Local directory for downloaded copies, one subdirectory per node id, emptied at start. |
+
+`coordinator.snapshot_grace` must cover `publish_interval + refresh_interval + query.timeout` (90 s with the defaults), otherwise the start fails:
+
+```text
+coordinator.snapshot_grace (1m) must be at least fleet.publish_interval + fleet.refresh_interval + query.timeout (30s + 30s + 30s = 90s): another node may still be reading a catalog copy that names the files older snapshots referenced
+```
+
+With both intervals at `0s`, only `query.timeout` counts.
 
 ### `query`
 

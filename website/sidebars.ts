@@ -25,7 +25,7 @@ const sidebars: SidebarsConfig = {
     group(
       "Guides",
       "guides",
-      "Worked examples: a demo shop end to end, TQS recipes, sending data from common agents, AI agents over MCP, and dashboards as code.",
+      "Worked examples: a demo shop end to end, TQS recipes, sending data from common agents, AI agents over MCP, dashboards as code, and several nodes as a fleet.",
       [
         doc("examples/demo-shop", "Run the demo shop"),
         doc("examples/sending-data", "Send data"),
@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
         doc("examples/dashboards-as-code", "Build dashboards as code"),
         doc("examples/ai-agents-mcp", "Connect an AI agent"),
         doc("examples/assistant-machine", "Let an assistant run your machine"),
+        doc("examples/run-a-fleet", "Run a fleet"),
       ],
     ),
     group("Concepts", "concepts", "How tiny-eye works inside, for engineers: every mechanism, why it is built that way, and what proves it.", [

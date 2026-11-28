@@ -133,11 +133,11 @@ Any `</data` inside the body is escaped as `<\/data`, so telemetry cannot close 
 ## What is not built
 
 - **TLS.** The server speaks plain HTTP. Terminate TLS at a reverse proxy or load balancer.
-- **mTLS between nodes.** Only single-node mode exists (cluster is milestone M3).
+- **mTLS between nodes.** Not needed so far: the nodes of a [fleet](../examples/run-a-fleet.md) never talk to each other, they only share the bucket. Every node needs read access to the whole `storage.url` and write access to its own `<region>/<id>/` prefix and to `_fleet/`; object-storage permissions are the only boundary between them.
 - **Multi-tenant isolation.** One tenant per node (`node.tenant`); tokens are not tied to a tenant (spec question Q8).
 - **Token features.** No expiry, no rotation without restart, no per-token rate limits, no audit log.
 - **CORS.** No CORS headers are sent; the UI is served from the same origin.
-- **Read-only laptop mode** with a tenant-scoped object-storage key, and **erasure** (rewriting files to delete data).
+- **Read-only laptop mode** with a tenant-scoped object-storage key (a laptop can run a normal fleet node, which needs the same access as any node), and **erasure** (rewriting files to delete data).
 - **Dependency licence checks** in CI.
 
 See [Limitations and roadmap](limitations-and-roadmap.md).

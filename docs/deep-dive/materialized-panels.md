@@ -716,7 +716,11 @@ points start again. `coordinator.retention` deletes stored points older than the
   step) plus the point at `to`. A raw query's grid starts at `from`. Both give the same value at
   the same timestamp.
 - **Node-local.** The store belongs to one node. A late sample is noticed by the node that
-  ingests it — the only node today.
+  ingests it. In a [fleet](../examples/run-a-fleet.md) a node's panels also cover the other
+  nodes' rows, which arrive up to `ingest.flush_interval + coordinator.checkpoint_interval +
+  fleet.publish_interval + fleet.refresh_interval` late (about 2 minutes with the defaults). They
+  are counted only if they arrive before the step is stored, so keep `settle` longer than that.
+  The start logs a warning when it is shorter.
 - **The UI's ranges.** 1 h, 6 h, 24 h and 7 d read from the store; 15 min does not (5 s step).
   Any other range does when its step is a multiple of 15 s.
 - **Not the spec's partials.** Spans and logs measures, and percentiles merged across regions,

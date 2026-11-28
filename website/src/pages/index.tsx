@@ -38,6 +38,11 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
     text: "Mark a panel materialize: true; long-range reads use stored points, up to 12× faster on aggregations, same answer.",
     anchor: "materialized-panels-maintained-incrementally",
   },
+  {
+    title: "A fleet without a coordinator",
+    text: "Nodes that share a bucket query each other's published catalogs; any node answers over all of them.",
+    anchor: "nodes-share-a-bucket-not-a-coordinator",
+  },
 ];
 
 const PROOF = [

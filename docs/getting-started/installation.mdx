@@ -155,25 +155,37 @@ With the default config, everything lives under `./data` (git-ignored):
 data/
   wal/                      write-ahead log segments (durability: wal)
   catalog.ducklake          DuckLake catalog (a DuckDB file) and its .wal
+  materialized.duckdb       points of materialized panels (derived, safe to delete)
+  fleet/node-0/             other nodes' catalog copies, when nodes share storage (emptied at start)
   objects/                  the object store root (storage.url)
-    metrics_series/tenant=default/date=2026-11-21/hour=00/l0-<ulid>-node-0.parquet
-    metrics_points/tenant=default/date=2026-11-21/hour=15/l0-<ulid>-node-0.parquet
-    spans/...               same layout
-    logs/...                same layout
-    commits/local/...json   flush envelopes waiting for the checkpointer (deleted once applied)
-    lake/                   DuckLake's own data path
+    local/node-0/           this node's own prefix: <node.region>/<node.id>/
+      metrics_series/tenant=default/date=2026-11-21/hour=00/l0-<ulid>-node-0.parquet
+      metrics_points/tenant=default/date=2026-11-21/hour=15/l0-<ulid>-node-0.parquet
+      spans/...             same layout
+      logs/...              same layout
+      commits/<epoch>-<seq>.json   flush envelopes waiting for the checkpointer (deleted once applied)
+      lake/                 DuckLake's own data path
+      _fleet/catalog.ducklake.gz   the catalog copy this node publishes
+    _fleet/node-0.json      the manifest pointing at that copy
 ```
 
 Files are partitioned by table, tenant, date and hour. `l0-` files come from flushes; hourly
-compaction replaces them with `l1-…-compacted.parquet` files. The full key layout is in
-[Storage format](../deep-dive/storage-format.md).
+compaction replaces them with `l1-…-compacted.parquet` files. Every object sits under the node's
+own prefix, so several nodes can share one `storage.url` ([Run a fleet](../examples/run-a-fleet.md)).
+The full key layout is in [Storage format](../deep-dive/storage-format.md).
+
+:::warning[Layout changed]
+Builds before the fleet wrote objects at the root of `storage.url` and envelopes under
+`commits/<region>/`. Data written by those builds is not read and is not migrated. Start from an
+empty `./data`.
+:::
 
 `make clean` removes build output, `./data` and `.state`.
 
 ## Store data on S3 or MinIO
 
-Set `storage.url` to `s3://bucket/prefix`. The catalog (`catalog.url`) stays a local file in
-single-node mode.
+Set `storage.url` to `s3://bucket/prefix`. The catalog (`catalog.url`) stays a local file. Several
+nodes can share one bucket and query each other's data; see [Run a fleet](../examples/run-a-fleet.md).
 
 For a local MinIO, `make s3-up` starts one on `127.0.0.1:19000` (console on `:19001`) with user
 `tinyeye`, password `tinyeye-secret` and a bucket named `tiny-eye`:

@@ -13,12 +13,14 @@ tiny-eye's rule is "proven, not claimed": each behaviour has a test that can fai
 | Unit tests | `#[cfg(test)]` modules in `crates/*/src` | `make test` | Config layering, typo refusal and redaction; receivers (remote-write round trip, staleness markers, OTLP JSON, redaction, Loki); log masking; TQS validator rules; dashboard save/load; auth scope table; MCP tool schemas |
 | Proof of concept | `crates/engine/tests/poc.rs` | `make poc` (also in `make test`) | The storage assumptions the engine builds on, on this machine |
 | Node integration | `crates/engine/tests/node.rs` | `make test` | The write path end to end, durability and overload |
+| Fleet | `crates/engine/tests/fleet.rs` | `make test` | Nodes sharing one storage directory answer like one node that received everything; retention, stale manifests, duplicate ids |
 | Conformance | `crates/tqs/tests/conformance/` (needs the `mutants` feature, so not part of `make test`) | `make conformance` | TQS equals Prometheus 3.16 point by point; spans/logs/traces equal an independent computation; validation codes; a mutation check |
 | End to end | `crates/server/tests/e2e.rs` | `make e2e` (also in `make test`) | The whole binary equals Prometheus on remote-written data spread over every storage state |
 | OpenAPI drift | `crates/server/tests/openapi.rs` | `make test` | The TQS JSON Schema and the Rust validator agree |
 | Schema golden | `crates/server/tests/schemas.rs` | `make test` | Generated grammars are current; config and dashboard files match their schemas |
 | Dashboards round trip | `crates/server/tests/dashboards.rs` | `make test` | UI edits round-trip through the API and the YAML file |
 | Benchmark | `crates/server/src/bin/bench.rs` | `make bench`, `make bench-s3` | Ingest, write path, query and trace-lookup numbers for one machine |
+| Fleet proof of concept | `crates/server/src/bin/fleet.rs` | `make fleet-poc` (MinIO) | Publish, refresh and query cost of nodes reading each other's catalog copies, against one node holding everything |
 | Profile (manual) | `crates/server/tests/profile.rs` | `cargo test --release -p server --test profile -- --ignored --nocapture` | Prints DuckDB `EXPLAIN ANALYZE` for a heavy panel; not a behaviour test |
 
 `make tools` must have run once: the tests load the pinned DuckDB extensions from `.tools/duckdb_ext`, and the conformance and e2e suites start the pinned Prometheus from `.tools/`.
@@ -71,6 +73,20 @@ The suite in `crates/tqs/tests/conformance/` builds deterministic, Margince-shap
 
 See [API and code generation](api-and-codegen.md).
 
+### Fleet (`fleet.rs`)
+
+Nodes run in one process with their own `node.id`, region, catalog and WAL, over one shared storage directory (see [Run a fleet](../examples/run-a-fleet.md)).
+
+| Test | Proves |
+| :--- | :--- |
+| `fleet_answers_like_one_node_that_received_everything` | After publish and refresh, rate, per-series, gauge, table, spans and trace queries on either of two nodes equal those of one node that received all the data; `freshness_s` and the fleet self-metrics are set; objects sit under `<region>/<id>/` with manifests in `_fleet/` |
+| `other_nodes_rows_show_after_publish_and_refresh_own_rows_at_once` | A node's own rows are visible once acknowledged; another node's only after its flush, checkpoint and publish and this node's refresh; a replaced copy stays attached for `query.timeout`, then is detached and deleted |
+| `a_node_alone_is_unchanged` | A node alone keeps the single-node views and answers, `freshness_s` 0, and writes under `local/node-0/` by default |
+| `retention_on_one_node_keeps_copies_readable_within_the_grace` | Within `coordinator.snapshot_grace` after a compaction, retention keeps the files another node's copy names; past it they are deleted and the stale manifest is skipped. Fails with the old "older than 10 minutes" expiry rule |
+| `identical_label_sets_on_two_nodes` | One label set in two regions is two series (aggregations add them); in one region it is one series |
+| `a_second_process_with_the_same_node_id_is_detected` | Two processes with one `node.id`: the overwritten one fails its next publish with a message naming the id |
+| `ducklake_metadata_database_keeps_its_name` | DuckLake's internal metadata database, which publishing copies, still has the name the code uses (spec Q19) |
+
 ### Benchmark (`make bench`, `make bench-s3`)
 
 `tiny-eye-bench` runs a real node in process behind its HTTP API: a remote-write backfill with 4 concurrent clients, flush and checkpoint, panels on L0, compaction, panels on L1, panels over the hot tail, then OTLP traces and trace lookups by id before and after compaction (with S3, GET requests are counted from DuckDB's HTTP log). `make bench-s3` starts MinIO on port 19000 first (`make s3-up`). Reports: [local disk](evidence/bench-local.md), [MinIO](evidence/bench-s3.md).
@@ -87,7 +103,8 @@ See [API and code generation](api-and-codegen.md).
 | End to end | 20/20 panels equal to Prometheus | [End to end](evidence/e2e.md) |
 | Benchmark, local disk | about 1.65 M samples/s remote-write; 6 h `sum by (rate)` panel about 0.58 s p50 | [Local disk](evidence/bench-local.md) |
 | Benchmark, MinIO | same ingest rate; absent trace id needs 2 GETs after compaction (22 before) | [MinIO](evidence/bench-s3.md) |
-| PoC, node, contract tests | pass (run by `make test`) | none |
+| Fleet proof of concept, MinIO | 3 nodes' catalog copies of 43 KB gzipped each; queries over the copies equal one node holding everything | [Fleet proof of concept](evidence/fleet-poc.md) |
+| PoC, node, fleet, contract tests | pass (run by `make test`) | none |
 
 The evidence pages are generated; rerun the target to refresh them.
 

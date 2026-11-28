@@ -430,9 +430,9 @@ Pass a `time` range with `kind: trace`. Without it, the lookup probes every span
 | :--- | :--- |
 | `tqs` | always `"3"` |
 | `id` | the document's `id` |
-| `snapshot_id` | the DuckLake snapshot the query read |
-| `freshness_s` | always `0`: every read includes the hot tail, so acknowledged rows are visible |
-| `partial_regions` | always empty (single region) |
+| `snapshot_id` | this node's own DuckLake snapshot the query read |
+| `freshness_s` | age in seconds of the oldest catalog copy of another node sharing storage that the query read; `0` when the node is alone. The node's own rows are visible once acknowledged (see [Run a fleet](../examples/run-a-fleet.md#what-each-node-sees-and-how-fresh)) |
+| `partial_regions` | always empty |
 | `series` | `timeseries` and `table`: one entry per (output, key), ordered by output, then key; `points` are `[epoch_ms, value]` ordered by time |
 | `rows` | list kinds: one object per row, column to text |
 | `rows_total` | `timeseries`/`table`: number of points across all series; list kinds: number of rows returned |
@@ -442,7 +442,7 @@ Pass a `time` range with `kind: trace`. Without it, the lookup probes every span
 `output` is the name of the query or formula that produced the series. Hidden queries produce no series. Steps without a value have no point (they are gaps, not `null`).
 
 :::note Implementation differs from the spec
-The spec's response also lists `bytes_scanned`; it is not implemented. `elapsed_ms` and `rows` are additions. `freshness_s` and `partial_regions` are constants in single-node mode.
+The spec's response also lists `bytes_scanned`; it is not implemented. `elapsed_ms` and `rows` are additions. `partial_regions` is always empty, also when a fleet node skips another node whose manifest is too old.
 :::
 
 An invalid document returns `400` with `{"valid": false, "problems": [...]}`. A query that fails while running (for example the timeout) returns `500` with a plain-text message. `POST /api/v1/validate` always returns `200` with `{"valid": ..., "problems": [...]}`.
