@@ -364,14 +364,13 @@ async fn run(a: Args) -> Result<()> {
 
     let mut md = String::new();
     writeln!(md, "# Share-nothing fleet — proof of concept\n")?;
+    md.push_str(&shared::run_block());
     writeln!(
         md,
         "Every node keeps its own DuckLake catalog and object prefix and publishes a copy of its catalog; a read-only viewer \
          attaches all copies and queries them as one. Compared against a baseline node that holds every region's data in one \
-         catalog. Storage: {}. Machine: {} logical CPUs, {}. DuckDB {duck_version}.\n",
+         catalog. Storage: {}. DuckDB {duck_version}.\n",
         if s3 { "MinIO on the same host (S3 API, ~1 ms per request)" } else { "local disk" },
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
-        std::env::consts::OS,
     )?;
 
     // ------------------------------------------------------------------ 1. ingest

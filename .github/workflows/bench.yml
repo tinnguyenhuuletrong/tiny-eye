@@ -1,0 +1,52 @@
+name: bench
+# Runs every benchmark (`make bench-all`) on a GitHub-hosted runner, the same machine type every
+# time, so reports compare run to run. The reports in docs/deep-dive/evidence/ are committed through
+# a pull request that this workflow opens and merges itself. Each report starts with a run block
+# (date, commit, runner, link to the run): the proof of the run. `make bench-all` locally writes the
+# same reports, stamped "local machine".
+#
+# Needs: Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests".
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the report branch, merge the pull request
+  pull-requests: write # open the pull request
+  actions: write # start the pages workflow: a push made with GITHUB_TOKEN starts no workflow
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with: { node-version: 20, cache: npm, cache-dependency-path: ui/package-lock.json }
+      - run: make tools ui
+      - run: make bench-all
+      - name: Open and merge a pull request with the reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain -- docs/deep-dive/evidence)" ]; then echo "reports unchanged"; exit 0; fi
+          branch="bench/run-${GITHUB_RUN_ID}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add docs/deep-dive/evidence
+          git commit -m "Benchmark reports for ${GITHUB_SHA::10} (run ${GITHUB_RUN_ID})"
+          git push origin "$branch"
+          url=$(gh pr create --base main --head "$branch" \
+            --title "Benchmark reports for ${GITHUB_SHA::10}" \
+            --body "Reports from \`make bench-all\` on a GitHub-hosted \`ubuntu-latest\` runner, commit ${GITHUB_SHA}. Run: ${run_url}. Opened and merged by .github/workflows/bench.yml.")
+          gh pr merge "$url" --squash --delete-branch
+          gh workflow run pages.yml --ref main

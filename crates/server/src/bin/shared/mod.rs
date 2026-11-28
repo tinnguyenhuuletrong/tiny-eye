@@ -276,3 +276,51 @@ pub fn traces_request(rng: &mut StdRng, n: usize, from_ns: i64, to_ns: i64) -> (
 pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
+
+/// Where and when this report was produced, as a block at the top of the report: the proof of
+/// one run. GitHub Actions runs link to the run; a local run says so and names the machine.
+pub fn run_block() -> String {
+    let sh = |cmd: &str, args: &[&str]| -> String {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
+    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    let commit = sh("git", &["rev-parse", "--short=10", "HEAD"]);
+    let dirty = if sh("git", &["status", "--porcelain", "--untracked-files=no"]).is_empty() { "" } else { " (uncommitted changes)" };
+    let (cpu, mem_bytes) = if cfg!(target_os = "macos") {
+        (sh("sysctl", &["-n", "machdep.cpu.brand_string"]), sh("sysctl", &["-n", "hw.memsize"]).parse::<u64>().unwrap_or(0))
+    } else {
+        let info = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+        let cpu = info.lines().find_map(|l| l.strip_prefix("model name").map(|v| v.trim_start_matches([' ', '\t', ':']).to_string()));
+        let mem = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let kb =
+            mem.lines().find_map(|l| l.strip_prefix("MemTotal:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok());
+        (cpu.unwrap_or_default(), kb.unwrap_or(0) * 1024)
+    };
+    let where_ = if env("GITHUB_ACTIONS") == "true" {
+        format!(
+            "GitHub Actions, `{}` runner ([run {}]({}/{}/actions/runs/{}))",
+            env("RUNNER_OS").to_lowercase(),
+            env("GITHUB_RUN_ID"),
+            env("GITHUB_SERVER_URL"),
+            env("GITHUB_REPOSITORY"),
+            env("GITHUB_RUN_ID")
+        )
+    } else {
+        "local machine".to_string()
+    };
+    format!(
+        "> **Run:** {} UTC · commit `{commit}`{dirty} · {where_} · {} logical CPUs ({}), {:.0} GB RAM, {}\n\n",
+        sh("date", &["-u", "+%Y-%m-%d %H:%M"]),
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+        if cpu.is_empty() { "unknown CPU" } else { &cpu },
+        mem_bytes as f64 / (1u64 << 30) as f64,
+        std::env::consts::OS,
+    )
+}

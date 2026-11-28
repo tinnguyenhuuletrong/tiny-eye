@@ -19,6 +19,7 @@ tiny-eye's rule is "proven, not claimed": each behaviour has a test that can fai
 | Schema golden | `crates/server/tests/schemas.rs` | `make test` | Generated grammars are current; config and dashboard files match their schemas |
 | Dashboards round trip | `crates/server/tests/dashboards.rs` | `make test` | UI edits round-trip through the API and the YAML file |
 | Benchmark | `crates/server/src/bin/bench.rs` | `make bench`, `make bench-s3` | Ingest, write path, query and trace-lookup numbers for one machine |
+| Fleet proof of concept | `crates/server/src/bin/fleet.rs` | `make fleet-poc` | Independent nodes, each with its own catalog, give the same answers as one node when read together |
 | Profile (manual) | `crates/server/tests/profile.rs` | `cargo test --release -p server --test profile -- --ignored --nocapture` | Prints DuckDB `EXPLAIN ANALYZE` for a heavy panel; not a behaviour test |
 
 `make tools` must have run once: the tests load the pinned DuckDB extensions from `.tools/duckdb_ext`, and the conformance and e2e suites start the pinned Prometheus from `.tools/`.
@@ -75,6 +76,23 @@ See [API and code generation](api-and-codegen.md).
 
 `tiny-eye-bench` runs a real node in process behind its HTTP API: a remote-write backfill with 4 concurrent clients, flush and checkpoint, panels on L0, compaction, panels on L1, panels over the hot tail, then OTLP traces and trace lookups by id before and after compaction (with S3, GET requests are counted from DuckDB's HTTP log). `make bench-s3` starts MinIO on port 19000 first (`make s3-up`). Reports: [local disk](evidence/bench-local.md), [MinIO](evidence/bench-s3.md).
 
+### Where the benchmarks run (`make bench-all`)
+
+`make bench-all` runs `make bench`, `make bench-s3` and `make fleet-poc` one after the other. It needs Docker for MinIO.
+
+- **Every Monday on GitHub Actions.** The `bench` workflow (`.github/workflows/bench.yml`) runs `make bench-all` on a GitHub-hosted `ubuntu-latest` runner. Every run uses the same machine type, so reports can be compared week to week. The workflow opens a pull request with the new reports and merges it itself. You can also start it by hand from the Actions tab (**Run workflow**).
+- **On your machine.** `make bench-all` writes the same reports. Commit them only if the numbers are meant to replace the CI ones.
+
+Every report starts with a run block, the proof of that run:
+
+```text
+> **Run:** 2026-11-28 10:30 UTC · commit `448c00e9bf` · local machine · 8 logical CPUs (Apple M1 Pro), 16 GB RAM, macos
+```
+
+On GitHub Actions, `local machine` becomes the runner and a link to the run. `(uncommitted changes)` after the commit means the code had local edits.
+
+The workflow needs one repository setting: **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**.
+
 ## What CI runs
 
 `.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu with stable Rust: `make tools`, `make lint` (rustfmt check, clippy with warnings as errors), `make test`, `make conformance`. `make check` runs `lint`, `test` and `conformance` locally. The benchmarks are not run in CI.
@@ -87,6 +105,7 @@ See [API and code generation](api-and-codegen.md).
 | End to end | 20/20 panels equal to Prometheus | [End to end](evidence/e2e.md) |
 | Benchmark, local disk | about 1.65 M samples/s remote-write; 6 h `sum by (rate)` panel about 0.58 s p50 | [Local disk](evidence/bench-local.md) |
 | Benchmark, MinIO | same ingest rate; absent trace id needs 2 GETs after compaction (22 before) | [MinIO](evidence/bench-s3.md) |
+| Fleet proof of concept, MinIO | 9/9 queries equal to one node across 6 viewer setups; downloading catalog copies refreshes in 0.25 s at 50 ms round trip | [Fleet](evidence/fleet-poc.md) |
 | PoC, node, contract tests | pass (run by `make test`) | none |
 
 The evidence pages are generated; rerun the target to refresh them.
