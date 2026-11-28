@@ -158,6 +158,119 @@ fn files_under(dir: &Path, prefix: &str) -> usize {
     n
 }
 
+fn errors(n: &Node) -> u64 {
+    n.metrics.fleet_errors.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Metric points `n` queries read: (all, from outside region `us`).
+async fn points(n: &Arc<Node>) -> (i64, i64) {
+    n.with_conn(|c| {
+        Ok(c.query_row("SELECT count(*), count(*) FILTER (WHERE region <> 'us') FROM metrics_points", [], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?)
+    })
+    .await
+    .unwrap()
+}
+
+/// A node's published copy and manifest, to publish changed versions of in its place.
+struct Copy {
+    original: Vec<u8>,
+    manifest: serde_json::Value,
+    objects: std::path::PathBuf,
+    scratch: std::path::PathBuf,
+    region: String,
+    id: String,
+}
+
+impl Copy {
+    fn of(shared: &Path, scratch: &Path, region: &str, id: &str) -> Copy {
+        let objects = shared.join("objects");
+        std::fs::create_dir_all(scratch).unwrap();
+        Copy {
+            original: std::fs::read(objects.join(fleet::catalog_key(region, id))).unwrap(),
+            manifest: serde_json::from_slice(&std::fs::read(objects.join(fleet::manifest_key(id))).unwrap()).unwrap(),
+            objects,
+            scratch: scratch.to_path_buf(),
+            region: region.into(),
+            id: id.into(),
+        }
+    }
+
+    /// `gz` as the copy, and the manifest naming it under snapshot id `snapshot`, published now.
+    fn publish_bytes(&self, snapshot: i64, gz: &[u8]) {
+        std::fs::write(self.objects.join(fleet::catalog_key(&self.region, &self.id)), gz).unwrap();
+        let mut m = self.manifest.clone();
+        m["snapshot_id"] = snapshot.into();
+        m["published_at_ms"] = now_ms().into();
+        std::fs::write(self.objects.join(fleet::manifest_key(&self.id)), serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+
+    /// The copy changed by `edit` (on the copy attached as DuckLake `x`, or as the plain metadata
+    /// database `r` when `raw`), published under snapshot id `snapshot`.
+    fn publish(&self, snapshot: i64, raw: bool, edit: &dyn Fn(&duckdb::Connection)) {
+        let settings = engine::duck::DuckSettings {
+            extension_dir: concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext").into(),
+            threads: 1,
+            memory_limit: "512MB".into(),
+        };
+        let file = self.scratch.join(format!("copy-{snapshot}.ducklake"));
+        let mut bytes = vec![];
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&self.original[..]), &mut bytes).unwrap();
+        std::fs::write(&file, bytes).unwrap();
+        let conn = engine::duck::open(&settings).unwrap();
+        let f = file.display();
+        if raw {
+            conn.execute_batch(&format!("ATTACH '{f}' AS r (TYPE duckdb)")).unwrap();
+        } else {
+            conn.execute_batch(&format!("ATTACH 'ducklake:{f}' AS x")).unwrap();
+        }
+        edit(&conn);
+        conn.execute_batch(if raw { "DETACH r" } else { "DETACH x" }).unwrap();
+        drop(conn);
+        self.publish_bytes(snapshot, &gzip(&std::fs::read(&file).unwrap()));
+    }
+
+    /// The untouched copy under snapshot id `snapshot`.
+    fn restore(&self, snapshot: i64) {
+        self.publish_bytes(snapshot, &self.original);
+    }
+}
+
+fn gzip(b: &[u8]) -> Vec<u8> {
+    let mut gz = flate2::write::GzEncoder::new(vec![], flate2::Compression::fast());
+    std::io::Write::write_all(&mut gz, b).unwrap();
+    gz.finish().unwrap()
+}
+
+/// `b` refuses the copy published last: counted once, logged and counted once per snapshot (not
+/// downloaded again), nothing of it reaches a query (`own`: what `b` reads alone), and its file is
+/// gone. `r`: the test root.
+async fn refused(b: &Arc<Node>, own: (i64, i64), r: &Path, what: &str) {
+    let before = errors(b);
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 0, "{what}: refused");
+    assert_eq!(errors(b), before + 1, "{what}: counted once");
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 0, "{what}: still refused");
+    assert_eq!(errors(b), before + 1, "{what}: logged and counted once per snapshot");
+    assert_eq!(points(b).await, own, "{what}: nothing of the copy reaches a query");
+    assert_eq!(files_under(&r.join("node-b/fleet/node-b"), "fleet_"), 0, "{what}: detached and deleted");
+}
+
+/// A data file of `node` (under `<objects>/<region>/<node>/metrics_points`).
+fn a_data_file(objects: &Path, region: &str, node: &str) -> std::path::PathBuf {
+    let mut stack = vec![objects.join(region).join(node).join("metrics_points")];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(d).unwrap().flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else {
+                return e.path();
+            }
+        }
+    }
+    panic!("no data file of {node}")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fleet_answers_like_one_node_that_received_everything() {
     let root = tempfile::tempdir().unwrap();
@@ -425,11 +538,31 @@ async fn duplicate_node_id_the_newest_process_publishes() {
     y.publish().await.expect("a restarted node is not held back by its earlier process");
     assert_eq!(manifest_epoch(&shared), y.epoch);
     assert!(x.publish().await.is_err());
+
+    // A stopped process with a later epoch (its host's clock ran ahead, then stepped back): once
+    // its manifest has not been written for the grace, it no longer holds the running one back.
+    let shared3 = root.path().join("shared3");
+    let z = open_as(&shared3, "z").await.unwrap();
+    let file = shared3.join("objects").join(fleet::manifest_key("dup"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let dead = serde_json::json!({"format": fleet::FORMAT, "epoch": z.epoch + 3_600_000});
+    std::fs::write(&file, serde_json::to_vec(&dead).unwrap()).unwrap();
+    assert!(z.publish().await.is_err(), "a later epoch written just now holds it back");
+    let grace = z.cfg.coordinator.snapshot_grace.0;
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - grace - std::time::Duration::from_secs(60))
+        .unwrap();
+    z.publish().await.expect("a manifest not written for the grace is a stopped process's");
+    assert_eq!(manifest_epoch(&shared3), z.epoch);
 }
 
-/// Item: copies come from shared storage, so anyone who can write there can write one. A copy
-/// that would run code, read files outside its publisher's prefix, does not match this node's
-/// tables, or is too large, never reaches a query; nor does a manifest that does not name itself.
+/// Copies come from shared storage, so anyone who can write there can write one. A copy that
+/// would run code, read files outside its publisher's prefix, does not match this node's tables,
+/// is not a catalog at all, or is too large, never reaches a query; nor does a manifest that does
+/// not name itself.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn untrusted_copies_are_refused_before_any_query_reads_them() {
     let root = tempfile::tempdir().unwrap();
@@ -444,72 +577,15 @@ async fn untrusted_copies_are_refused_before_any_query_reads_them() {
     }
     a.publish().await.unwrap();
     let objects = shared.join("objects");
-    let copy_path = objects.join(fleet::catalog_key("eu", "node-a"));
-    let original = std::fs::read(&copy_path).unwrap();
-    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(objects.join(fleet::manifest_key("node-a"))).unwrap()).unwrap();
-    let points = |n: Arc<Node>| async move {
-        n.with_conn(|c| {
-            Ok(c.query_row("SELECT count(*), count(*) FILTER (WHERE region <> 'us') FROM metrics_points", [], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            })?)
-        })
-        .await
-        .unwrap()
-    };
-    let own = points(b.clone()).await;
+    let copy = Copy::of(&shared, &r.join("scratch"), "eu", "node-a");
+    let own = points(&b).await;
     assert_eq!(own.1, 0);
-    let errors = |n: &Node| n.metrics.fleet_errors.load(std::sync::atomic::Ordering::Relaxed);
     // A local file of B's that a copy must never get to read.
     let secret = r.join("secret.txt");
     std::fs::write(&secret, "SECRET-7f3a").unwrap();
 
-    // A's copy changed by `edit` (on the copy attached as DuckLake `x`, or as the plain metadata
-    // database `r`), published under a new snapshot id in A's manifest.
-    let scratch = r.join("scratch");
-    std::fs::create_dir_all(&scratch).unwrap();
-    let settings = engine::duck::DuckSettings {
-        extension_dir: concat!(env!("CARGO_MANIFEST_DIR"), "/../../.tools/duckdb_ext").into(),
-        threads: 1,
-        memory_limit: "512MB".into(),
-    };
-    let publish_tampered = |snapshot: i64, raw: bool, edit: &dyn Fn(&duckdb::Connection)| {
-        let file = scratch.join(format!("copy-{snapshot}.ducklake"));
-        let mut bytes = vec![];
-        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&original[..]), &mut bytes).unwrap();
-        std::fs::write(&file, bytes).unwrap();
-        let conn = engine::duck::open(&settings).unwrap();
-        let f = file.display();
-        if raw {
-            conn.execute_batch(&format!("ATTACH '{f}' AS r (TYPE duckdb)")).unwrap();
-        } else {
-            conn.execute_batch(&format!("ATTACH 'ducklake:{f}' AS x")).unwrap();
-        }
-        edit(&conn);
-        conn.execute_batch(if raw { "DETACH r" } else { "DETACH x" }).unwrap();
-        drop(conn);
-        let mut gz = flate2::write::GzEncoder::new(vec![], flate2::Compression::fast());
-        std::io::Write::write_all(&mut gz, &std::fs::read(&file).unwrap()).unwrap();
-        std::fs::write(&copy_path, gz.finish().unwrap()).unwrap();
-        let mut m = manifest.clone();
-        m["snapshot_id"] = snapshot.into();
-        m["published_at_ms"] = now_ms().into();
-        std::fs::write(objects.join(fleet::manifest_key("node-a")), serde_json::to_vec(&m).unwrap()).unwrap();
-    };
-    let refused = |what: &'static str| {
-        let b = b.clone();
-        let before = errors(&b);
-        async move {
-            assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 0, "{what}: refused");
-            assert_eq!(errors(&b), before + 1, "{what}: counted once");
-            assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 0, "{what}: still refused");
-            assert_eq!(errors(&b), before + 1, "{what}: logged and counted once per snapshot");
-            assert_eq!(points(b.clone()).await, own, "{what}: nothing of the copy reaches a query");
-            assert_eq!(files_under(&r.join("node-b/fleet/node-b"), "fleet_"), 0, "{what}: detached and deleted");
-        }
-    };
-
     // metrics_points as a DuckLake view that reads a local file (same columns as the table).
-    publish_tampered(1001, false, &|c| {
+    copy.publish(1001, false, &|c| {
         let cols: Vec<(String, String)> = c
             .prepare("SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'x' AND table_name = 'metrics_points' ORDER BY column_index")
             .unwrap()
@@ -528,7 +604,7 @@ async fn untrusted_copies_are_refused_before_any_query_reads_them() {
         ))
         .unwrap();
     });
-    refused("a DuckLake view").await;
+    refused(&b, own, r, "a DuckLake view").await;
     let leaked: i64 = b
         .with_conn(|c| {
             Ok(c.query_row("SELECT count(*) FROM metrics_points WHERE tenant LIKE 'SECRET%' OR region LIKE 'SECRET%'", [], |r| r.get(0))?)
@@ -537,61 +613,191 @@ async fn untrusted_copies_are_refused_before_any_query_reads_them() {
         .unwrap();
     assert_eq!(leaked, 0);
     // A view in the metadata database itself (DuckLake would run it while reading the catalog).
-    publish_tampered(1002, true, &|c| {
+    copy.publish(1002, true, &|c| {
         c.execute_batch(&format!("CREATE VIEW r.main.ducklake_extra AS SELECT content FROM read_text('{}')", secret.display())).unwrap()
     });
-    refused("a view in the metadata database").await;
-    // A data file outside A's prefix, reached through `..`.
-    let b_file = {
-        let mut found = None;
-        let mut stack = vec![objects.join("us/node-b/metrics_points")];
-        while let Some(d) = stack.pop() {
-            for e in std::fs::read_dir(d).unwrap().flatten() {
-                if e.path().is_dir() {
-                    stack.push(e.path());
-                } else {
-                    found = Some(e.path());
-                }
-            }
-        }
-        found.unwrap()
-    };
+    refused(&b, own, r, "a view in the metadata database").await;
+    // Data files outside A's prefix: through `..`, next to it (a prefix of A's prefix is not
+    // A's), and in another node's prefix.
+    let b_file = a_data_file(&objects, "us", "node-b");
     let canon = std::fs::canonicalize(&objects).unwrap();
-    let sneaky =
-        format!("{}/eu/node-a/../../us/node-b/{}", canon.display(), b_file.strip_prefix(objects.join("us/node-b")).unwrap().display());
-    publish_tampered(1003, false, &|c| {
-        c.execute_batch(&format!("CALL ducklake_add_data_files('x', 'metrics_points', '{sneaky}')")).unwrap()
-    });
-    refused("a data file outside the publisher's prefix").await;
+    let rel = b_file.strip_prefix(objects.join("us/node-b")).unwrap();
+    let sneaky = format!("{}/eu/node-a/../../us/node-b/{}", canon.display(), rel.display());
+    let beside = canon.join("eu/node-a-evil").join(rel);
+    std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+    std::fs::copy(&b_file, &beside).unwrap();
+    let others = canon.join("us/node-b").join(rel);
+    for (snapshot, file, what) in [
+        (1003, sneaky, "a data file reached through .."),
+        (1004, beside.display().to_string(), "a data file in a directory named like A's prefix"),
+        (1005, others.display().to_string(), "a data file in another node's prefix"),
+    ] {
+        copy.publish(snapshot, false, &|c| {
+            c.execute_batch(&format!("CALL ducklake_add_data_files('x', 'metrics_points', '{file}')")).unwrap()
+        });
+        refused(&b, own, r, what).await;
+    }
     // Tables that differ from this node's.
-    publish_tampered(1004, false, &|c| c.execute_batch("CREATE TABLE x.extra (a INTEGER)").unwrap());
-    refused("an extra table").await;
+    copy.publish(1006, false, &|c| c.execute_batch("CREATE TABLE x.extra (a INTEGER)").unwrap());
+    refused(&b, own, r, "an extra table").await;
+    // Not a catalog: not gzip, and gzip of something that is not a DuckDB file. Refused for what
+    // they hold, so not downloaded again for the same snapshot.
+    copy.publish_bytes(1007, b"not gzip at all");
+    refused(&b, own, r, "a copy that is not gzip").await;
+    copy.publish_bytes(1008, &gzip(&[7u8; 100_000]));
+    refused(&b, own, r, "a copy that is not a DuckDB file").await;
 
-    // Too large once unpacked, for a node that allows less.
-    std::fs::write(&copy_path, &original).unwrap();
-    let mut m = manifest.clone();
-    m["snapshot_id"] = 1005.into();
-    m["published_at_ms"] = now_ms().into();
-    std::fs::write(objects.join(fleet::manifest_key("node-a")), serde_json::to_vec(&m).unwrap()).unwrap();
+    // Too large, for nodes that allow less: once unpacked, and already compressed.
+    copy.restore(1009);
     let small = open(&shared, r, "node-s", "us", &[("FLEET__MAX_COPY_BYTES", "64KB")]).await;
+    assert!(copy.original.len() < 64 * 1024, "compressed it fits: {} bytes", copy.original.len());
     assert_eq!(small.refresh_fleet(now_ms()).await.unwrap(), 0, "a copy that unpacks to more than fleet.max_copy_bytes");
     assert_eq!(errors(&small), 1);
+    let tiny = open(&shared, r, "node-t", "us", &[("FLEET__MAX_COPY_BYTES", "1KB")]).await;
+    assert_eq!(tiny.refresh_fleet(now_ms()).await.unwrap(), 0, "a copy larger than fleet.max_copy_bytes compressed");
+    assert_eq!(errors(&tiny), 1);
 
     // The untouched copy is read: the refusals above were about what the copies held.
     assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1, "A's own copy");
-    let with_a = points(b.clone()).await;
+    let with_a = points(&b).await;
     assert!(with_a.1 > 0 && with_a.0 == own.0 + with_a.1);
 
     // Manifests that do not name themselves: node-x points at A's copy; node-y.json is a copy of
     // A's manifest (which would pass every check of the copy, and show A's rows twice).
     let before = errors(&b);
-    let mut x = manifest.clone();
+    let m: serde_json::Value = serde_json::from_slice(&std::fs::read(objects.join(fleet::manifest_key("node-a"))).unwrap()).unwrap();
+    let mut x = m.clone();
     x["node_id"] = "node-x".into();
     std::fs::write(objects.join(fleet::manifest_key("node-x")), serde_json::to_vec(&x).unwrap()).unwrap();
     std::fs::write(objects.join(fleet::manifest_key("node-y")), serde_json::to_vec(&m).unwrap()).unwrap();
     assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1, "only A: node-x points at A's copy, node-y.json names node-a");
     assert_eq!(errors(&b), before + 1, "one refresh, counted once");
-    assert_eq!(points(b.clone()).await, with_a, "A's rows once, not twice");
+    assert_eq!(points(&b).await, with_a, "A's rows once, not twice");
+}
+
+/// DuckLake reads its metadata database by table name, so anything else in it could run when it
+/// does: only `ducklake_*` tables in `main` pass, and every inlined-data table the catalog names
+/// must be one of them (DuckLake reads a missing one as a file).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_metadata_database_holds_only_ducklake_tables() {
+    let root = tempfile::tempdir().unwrap();
+    let (shared, r) = (root.path().join("shared"), root.path());
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    let b = open(&shared, r, "node-b", "us", &[]).await;
+    let end = end_ms();
+    a.ingest(data(&a, "eu", 1, 10, end)).await.unwrap();
+    a.flush_and_checkpoint().await.unwrap();
+    a.publish().await.unwrap();
+    let copy = Copy::of(&shared, &r.join("scratch"), "eu", "node-a");
+    let own = points(&b).await;
+    let secret = r.join("secret.csv");
+    std::fs::write(&secret, "a\nSECRET\n").unwrap();
+    let inlined = format!(
+        "INSERT INTO r.main.ducklake_inlined_data_tables SELECT table_id, '{}', 1 FROM r.main.ducklake_table WHERE table_name = 'metrics_points'",
+        secret.display()
+    );
+    let cases: Vec<(&str, String)> = vec![
+        ("a sequence", "CREATE SEQUENCE r.main.ducklake_seq".into()),
+        ("a table not named ducklake_*", "CREATE TABLE r.main.extra (a INTEGER)".into()),
+        ("a table in another schema", "CREATE SCHEMA r.s; CREATE TABLE r.s.ducklake_x (a INTEGER)".into()),
+        ("another schema", "CREATE SCHEMA r.s".into()),
+        ("a type", "CREATE TYPE r.main.ducklake_mood AS ENUM ('a', 'b')".into()),
+        ("an index", "CREATE INDEX ducklake_i ON r.main.ducklake_metadata (key)".into()),
+        ("a macro", "CREATE MACRO r.main.ducklake_m(v) AS v + 1".into()),
+        ("a table macro", "CREATE MACRO r.main.ducklake_tm() AS TABLE SELECT 1 AS a".into()),
+        ("a generated column", "CREATE TABLE r.main.ducklake_gen (a INTEGER, b INTEGER GENERATED ALWAYS AS (a + 1))".into()),
+        ("an inlined-data table that does not exist", inlined),
+    ];
+    for (i, (what, sql)) in cases.iter().enumerate() {
+        copy.publish(2001 + i as i64, true, &|c| c.execute_batch(sql).unwrap());
+        refused(&b, own, r, what).await;
+    }
+    // A DuckLake macro (DuckLake has no generated columns).
+    copy.publish(2100, false, &|c| c.execute_batch("CREATE MACRO x.m(v) AS v + 1").unwrap());
+    refused(&b, own, r, "a DuckLake macro").await;
+    copy.restore(2101);
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1, "the untouched copy passes");
+}
+
+/// A manifest is a few hundred bytes: a larger object is not read (a valid manifest with padding
+/// would otherwise pass), and the refusal is counted once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oversized_manifests_are_not_read() {
+    let root = tempfile::tempdir().unwrap();
+    let (shared, r) = (root.path().join("shared"), root.path());
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    let b = open(&shared, r, "node-b", "us", &[]).await;
+    let mut m = serde_json::to_value(a.publish().await.unwrap()).unwrap();
+    m["pad"] = "x".repeat(fleet::MAX_MANIFEST_BYTES as usize).into();
+    std::fs::write(shared.join("objects").join(fleet::manifest_key("node-a")), serde_json::to_vec(&m).unwrap()).unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 0, "skipped");
+    assert_eq!(errors(&b), 1, "counted");
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 0);
+    assert_eq!(errors(&b), 1, "counted once");
+    a.publish().await.unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+}
+
+/// A manifest that cannot be fetched is a passing failure: the node's attached copy stays while it
+/// is fresh, and each such refresh is counted.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_manifest_that_cannot_be_read_keeps_a_fresh_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let (shared, r) = (root.path().join("shared"), root.path());
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    let b = open(&shared, r, "node-b", "us", &[]).await;
+    let m = a.publish().await.unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    let file = shared.join("objects").join(fleet::manifest_key("node-a"));
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&file).is_ok() {
+        eprintln!("skipped: permissions do not apply to this user (root)");
+        return;
+    }
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1, "the attached copy is kept");
+    assert_eq!(errors(&b), 1, "counted");
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    assert_eq!(errors(&b), 2, "counted every time");
+    let stale = b.cfg.coordinator.snapshot_grace.ms() - 2 * 30_000 - 10_000;
+    assert_eq!(b.refresh_fleet(m.published_at_ms + stale + 1).await.unwrap(), 0, "until it is too old");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+/// A refresh whose listing fails still drops the copies past their stale time, and a publisher's
+/// clock running ahead cannot make its copy look younger than storage saw it written.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_listing_still_drops_stale_copies() {
+    let root = tempfile::tempdir().unwrap();
+    let (shared, r) = (root.path().join("shared"), root.path());
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    let b = open(&shared, r, "node-b", "us", &[]).await;
+    let end = end_ms();
+    a.ingest(data(&a, "eu", 1, 10, end)).await.unwrap();
+    a.flush_and_checkpoint().await.unwrap();
+    let m = a.publish().await.unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    let nodes = |n: &Node| n.metrics.fleet_nodes.load(std::sync::atomic::Ordering::Relaxed);
+    // B: grace 10m - 2 × 30s refresh - 10s query timeout.
+    let stale = b.cfg.coordinator.snapshot_grace.ms() - 2 * 30_000 - 10_000;
+    // A loop under _fleet/ makes the listing fail.
+    let fleet_dir = shared.join("objects/_fleet");
+    std::os::unix::fs::symlink(".", fleet_dir.join("loop")).unwrap();
+    assert!(b.refresh_fleet(m.published_at_ms + stale - 5_000).await.is_err(), "the listing fails");
+    assert_eq!((nodes(&b), errors(&b)), (1, 1), "A's copy is still fresh: kept");
+    assert!(b.refresh_fleet(m.published_at_ms + stale + 1).await.is_err());
+    assert_eq!((nodes(&b), errors(&b)), (0, 2), "past its stale time it is dropped all the same");
+    assert_eq!(points(&b).await.1, 0, "no view reads A's copy");
+    std::fs::remove_file(fleet_dir.join("loop")).unwrap();
+
+    // A publisher whose clock runs an hour ahead: the manifest's last-modified time counts.
+    let mut ahead = serde_json::to_value(&m).unwrap();
+    ahead["published_at_ms"] = (now_ms() + 3_600_000).into();
+    std::fs::write(fleet_dir.join("node-a.json"), serde_json::to_vec(&ahead).unwrap()).unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    assert_eq!(b.refresh_fleet(now_ms() + stale + 5_000).await.unwrap(), 0, "stale by the time storage saw it written");
 }
 
 /// Spec Q19: publishing copies DuckLake's internal metadata database by name. A DuckDB or
@@ -614,25 +820,28 @@ async fn ducklake_metadata_database_keeps_its_name() {
     assert!(root.path().join("shared/objects").join(&m.catalog_key).is_file());
 }
 
-/// A copy is read while it is younger than the smaller of the two grace periods minus this node's
-/// refresh interval and query timeout: past that the publisher may delete files it names before
-/// this node stops reading it.
+/// A copy is read while it is younger than the smaller of the two grace periods minus twice this
+/// node's refresh interval and its query timeout: past that the publisher may delete files it
+/// names before this node stops reading it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_copy_is_dropped_before_the_smaller_grace_can_run_out() {
     let root = tempfile::tempdir().unwrap();
     let (shared, r) = (root.path().join("shared"), root.path());
     let a = open(&shared, r, "node-a", "eu", &[("COORDINATOR__SNAPSHOT_GRACE", "3m")]).await;
     let b = open(&shared, r, "node-b", "us", &[]).await;
-    let c = open(&shared, r, "node-c", "us", &[("COORDINATOR__SNAPSHOT_GRACE", "100s")]).await;
+    let c = open(&shared, r, "node-c", "us", &[("COORDINATOR__SNAPSHOT_GRACE", "130s")]).await;
     let m = a.publish().await.unwrap();
     assert_eq!(m.snapshot_grace_ms, 180_000, "the publisher's grace is in the manifest");
-    // B (grace 10m): A's 3m - B's 30s refresh - B's 10s query timeout.
-    let limit = 180_000 - 30_000 - 10_000;
-    assert_eq!(b.refresh_fleet(m.published_at_ms + limit).await.unwrap(), 1);
+    // The time a refresh takes counts too (checked again just before the swap): a little slack
+    // on the near side.
+    let slack = 3_000;
+    // B (grace 10m): A's 3m - 2 × B's 30s refresh - B's 10s query timeout.
+    let limit = 180_000 - 2 * 30_000 - 10_000;
+    assert_eq!(b.refresh_fleet(m.published_at_ms + limit - slack).await.unwrap(), 1);
     assert_eq!(b.refresh_fleet(m.published_at_ms + limit + 1).await.unwrap(), 0, "past the publisher's grace");
-    // C (grace 100s, smaller than A's): C's own grace counts.
-    let limit = 100_000 - 30_000 - 10_000;
-    assert_eq!(c.refresh_fleet(m.published_at_ms + limit).await.unwrap(), 1);
+    // C (grace 130s, smaller than A's): C's own grace counts.
+    let limit = 130_000 - 2 * 30_000 - 10_000;
+    assert_eq!(c.refresh_fleet(m.published_at_ms + limit - slack).await.unwrap(), 1);
     assert_eq!(c.refresh_fleet(m.published_at_ms + limit + 1).await.unwrap(), 0, "past the reader's own grace");
 }
 
@@ -691,7 +900,9 @@ async fn a_broken_copy_never_keeps_the_views_on_stale_or_dropped_copies() {
     b.with_conn(|c| Ok(c.execute_batch("DETACH fleet_2")?)).await.unwrap();
     a.ingest(data(&a, "eu", 2, 10, end)).await.unwrap();
     a.flush_and_checkpoint().await.unwrap();
-    a.publish().await.unwrap();
+    // Well after C's copy, so a time can be found below at which C's is stale and this one not.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let a_published = a.publish().await.unwrap().published_at_ms;
     assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1, "the swap goes on with the copies that answer");
     assert_eq!(errors(&b), 1, "counted once");
     assert!(!view_sql(b.clone()).await.contains("fleet_2"), "no view names the dropped alias");
@@ -704,7 +915,9 @@ async fn a_broken_copy_never_keeps_the_views_on_stale_or_dropped_copies() {
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     a.with_conn(|c| Ok(c.execute_batch("ALTER TABLE lake.metrics_points DROP COLUMN is_stale")?)).await.unwrap();
     a.publish().await.unwrap();
-    let later = c_published + b.cfg.coordinator.snapshot_grace.ms() - 30_000 - 10_000 + 1;
+    let stale = b.cfg.coordinator.snapshot_grace.ms() - 2 * 30_000 - 10_000;
+    let later = a_published + stale - 1_500;
+    assert!(later > c_published + stale);
     let c_alias = "fleet_4";
     assert!(view_sql(b.clone()).await.contains(c_alias));
     assert_eq!(b.refresh_fleet(later).await.unwrap(), 1, "A's previous copy; C is stale");
@@ -776,6 +989,89 @@ async fn late_samples_on_another_node_recompute_materialized_steps() {
             assert!((x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0), "{k} at {t}: stored {x} vs raw {y}");
         }
     }
+}
+
+fn rate_panel() -> serde_json::Value {
+    serde_json::json!({"tqs": "3", "id": "p", "kind": "timeseries", "queries": [
+        {"name": "r", "metric": "reqs_total", "fn": {"op": "rate", "window": "5m"}, "agg": {"op": "sum", "by": ["job"]}}]})
+}
+
+/// Restarts recompute only what is new. Another node restarting with the same catalog (a new
+/// epoch, no new rows) rewinds nothing; nor does this node restarting, which keeps what its stored
+/// points include of each other node next to them (`materialize.path`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarts_do_not_recompute_stored_points() {
+    let root = tempfile::tempdir().unwrap();
+    let (shared, r) = (root.path().join("shared"), root.path());
+    let mat = r.join("node-b-panels.duckdb");
+    let mat_env = [("MATERIALIZE__PATH", mat.to_str().unwrap())];
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    let b = open(&shared, r, "node-b", "us", &mat_env).await;
+    let now = now_ms() / 15_000 * 15_000;
+    a.ingest(data(&a, "eu", 2, 160, now)).await.unwrap();
+    b.ingest(data(&b, "us", 1, 160, now)).await.unwrap();
+    for n in [&a, &b] {
+        n.flush_and_checkpoint().await.unwrap();
+    }
+    a.publish().await.unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    let panels = vec![("t/p".to_string(), rate_panel())];
+    b.set_materialized(panels.clone());
+    assert!(b.materialize_since(now - 30 * 60_000, now).await.unwrap() > 0, "steps stored");
+    assert_eq!(b.materialize(now).await.unwrap(), 0, "caught up");
+
+    // A restarts: a new epoch, the same catalog, nothing new.
+    let a_epoch = a.epoch;
+    drop(a);
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    assert!(a.epoch > a_epoch);
+    a.publish().await.unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    assert_eq!(b.materialize(now).await.unwrap(), 0, "A's restart shows no new rows: nothing is recomputed");
+
+    // B restarts.
+    drop(b);
+    let b = open(&shared, r, "node-b", "us", &mat_env).await;
+    b.set_materialized(panels.clone());
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    assert_eq!(b.materialize(now).await.unwrap(), 0, "B's stored points already include A's copy: nothing is recomputed");
+    let stored: i64 = b.with_conn(|c| Ok(c.query_row("SELECT count(*) FROM mat.panel_points", [], |r| r.get(0))?)).await.unwrap();
+    assert!(stored > 0);
+
+    // New rows of A for a stored step after both restarts are still noticed.
+    let mut late = data(&a, "eu", 1, 4, now - 20 * 60_000);
+    late.spans.clear();
+    for p in &mut late.points {
+        p.value += 1e6;
+    }
+    a.ingest(late).await.unwrap();
+    a.flush_and_checkpoint().await.unwrap();
+    a.publish().await.unwrap();
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1);
+    assert!(b.materialize(now).await.unwrap() > 0, "steps from A's new rows on are recomputed");
+}
+
+/// A data file without statistics says nothing about how old its rows are: stored steps are
+/// recomputed from the earliest one (no arithmetic on "the oldest possible time").
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_copy_without_file_statistics_recomputes_from_the_earliest_stored_step() {
+    let root = tempfile::tempdir().unwrap();
+    let (shared, r) = (root.path().join("shared"), root.path());
+    let a = open(&shared, r, "node-a", "eu", &[]).await;
+    let b = open(&shared, r, "node-b", "us", &[]).await;
+    let now = now_ms() / 15_000 * 15_000;
+    a.ingest(data(&a, "eu", 2, 160, now)).await.unwrap();
+    b.ingest(data(&b, "us", 1, 160, now)).await.unwrap();
+    for n in [&a, &b] {
+        n.flush_and_checkpoint().await.unwrap();
+    }
+    b.set_materialized(vec![("t/p".into(), rate_panel())]);
+    assert!(b.materialize_since(now - 30 * 60_000, now).await.unwrap() > 0, "steps stored");
+    a.publish().await.unwrap();
+    let copy = Copy::of(&shared, &r.join("scratch"), "eu", "node-a");
+    copy.publish(5001, true, &|c| c.execute_batch("DELETE FROM r.main.ducklake_file_column_stats").unwrap());
+    assert_eq!(b.refresh_fleet(now_ms()).await.unwrap(), 1, "a copy without statistics is valid");
+    assert!(b.materialize(now).await.expect("the rewind handles a time before every stored step") > 0, "recomputed");
 }
 
 /// A catalog written for another object prefix (node.region/node.id changed) is refused with a

@@ -241,8 +241,14 @@ flowchart LR
    node count as late data too: another node's late samples, a node that joins the fleet, or a
    node that comes back after a stop make the stored steps they touch recompute. The earliest new
    sample comes from the per-file statistics of the copy, so the manifest carries nothing extra.
-   A node joining (every other node, after a restart) recomputes all stored steps once. A node
-   leaving is not handled: steps already stored keep its rows.
+   Only files added since the copy the stored points already include count: same publisher
+   catalog (the uuid of its `main` schema), same or later snapshot, and still within the grace.
+   The node records that copy per other node in `mat.fleet_seen`, in the same transaction as the
+   rewind it caused, so another node's restart with the same catalog, or this node's own restart,
+   recomputes nothing that is not new. A node seen for the first time, a new catalog or a copy
+   older than the grace makes all stored steps recompute once, and so does a file without
+   statistics (the rewind starts at the earliest stored step). A node leaving is not handled:
+   steps already stored keep its rows.
 4. **Reads.** A `timeseries` query uses the store when all three hold:
    - its key matches a registered panel;
    - its step is a multiple of the resolution;

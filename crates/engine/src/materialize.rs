@@ -8,7 +8,10 @@
 //! A sample that arrives for a timestamp at or before the stored horizon (a sender's backlog
 //! after an outage, a retry) is noted by ingest, and so are another node's rows when its catalog
 //! copy is attached (see `fleet.rs`); the next tick deletes the stored points from that timestamp
-//! on and computes them again, so stored points never miss accepted data.
+//! on (from the earliest stored step when it is older) and computes them again, so stored points
+//! never miss accepted data. The same tick records which catalog copy of each other node the
+//! stored points now include (`mat.fleet_seen`), so a restart of this node recomputes only what
+//! was added since.
 //!
 //! A query whose document is a registered panel (ignoring `id`, `title` and `time`) and whose
 //! step is a multiple of the resolution, and that overlaps the stored range, is answered on the
@@ -16,19 +19,22 @@
 //! compiler for the rest. Every materializable output point depends only on its own timestamp
 //! (see `tqs::materialize_blocker`), so the answer equals the raw query at those timestamps.
 
+use crate::fleet::Seen;
 use crate::node::Node;
 use anyhow::Result;
 use duckdb::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tqs::compile::OutRow;
 
 pub(crate) const DDL: &str = "
 CREATE TABLE IF NOT EXISTS mat.panel_points (panel_id VARCHAR, output VARCHAR, key VARCHAR, t BIGINT, value DOUBLE);
 CREATE TABLE IF NOT EXISTS mat.panel_state (panel_id VARCHAR PRIMARY KEY, name VARCHAR, panel_key VARCHAR,
-    resolution_ms BIGINT, from_t BIGINT, to_t BIGINT, updated_ms BIGINT);";
+    resolution_ms BIGINT, from_t BIGINT, to_t BIGINT, updated_ms BIGINT);
+CREATE TABLE IF NOT EXISTS mat.fleet_seen (node_id VARCHAR PRIMARY KEY, catalog VARCHAR, snapshot_id BIGINT,
+    published_at_ms BIGINT, grace_ms BIGINT);";
 
 /// A panel being materialized.
 pub struct Panel {
@@ -65,11 +71,20 @@ pub struct Registry {
     cleaned: AtomicU64,
     /// Oldest timestamp of a sample ingested at or before the stored horizon; `i64::MAX` = none.
     late: AtomicI64,
+    /// Catalog copies of other nodes whose rows are noted in `late` but not yet in `mat.fleet_seen`:
+    /// written by the tick that rewinds for them (in the same transaction).
+    fleet_seen: Mutex<HashMap<String, Seen>>,
 }
 
 impl Default for Registry {
     fn default() -> Self {
-        Registry { panels: Default::default(), generation: AtomicU64::new(0), cleaned: AtomicU64::new(0), late: AtomicI64::new(i64::MAX) }
+        Registry {
+            panels: Default::default(),
+            generation: AtomicU64::new(0),
+            cleaned: AtomicU64::new(0),
+            late: AtomicI64::new(i64::MAX),
+            fleet_seen: Default::default(),
+        }
     }
 }
 
@@ -78,6 +93,32 @@ impl Registry {
     /// stored steps from here on are recomputed on the next tick.
     pub(crate) fn note_late(&self, ts_ms: i64) {
         self.late.fetch_min(ts_ms, Ordering::Relaxed);
+    }
+
+    /// A fleet refresh made other nodes' copies visible: `late` as for [`Registry::note_late`],
+    /// and the copies to record as included once the tick has rewound for them. One lock with the
+    /// tick's, so a copy is never recorded without its rewind.
+    pub(crate) fn note_fleet(&self, late: Option<i64>, seen: Vec<(String, Seen)>) {
+        let mut pending = self.fleet_seen.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = late {
+            self.note_late(t);
+        }
+        pending.extend(seen);
+    }
+
+    /// What the next tick rewinds for and records: (late, copies).
+    fn take_late(&self) -> (i64, Vec<(String, Seen)>) {
+        let mut pending = self.fleet_seen.lock().unwrap_or_else(|e| e.into_inner());
+        (self.late.swap(i64::MAX, Ordering::Relaxed), pending.drain().collect())
+    }
+
+    /// A tick that failed gives back what it took (newer copies noted meanwhile win).
+    fn give_back(&self, late: i64, seen: Vec<(String, Seen)>) {
+        let mut pending = self.fleet_seen.lock().unwrap_or_else(|e| e.into_inner());
+        self.note_late(late);
+        for (node, s) in seen {
+            pending.entry(node).or_insert(s);
+        }
     }
 }
 
@@ -136,12 +177,14 @@ fn fnv1a(s: &str) -> String {
     format!("{h:016x}")
 }
 
+/// Saturating at the ends of `i64`: a noted time may be "before everything" (`i64::MIN`).
 fn ceil_to(x: i64, step: i64) -> i64 {
-    x.div_euclid(step) * step + if x.rem_euclid(step) == 0 { 0 } else { step }
+    let f = floor_to(x, step);
+    if f == x { x } else { f.saturating_add(step) }
 }
 
 fn floor_to(x: i64, step: i64) -> i64 {
-    x.div_euclid(step) * step
+    x.div_euclid(step).saturating_mul(step)
 }
 
 fn run(conn: &Connection, doc: &tqs::Tqs, from_ms: i64, to_ms: i64, step_ms: i64) -> Result<Vec<OutRow>> {
@@ -236,9 +279,10 @@ impl Node {
         let cleanup = generation > 0 && generation != self.mat.cleaned.load(Ordering::Relaxed);
         // Before the first registration nothing is forgotten or rewound; the note waits (a restart
         // replays the WAL and notes its samples before the dashboards are loaded).
-        let late = if generation == 0 { i64::MAX } else { self.mat.late.swap(i64::MAX, Ordering::Relaxed) };
-        if cleanup || late != i64::MAX {
+        let (late, seen) = if generation == 0 { (i64::MAX, vec![]) } else { self.mat.take_late() };
+        if cleanup || late != i64::MAX || !seen.is_empty() {
             let keep = panels.iter().map(|p| format!("'{}'", p.id)).collect::<Vec<_>>().join(", ");
+            let seen_back = seen.clone();
             let r = self
                 .with_conn(move |conn| {
                     conn.execute_batch("BEGIN TRANSACTION")?;
@@ -250,14 +294,26 @@ impl Node {
                                 "DELETE FROM mat.panel_state WHERE {gone}; DELETE FROM mat.panel_points WHERE {gone};"
                             ))?;
                         }
-                        if late != i64::MAX {
+                        // Nothing stored: nothing to rewind.
+                        let earliest: Option<i64> = conn.query_row("SELECT min(from_t) FROM mat.panel_state", [], |r| r.get(0))?;
+                        if late != i64::MAX
+                            && let Some(earliest) = earliest
+                        {
                             // Steps at or after the late sample may have changed: drop them and end
-                            // the coverage just before the first one (empty when that is before from_t).
-                            let first = ceil_to(late, res);
+                            // the coverage just before the first one (empty when that is before
+                            // from_t). A time before every stored step counts from the earliest.
+                            let first = ceil_to(late.max(earliest), res);
                             conn.execute("DELETE FROM mat.panel_points WHERE t >= ?", [first])?;
                             conn.execute(
                                 "UPDATE mat.panel_state SET to_t = greatest(from_t, ?) - ? WHERE to_t >= ?",
                                 duckdb::params![first, res, first],
+                            )?;
+                        }
+                        for (node, s) in &seen {
+                            conn.execute(
+                                "INSERT INTO mat.fleet_seen VALUES (?, ?, ?, ?, ?) ON CONFLICT (node_id) DO UPDATE SET catalog = excluded.catalog,
+                                 snapshot_id = excluded.snapshot_id, published_at_ms = excluded.published_at_ms, grace_ms = excluded.grace_ms",
+                                duckdb::params![node, s.catalog, s.snapshot_id, s.published_at_ms, s.grace_ms],
                             )?;
                         }
                         Ok(())
@@ -275,9 +331,7 @@ impl Node {
                 Ok(()) if cleanup => self.mat.cleaned.store(generation, Ordering::Relaxed),
                 Ok(()) => {}
                 Err(e) => {
-                    if late != i64::MAX {
-                        self.mat.note_late(late); // retry on the next tick
-                    }
+                    self.mat.give_back(late, seen_back); // retry on the next tick
                     return Err(e.context("materialized panels: forgetting or rewinding"));
                 }
             }
@@ -482,6 +536,10 @@ mod tests {
         assert_eq!(ceil_to(31, 15), 45);
         assert_eq!(ceil_to(30, 15), 30);
         assert_eq!(floor_to(44, 15), 30);
+        // "Before everything" stays representable instead of overflowing.
+        assert_eq!(ceil_to(i64::MIN, 15_000), i64::MIN);
+        assert_eq!(floor_to(i64::MIN, 15_000), i64::MIN);
+        assert_eq!(ceil_to(-15_001, 15_000), -15_000);
         assert_eq!(fnv1a("x"), fnv1a("x"));
         assert_ne!(fnv1a("x"), fnv1a("y"));
     }

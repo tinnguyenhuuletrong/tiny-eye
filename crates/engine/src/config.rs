@@ -152,10 +152,10 @@ pub struct Coordinator {
     /// How often retention runs.
     pub retention_interval: Dur,
     /// A catalog snapshot is expired once a newer one has existed this long; only then are the
-    /// files no newer snapshot references deleted. At least `fleet.publish_interval + 2 ×
+    /// files no newer snapshot references deleted. At least `fleet.publish_interval + 3 ×
     /// fleet.refresh_interval + query.timeout`, so a catalog copy another node may still be
     /// reading never names a deleted file (readers drop a copy older than the smaller of their own
-    /// and the publisher's grace minus their refresh interval and query timeout).
+    /// and the publisher's grace minus twice their refresh interval and their query timeout).
     pub snapshot_grace: Dur,
 }
 
@@ -165,8 +165,8 @@ pub struct Fleet {
     /// Publish a copy of this node's catalog to `_fleet/` in object storage this often; `0s` = never.
     pub publish_interval: Interval,
     /// Look for the catalog copies of other nodes sharing `storage.url` this often and query their
-    /// data with this node's; `0s` = never. Copies too old to be safe are skipped (see
-    /// `coordinator.snapshot_grace`).
+    /// data with this node's; `0s` = never. A refresh gives up the listing and downloads not done
+    /// within this time. Copies too old to be safe are skipped (see `coordinator.snapshot_grace`).
     pub refresh_interval: Interval,
     /// Local directory for downloaded catalog copies: they live in `<dir>/<node.id>/` (this node's
     /// id), which is emptied at start.
@@ -465,13 +465,15 @@ impl Config {
                  and fleet.refresh_interval to 0s (a fleet needs the file catalog)"
             );
         }
-        // A reader drops a copy older than grace - refresh_interval - query.timeout; this keeps that
-        // cutoff at least publish_interval + refresh_interval, so a live publisher is never dropped.
-        let need = f.publish_interval.0 + 2 * f.refresh_interval.0 + self.query.timeout.0;
+        // A reader drops a copy older than grace - 2 × refresh_interval - query.timeout; this keeps
+        // that cutoff at least publish_interval + refresh_interval (a copy is at most one publish
+        // interval old when listed, and a refresh takes at most one refresh interval), so a live
+        // publisher is never dropped.
+        let need = f.publish_interval.0 + 3 * f.refresh_interval.0 + self.query.timeout.0;
         if self.coordinator.snapshot_grace.0 < need {
             bail!(
-                "coordinator.snapshot_grace ({}) must be at least fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout \
-                 ({} + 2 × {} + {} = {}): another node may still be reading a catalog copy that names the files older snapshots referenced",
+                "coordinator.snapshot_grace ({}) must be at least fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout \
+                 ({} + 3 × {} + {} = {}): another node may still be reading a catalog copy that names the files older snapshots referenced",
                 self.coordinator.snapshot_grace.text(),
                 f.publish_interval.text(),
                 f.refresh_interval.text(),
@@ -638,22 +640,22 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_grace_covers_publish_two_refreshes_and_query_timeout() {
-        let e = Config::from_layers(Some("coordinator: { snapshot_grace: 119s }\n"), &[]).expect_err("30s + 2 × 30s + 30s > 119s");
+    fn snapshot_grace_covers_publish_three_refreshes_and_query_timeout() {
+        let e = Config::from_layers(Some("coordinator: { snapshot_grace: 149s }\n"), &[]).expect_err("30s + 3 × 30s + 30s > 149s");
         assert!(
             format!("{e:#}").contains(
-                "coordinator.snapshot_grace (119s) must be at least fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout \
-                 (30s + 2 × 30s + 30s = 2m)"
+                "coordinator.snapshot_grace (149s) must be at least fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout \
+                 (30s + 3 × 30s + 30s = 150s)"
             ),
             "{e:#}"
         );
-        Config::from_layers(Some("coordinator: { snapshot_grace: 120s }\n"), &[]).expect("exactly the sum is enough");
+        Config::from_layers(Some("coordinator: { snapshot_grace: 150s }\n"), &[]).expect("exactly the sum is enough");
         let off = "fleet: { publish_interval: 0s, refresh_interval: 0s }\ncoordinator: { snapshot_grace: ";
         Config::from_layers(Some(&format!("{off}30s }}\n")), &[]).expect("fleet off: only the query timeout counts");
         assert!(Config::from_layers(Some(&format!("{off}29s }}\n")), &[]).is_err());
         let reader = "fleet: { publish_interval: 0s, refresh_interval: 10s }\ncoordinator: { snapshot_grace: ";
-        Config::from_layers(Some(&format!("{reader}50s }}\n")), &[]).expect("a node that only reads: 2 × 10s + 30s");
-        assert!(Config::from_layers(Some(&format!("{reader}49s }}\n")), &[]).is_err());
+        Config::from_layers(Some(&format!("{reader}60s }}\n")), &[]).expect("a node that only reads: 3 × 10s + 30s");
+        assert!(Config::from_layers(Some(&format!("{reader}59s }}\n")), &[]).is_err());
     }
 
     #[test]

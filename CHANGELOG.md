@@ -84,14 +84,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   a node alone answers as before. Another node's rows show up to about 2 minutes after they are
   acknowledged. Self-metrics `tiny_eye_fleet_nodes`, `tiny_eye_fleet_oldest_copy_age_seconds`,
   `tiny_eye_fleet_publishes_total` and `tiny_eye_fleet_errors_total` (failed publishes, failed
-  refreshes and rejected copies). When two processes use the same `node.id`, the newest wins and
-  the older stops publishing. Other nodes' catalog copies are untrusted: a copy is rejected when
-  its key or data files are outside the publisher's prefix, it is larger than
-  `fleet.max_copy_bytes` (new, default 256MB) decompressed, it holds views or macros, or its
-  tables differ from this build's schema. Manifests (format 2) carry the publisher's
-  `snapshot_grace_ms`, and readers use the smaller grace. Materialized panels recompute stored
-  steps when rows from another node become visible late. A `postgres:` catalog is refused with
-  non-zero fleet intervals; `_fleet` is not allowed as `node.id` or `node.region`.
+  refreshes and rejected manifests and copies). When two processes use the same `node.id`, the
+  newest wins and the older stops publishing until the newer one's manifest has not been written
+  for `coordinator.snapshot_grace`. Other nodes' manifests and catalog copies are untrusted: a
+  manifest larger than 64 KiB is not read, and a copy is rejected when its key or data files are
+  outside the publisher's prefix, it is larger than `fleet.max_copy_bytes` (new, default 256MB)
+  compressed or decompressed, it is not a gzipped DuckLake catalog, its metadata database holds
+  anything but DuckLake's own tables, it defines views or macros, or its tables differ from this
+  build's schema; a rejected copy is not downloaded again for the same snapshot. Manifests
+  (format 2) carry the publisher's `snapshot_grace_ms`; readers use the smaller grace, take the
+  earlier of the manifest's time and the bucket's as the publish time, and drop a copy that is too
+  old even when a refresh fails. A refresh gives up what it has not done within
+  `fleet.refresh_interval`, and a manifest that cannot be fetched keeps its node's fresh copy.
+  Materialized panels recompute stored steps when rows from another node become visible late,
+  counting only the files added since the copy they already include (kept in
+  `materialize.path`), so restarts of a node with the same catalog recompute nothing old. A
+  `postgres:` catalog is refused with non-zero fleet intervals; `_fleet` is not allowed as
+  `node.id` or `node.region`.
   Guide: "Run a fleet" (`docs/examples/run-a-fleet.md`).
 
 ### Changed
@@ -106,7 +115,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
   (still 0 on a node alone; it was always 0).
 - Retention expires a catalog snapshot once a newer one has existed for `coordinator.snapshot_grace`
   (default 10m, was a fixed 10 minutes after the snapshot was created), validated to cover
-  `fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout`. `0s` is accepted only for
+  `fleet.publish_interval + 3 × fleet.refresh_interval + query.timeout`. `0s` is accepted only for
   the two fleet intervals.
 - `--role` other than `all` says that only `--role all` exists and that several nodes run as a
   fleet.

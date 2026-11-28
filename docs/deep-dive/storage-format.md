@@ -147,15 +147,17 @@ Every `fleet.publish_interval`, a node publishes its catalog for the other nodes
 | :--- | :--- |
 | `format` | Version of the manifest and the copy (2). A node skips a manifest of another format with a warning |
 | `node_id`, `region` | The publisher. A node skips its own manifest |
-| `epoch` | Start time (ms) of the publishing process. A newer epoch under one's own id means a newer process uses the same `node.id`: the older process stops publishing |
+| `epoch` | Start time (ms) of the publishing process. A newer epoch under one's own id means a newer process uses the same `node.id`: the older process stops publishing, until that manifest has not been written for `coordinator.snapshot_grace` |
 | `snapshot_id` | The publisher's catalog snapshot the copy holds. The copy is uploaded again only when it changed; the manifest is rewritten at every publish |
-| `published_at_ms` | When the manifest was written, by the publisher's clock. `freshness_s` is computed from it |
+| `published_at_ms` | When the manifest was written, by the publisher's clock. A reader uses the earlier of this and the bucket's last-modified time; `freshness_s` is computed from that |
 | `snapshot_grace_ms` | The publisher's `coordinator.snapshot_grace`. A reader skips a manifest older than the smaller of this and its own grace |
 | `catalog_key` | Key of the gzipped copy, relative to `storage.url` |
 
 The copy is mostly empty DuckDB blocks: the proof of concept measured a 5.3 MB file that gzips to 43 to 74 KB for 6 hours of data at its scale, growing with the number of files in the catalog ([fleet proof of concept](evidence/fleet-poc.md)). The copy is made from DuckLake's metadata database by its internal name, `__ducklake_metadata_lake`. `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs` fails if a DuckDB or DuckLake upgrade renames it (spec question Q19).
 
-A reader downloads a changed copy to `<fleet.dir>/<node.id>/fleet_<n>.ducklake` and treats it as untrusted. It rejects the copy when `catalog_key` is not under the publisher's prefix, the copy is larger than `fleet.max_copy_bytes` (256 MB) decompressed, it holds views or macros, its tables or columns differ from this build's schema, or it names data files outside the publisher's prefix. A rejected copy is left out of answers and counted in `tiny_eye_fleet_errors_total` ([Run a fleet](../examples/run-a-fleet.md#copies-are-untrusted)).
+A manifest is at most 64 KiB (`fleet::MAX_MANIFEST_BYTES`); a larger one is not read. A reader downloads a changed copy to `<fleet.dir>/<node.id>/fleet_<n>.ducklake` and treats it as untrusted. It rejects the copy when `catalog_key` is not under the publisher's prefix, the copy is larger than `fleet.max_copy_bytes` (256 MB) compressed or decompressed, it is not a gzipped DuckLake catalog, its metadata database holds anything but `ducklake_*` tables in `main` (or names an inlined-data table it does not hold), it defines views or macros, its tables or columns differ from this build's schema, or it names data files outside the publisher's prefix. A rejected copy is left out of answers, counted in `tiny_eye_fleet_errors_total` once and not downloaded again for the same (node, epoch, snapshot) ([Run a fleet](../examples/run-a-fleet.md#copies-are-untrusted)).
+
+The materialized-panels database (`materialize.path`) keeps, per other node, the copy its stored points include: `mat.fleet_seen (node_id, catalog, snapshot_id, published_at_ms, grace_ms)`, where `catalog` is the uuid of the publisher's DuckLake `main` schema. A later copy of the same catalog only adds the files after that snapshot ([Materialized panels](materialized-panels.md)).
 
 ## Catalog tables
 

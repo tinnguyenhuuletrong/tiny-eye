@@ -102,13 +102,15 @@ impl Store {
         Ok(self.inner.get(&self.path(key)).await.with_context(|| format!("GET {key}"))?.bytes().await?)
     }
 
-    /// GET, unless the object is larger than `max` bytes (`None`; the body is not read).
-    pub async fn get_at_most(&self, key: &str, max: u64) -> Result<Option<Bytes>> {
+    /// GET with the object's last-modified time (unix ms), unless the object is larger than
+    /// `max` bytes (`None`; the body is not read).
+    pub async fn get_at_most(&self, key: &str, max: u64) -> Result<Option<(Bytes, i64)>> {
         let r = self.inner.get(&self.path(key)).await.with_context(|| format!("GET {key}"))?;
         if r.meta.size > max {
             return Ok(None);
         }
-        Ok(Some(r.bytes().await?))
+        let modified = r.meta.last_modified.timestamp_millis();
+        Ok(Some((r.bytes().await.with_context(|| format!("GET {key}"))?, modified)))
     }
 
     pub async fn delete(&self, key: &str) -> Result<()> {
@@ -194,6 +196,19 @@ mod tests {
         assert_eq!(root.list("eu/").await.unwrap(), vec!["eu/n1/commits/x.json".to_string()]);
         assert_eq!(node.url("k"), format!("{}/eu/n1/k", root.url_prefix));
         assert_eq!(node.key_of(&node.url("a/b")).as_deref(), Some("a/b"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn get_at_most_skips_larger_objects_without_reading_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = format!("storage: {{ url: {} }}\n", dir.path().display());
+        let s = Store::from_config(&Config::from_layers(Some(&yaml), &[]).unwrap()).unwrap();
+        s.put("k", Bytes::from(vec![7u8; 100])).await.unwrap();
+        assert!(s.get_at_most("k", 99).await.unwrap().is_none(), "one byte over");
+        let (b, modified) = s.get_at_most("k", 100).await.unwrap().expect("exactly the limit");
+        assert_eq!(b.len(), 100);
+        assert!((modified - crate::node::now_ms()).abs() < 60_000, "last-modified from the store: {modified}");
     }
 
     #[test]

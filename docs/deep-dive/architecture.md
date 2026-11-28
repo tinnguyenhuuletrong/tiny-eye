@@ -62,7 +62,7 @@ flowchart LR
 
 - **Publish** (`Node::publish`, every `fleet.publish_interval`): after a checkpoint, under `catalog_lock`, copy the catalog metadata into a fresh DuckDB file, gzip it into the node's prefix, then write the manifest `_fleet/<id>.json`.
 - **Refresh** (`Node::refresh_fleet`, every `fleet.refresh_interval`, in its own task so downloads never delay a flush or checkpoint): list `_fleet/`, skip this node and manifests older than the smaller of this node's and the publisher's `coordinator.snapshot_grace`, download changed copies into `<fleet.dir>/<node.id>/`, check them as untrusted input (key and files under the publisher's prefix, size, no views or macros, the same schema; see [Security](security.md#nodes-of-a-fleet)), attach the ones that pass read-only, and replace the views in one transaction. A replaced copy stays attached for `query.timeout`, so a query that started before the swap can finish.
-- **Safe deletion**: each node's retention keeps superseded snapshots for `coordinator.snapshot_grace`, which must cover `publish + 2 × refresh + query.timeout`, so no copy another node reads names a deleted file. Every node of a fleet should use the same intervals, `query.timeout` and grace.
+- **Safe deletion**: each node's retention keeps superseded snapshots for `coordinator.snapshot_grace`, which must cover `publish + 3 × refresh + query.timeout`, so no copy another node reads names a deleted file. Every node of a fleet should use the same intervals, `query.timeout` and grace.
 
 A node alone finds only its own manifest and keeps the single-node views. There is no coordinator and no peers list. How to run one, what each node sees and the limits: [Run a fleet](../examples/run-a-fleet.md).
 

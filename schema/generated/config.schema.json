@@ -197,7 +197,7 @@
           "default": "1h"
         },
         "snapshot_grace": {
-          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 2 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus their refresh interval and query timeout).",
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 3 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus twice their refresh interval and their query timeout).",
           "$ref": "#/$defs/Duration",
           "default": "10m"
         }
@@ -214,7 +214,7 @@
           "default": "30s"
         },
         "refresh_interval": {
-          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies too old to be safe are skipped (see\n`coordinator.snapshot_grace`).",
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. A refresh gives up the listing and downloads not done\nwithin this time. Copies too old to be safe are skipped (see `coordinator.snapshot_grace`).",
           "$ref": "#/$defs/Interval",
           "default": "30s"
         },
@@ -516,7 +516,7 @@
           "$ref": "#/$defs/Duration"
         },
         "snapshot_grace": {
-          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 2 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus their refresh interval and query timeout).",
+          "description": "A catalog snapshot is expired once a newer one has existed this long; only then are the\nfiles no newer snapshot references deleted. At least `fleet.publish_interval + 3 ×\nfleet.refresh_interval + query.timeout`, so a catalog copy another node may still be\nreading never names a deleted file (readers drop a copy older than the smaller of their own\nand the publisher's grace minus twice their refresh interval and their query timeout).",
           "$ref": "#/$defs/Duration"
         }
       },
@@ -530,7 +530,7 @@
           "$ref": "#/$defs/Interval"
         },
         "refresh_interval": {
-          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. Copies too old to be safe are skipped (see\n`coordinator.snapshot_grace`).",
+          "description": "Look for the catalog copies of other nodes sharing `storage.url` this often and query their\ndata with this node's; `0s` = never. A refresh gives up the listing and downloads not done\nwithin this time. Copies too old to be safe are skipped (see `coordinator.snapshot_grace`).",
           "$ref": "#/$defs/Interval"
         },
         "dir": {

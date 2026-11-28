@@ -6,34 +6,47 @@
 //! checkpoint): copy the DuckLake metadata into a fresh DuckDB file, gzip it to
 //! `<region>/<id>/_fleet/catalog.ducklake.gz`, then write the manifest `_fleet/<id>.json`. When
 //! two processes publish under one node id, the one started last wins: the older one fails every
-//! publish (logged, counted in `fleet_errors`).
+//! publish (logged, counted in `fleet_errors`), until the newer one's manifest has not been
+//! written for `coordinator.snapshot_grace` (a stopped process, whatever its start time says).
 //!
-//! Refresh (every `fleet.refresh_interval`): list `_fleet/*.json`, skip this node, manifests not
-//! written for longer than `coordinator.snapshot_grace` (not even fetched) and copies too old to be
-//! safe (below), download the copies that changed, check them, attach them read-only under new
-//! aliases and swap the query views to own lake ∪ own hot tail ∪ every other node's tables.
-//! Replaced aliases are detached once a query that started before the swap can no longer be
-//! running (`query.timeout`).
+//! Refresh (every `fleet.refresh_interval`, and within that time: listing and downloads that are
+//! not done by then are given up): list `_fleet/*.json`, skip this node, manifests not written for
+//! longer than `coordinator.snapshot_grace` (not even fetched) and copies too old to be safe
+//! (below), download the copies that changed, check them, attach them read-only under new aliases
+//! and swap the query views to own lake ∪ own hot tail ∪ every other node's tables. Replaced
+//! aliases are detached once a query that started before the swap can no longer be running
+//! (`query.timeout`). A manifest that cannot be read keeps its node's attached copy while that is
+//! fresh; a listing that fails or times out still swaps out the copies that are too old.
 //!
 //! Copies are not trusted: anyone who can write to the shared storage can write one. Before a copy
 //! reaches the views its manifest must name itself (`_fleet/<id>.json`, catalog key under
-//! `<region>/<id>/`), it must unpack to at most `fleet.max_copy_bytes`, its metadata database must
-//! hold no views, macros or generated columns (DuckDB would run them), its DuckLake catalog no
-//! views or macros, exactly this node's tables and columns, and only data files under the
-//! publisher's own prefix. A refused copy is detached, deleted, logged and counted once per
-//! (node, snapshot), and the node's previous copy is kept while it is fresh.
+//! `<region>/<id>/`) and be at most `MAX_MANIFEST_BYTES`, the copy must unpack to at most
+//! `fleet.max_copy_bytes`, its metadata database must hold only DuckLake's tables (`ducklake_*`,
+//! no views, macros, sequences, types, indexes or generated columns: DuckDB would run them or
+//! DuckLake would read them), its DuckLake catalog no views or macros, exactly this node's tables
+//! and columns, and only data files under the publisher's own prefix. A copy refused for what it
+//! holds (anything that fails once it is downloaded, but writing it to local disk) is detached,
+//! deleted, logged and counted once per (node, epoch, snapshot) and not downloaded again; the
+//! node's previous copy is kept while it is fresh.
 //!
 //! Safe deletion: retention expires a snapshot only once a newer one has existed for the
-//! publisher's `snapshot_grace` (see `Node::retain_lake`). A reader drops a copy older than
-//! `min(own grace, publisher's grace) - refresh_interval - query.timeout`: it reads a copy for at
-//! most one more refresh interval plus a query timeout, so it never reads past the grace.
+//! publisher's `snapshot_grace` (see `Node::retain_lake`). A copy's publish time is the earlier of
+//! the manifest's `published_at_ms` and the storage's last-modified time (a publisher whose clock
+//! runs ahead cannot make its copy look younger). A reader keeps a copy while it is younger than
+//! `min(own grace, publisher's grace) - 2 × refresh_interval - query.timeout`, checked again
+//! against the clock just before each view swap: a copy then stays in the views until the next
+//! swap, at most one refresh interval plus one refresh (bounded by `refresh_interval`) later, and
+//! a query that started before that swap ends within `query.timeout`, so no query reads past the
+//! grace.
 //!
 //! Materialized panels: rows of another node become visible here when its copy is swapped in. The
 //! earliest sample time among them comes from the copy's own file statistics (DuckLake keeps
-//! min/max per file): files added since the copy this node read before, or every file when the
-//! node is new here (first seen, back after being dropped, or restarted with a new epoch). If
-//! that time is at or before the settle horizon, it is noted as late, so stored steps are
-//! recomputed exactly as for a late local sample.
+//! min/max per file): of the files added since the copy this node's stored points already include
+//! (same publisher catalog, same or later snapshot, still within the grace; across the publisher's
+//! restarts, and across this node's own, from `mat.fleet_seen`), else of every file. If that time
+//! is at or before the settle horizon, it is noted as late, so stored steps are recomputed exactly
+//! as for a late local sample (from the earliest stored step when it is older, or when a file has
+//! no statistics).
 //!
 //! No label is added per node or region: like Prometheus external labels, senders label their
 //! region. Series ids include the receiving node's region, so one label set sent to two regions
@@ -45,7 +58,7 @@ use crate::tables::Table;
 use anyhow::{Context, Result, anyhow, bail};
 use duckdb::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -58,6 +71,9 @@ pub const FORMAT: u32 = 2;
 pub const METADATA_DB: &str = "__ducklake_metadata_lake";
 /// The gzipped catalog copy, relative to the node's own prefix.
 pub const CATALOG_KEY: &str = "_fleet/catalog.ducklake.gz";
+/// A manifest is a few hundred bytes: a larger object is not read (part of the format, not a
+/// setting).
+pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 /// `_fleet/<node_id>.json` at the root of `storage.url`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -94,8 +110,8 @@ pub fn catalog_key(region: &str, node_id: &str) -> String {
     format!("{region}/{node_id}/{CATALOG_KEY}")
 }
 
-/// A catalog copy refused for what it holds (not a passing failure): never queried, and not
-/// downloaded again for the same (node, epoch, snapshot).
+/// A manifest or catalog copy refused for what it holds (not a passing failure): never queried,
+/// and a copy is not downloaded again for the same (node, epoch, snapshot).
 #[derive(Debug)]
 pub struct Rejected(pub String);
 
@@ -111,11 +127,38 @@ fn rejected(why: String) -> anyhow::Error {
     anyhow::Error::new(Rejected(why))
 }
 
+fn is_rejected(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<Rejected>().is_some()
+}
+
+/// The catalog copy of another node that this node's stored materialized points include: the
+/// next copy adds only the files after it when it is of the same catalog at the same or a later
+/// snapshot, and still within the grace (files added since are listed until then).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Seen {
+    /// The publisher's DuckLake catalog: the uuid of its `main` schema (a new catalog has a new one).
+    pub catalog: String,
+    pub snapshot_id: i64,
+    /// The copy's publish time (see `Node::stale_after`).
+    pub published_at_ms: i64,
+    /// The smaller of the publisher's and this node's grace.
+    pub grace_ms: i64,
+}
+
 #[derive(Clone, Debug)]
 struct Attached {
+    /// `published_at_ms` is the copy's publish time (the earlier of the manifest's and the storage's).
     m: Manifest,
     alias: String,
     path: PathBuf,
+    seen: Seen,
+}
+
+/// What attaching a copy found.
+struct Copied {
+    /// Earliest sample time of the rows it shows that the stored points do not include yet.
+    earliest: Option<i64>,
+    seen: Seen,
 }
 
 /// What this node has attached of the others (guarded by one async lock: refreshes are serial).
@@ -129,6 +172,9 @@ pub(crate) struct State {
     warned: HashSet<(String, String)>,
     /// Refused copies and manifests: (manifest key, epoch, snapshot id).
     rejected: HashSet<(String, i64, i64)>,
+    /// Per node, the copy this node's rows include (loaded from `mat.fleet_seen` once).
+    seen: HashMap<String, Seen>,
+    seen_loaded: bool,
 }
 
 impl Node {
@@ -155,11 +201,15 @@ impl Node {
         let mut last = *self.published.lock().map_err(|_| anyhow!("publish lock poisoned"))?;
         // Another epoch in our manifest: another process publishes under our node id (and shares
         // our prefix in this region). The newest process wins; the older one is the stale one.
-        if let Ok(b) = self.shared.get(&mkey).await
+        // A manifest not written for the grace is a stopped process's, whatever its epoch says (a
+        // host whose clock stepped back starts with a smaller one). Read, then written below: two
+        // processes starting together may both write once; the next round settles it.
+        if let Ok(Some((b, modified))) = self.shared.get_at_most(&mkey, MAX_MANIFEST_BYTES).await
             && let Ok(m) = serde_json::from_slice::<Head>(&b)
             && m.epoch != self.epoch
         {
-            if m.epoch > self.epoch {
+            let stopped = now_ms() - modified > self.cfg.coordinator.snapshot_grace.ms();
+            if m.epoch > self.epoch && !stopped {
                 bail!(
                     "node.id {id:?} is used by another node too: {mkey} was written by a process started later (at {}, this one \
                      started at {}), so that one publishes and this one does not; every node sharing storage.url needs its own node.id",
@@ -213,17 +263,31 @@ impl Node {
         Ok(m)
     }
 
+    /// The time one refresh may take (listing and downloads past it are given up):
+    /// `fleet.refresh_interval`, or `query.timeout` for a refresh run by hand when it is off.
+    fn refresh_limit(&self) -> std::time::Duration {
+        let f = &self.cfg.fleet.refresh_interval;
+        if f.is_off() { self.cfg.query.timeout.0 } else { f.0 }
+    }
+
     /// A copy published longer ago than this (ms) may name files its publisher has deleted by the
-    /// time this node stops reading it (one more refresh interval plus a query timeout).
+    /// time this node stops reading it: it stays in the views until the next swap (one more
+    /// refresh interval plus one refresh, at most `refresh_interval`), then a query that started
+    /// before that swap runs for up to a query timeout.
     fn stale_after(&self, m: &Manifest) -> i64 {
         m.snapshot_grace_ms.min(self.cfg.coordinator.snapshot_grace.ms())
-            - self.cfg.fleet.refresh_interval.0.as_millis() as i64
+            - 2 * self.cfg.fleet.refresh_interval.0.as_millis() as i64
             - self.cfg.query.timeout.ms()
     }
 
+    fn fresh(&self, m: &Manifest, now: i64) -> bool {
+        now - m.published_at_ms <= self.stale_after(m)
+    }
+
     /// Attach the current catalog copies of the other nodes and swap the query views to them.
-    /// `now` decides which manifests are stale. Returns how many other nodes queries now read. A
-    /// refresh that fails or leaves out a copy counts once in `fleet_errors`.
+    /// `now` decides which manifests are stale (the time the refresh takes is added before the
+    /// swap). Returns how many other nodes queries now read. A refresh that fails or leaves out a
+    /// copy counts once in `fleet_errors`.
     pub async fn refresh_fleet(&self, now: i64) -> Result<usize> {
         let r = self.refresh(now).await;
         if !matches!(r, Ok((_, false))) {
@@ -234,48 +298,74 @@ impl Node {
 
     /// `.1`: a copy was left out (refused, failed to attach, or failed in the view swap).
     async fn refresh(&self, now: i64) -> Result<(usize, bool)> {
+        let started = Instant::now();
+        let limit = self.refresh_limit();
+        let deadline = tokio::time::Instant::now() + limit;
+        let past_limit = || anyhow!("the refresh took longer than {} ms (fleet.refresh_interval)", limit.as_millis());
         let mut st = self.fleet.lock().await;
+        if !st.seen_loaded {
+            match self.load_seen().await {
+                Ok(seen) => {
+                    st.seen = seen;
+                    st.seen_loaded = true;
+                }
+                Err(e) => tracing::warn!(error = %format!("{e:#}"), "reading mat.fleet_seen failed; other nodes' rows count as new"),
+            }
+        }
         let own = self.cfg.node.id.as_str();
         let grace = self.cfg.coordinator.snapshot_grace.ms();
         let mut left_out = false;
         let mut found: Vec<Manifest> = vec![];
-        for (key, modified) in self.shared.list_modified("_fleet/").await? {
-            let Some(name) = key.strip_prefix("_fleet/").and_then(|k| k.strip_suffix(".json")) else { continue };
-            if name.contains('/') || name == own {
-                continue;
+        let listed = tokio::time::timeout_at(deadline, self.shared.list_modified("_fleet/")).await.unwrap_or_else(|_| Err(past_limit()));
+        let list_failed = match listed {
+            // Nothing is known about the others: keep what is attached while it is fresh.
+            Err(e) => {
+                found.extend(st.attached.iter().map(|c| c.m.clone()));
+                Some(e.context("listing the fleet's manifests"))
             }
-            // Not written for longer than the grace: a stopped node, too old to read anyway.
-            if now - modified > grace {
-                continue;
-            }
-            let m = match self.read_manifest(&key).await {
-                Ok(m) => m,
-                Err(e) => {
-                    let e = format!("{e:#}");
-                    if st.warned.insert((key.clone(), e.clone())) {
-                        tracing::warn!(key, error = %e, "skipping a fleet manifest");
+            Ok(list) => {
+                for (key, modified) in list {
+                    let Some(name) = key.strip_prefix("_fleet/").and_then(|k| k.strip_suffix(".json")) else { continue };
+                    if name.contains('/') || name == own {
+                        continue;
                     }
-                    continue;
+                    // Not written for longer than the grace: a stopped node, too old to read anyway.
+                    if now - modified > grace {
+                        continue;
+                    }
+                    let prev = st.attached.iter().find(|c| c.m.node_id == name).map(|c| c.m.clone());
+                    let read = tokio::time::timeout_at(deadline, self.read_manifest(&key)).await.unwrap_or_else(|_| Err(past_limit()));
+                    let mut m = match read.and_then(|m| check_manifest(name, &m).map_err(|e| rejected(format!("{e:#}"))).map(|_| m)) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            let content = is_rejected(&e);
+                            let e = format!("{e:#}");
+                            let first = st.warned.insert((key.clone(), e.clone()));
+                            if first {
+                                tracing::warn!(key, error = %e, "skipping a fleet manifest; its node's attached copy is kept while fresh");
+                            }
+                            // What a manifest holds counts once; a passing failure every time.
+                            left_out |= first || !content;
+                            found.extend(prev);
+                            continue;
+                        }
+                    };
+                    m.published_at_ms = m.published_at_ms.min(modified);
+                    found.push(m);
                 }
-            };
-            if let Err(e) = check_manifest(name, &m) {
-                if st.rejected.insert((key.clone(), m.epoch, m.snapshot_id)) {
-                    left_out = true;
-                    tracing::error!(key, error = %format!("{e:#}"), "rejecting a fleet manifest");
-                }
-                continue;
+                None
             }
-            if now - m.published_at_ms > self.stale_after(&m) {
-                if st.warned.insert((m.node_id.clone(), format!("stale {}", m.published_at_ms))) {
-                    tracing::warn!(
-                        node = %m.node_id, age_s = (now - m.published_at_ms) / 1000,
-                        "skipping a fleet catalog copy too old to read safely: files it names may be deleted (see coordinator.snapshot_grace)"
-                    );
-                }
-                continue;
+        };
+        found.retain(|m| {
+            let fresh = self.fresh(m, now);
+            if !fresh && st.warned.insert((m.node_id.clone(), format!("stale {}", m.published_at_ms))) {
+                tracing::warn!(
+                    node = %m.node_id, age_s = (now - m.published_at_ms) / 1000,
+                    "skipping a fleet catalog copy too old to read safely: files it names may be deleted (see coordinator.snapshot_grace)"
+                );
             }
-            found.push(m);
-        }
+            fresh
+        });
         found.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
         let mut next: Vec<Attached> = vec![];
@@ -289,33 +379,37 @@ impl Node {
                 && c.m.catalog_key == m.catalog_key
             {
                 // Same process, same snapshot: the attached copy is current as of this manifest.
-                next.push(Attached { m, ..c.clone() });
+                let seen = Seen { published_at_ms: m.published_at_ms.max(c.seen.published_at_ms), ..c.seen.clone() };
+                next.push(Attached { m, seen, ..c.clone() });
                 continue;
             }
-            let fresh_prev = prev.clone().filter(|c| now - c.m.published_at_ms <= self.stale_after(&c.m));
+            let fresh_prev = prev.filter(|c| self.fresh(&c.m, now));
             let rkey = (manifest_key(&m.node_id), m.epoch, m.snapshot_id);
             if st.rejected.contains(&rkey) {
                 next.extend(fresh_prev);
                 continue;
             }
-            // New rows are those of the files added since the copy read before, while every file
-            // added since is still listed (the publisher keeps them for its grace); else all rows.
-            let since = prev
-                .filter(|c| c.m.epoch == m.epoch && now - c.m.published_at_ms < c.m.snapshot_grace_ms.min(grace))
-                .map(|c| c.m.snapshot_id);
+            if tokio::time::Instant::now() >= deadline {
+                left_out = true;
+                tracing::warn!(node = %m.node_id, error = %past_limit(), "not downloading a fleet catalog copy; keeping the previous one");
+                next.extend(fresh_prev);
+                continue;
+            }
+            // The copy this node's rows include, while every file added since is still listed.
+            let base = st.seen.get(&m.node_id).filter(|s| now - s.published_at_ms < s.grace_ms).cloned();
             st.next_alias += 1;
             let alias = format!("fleet_{}", st.next_alias);
             let path = self.fleet_dir().join(format!("{alias}.ducklake"));
-            match self.attach_copy(&m, &alias, &path, since).await {
-                Ok(t) => {
-                    earliest.extend(t.map(|t| (alias.clone(), t)));
-                    next.push(Attached { m, alias, path });
+            match self.attach_copy(&m, &alias, &path, base, deadline).await {
+                Ok(c) => {
+                    earliest.extend(c.earliest.map(|t| (alias.clone(), t)));
+                    next.push(Attached { m, alias, path, seen: c.seen });
                 }
                 Err(e) => {
                     left_out = true;
                     // Detached (if it got that far) and deleted below.
                     st.retired.push((alias, path, Instant::now()));
-                    if e.downcast_ref::<Rejected>().is_some() {
+                    if is_rejected(&e) {
                         st.rejected.insert(rkey);
                         tracing::error!(node = %m.node_id, snapshot = m.snapshot_id, error = %format!("{e:#}"), "rejecting another node's catalog copy");
                     } else {
@@ -326,10 +420,13 @@ impl Node {
             }
         }
 
+        // Against the clock once more: the refresh itself took time.
+        let now_swap = now + started.elapsed().as_millis() as i64;
+        let mut kept: Vec<Attached> = next.iter().filter(|c| self.fresh(&c.m, now_swap)).cloned().collect();
         let aliases = |v: &[Attached]| v.iter().map(|c| c.alias.clone()).collect::<Vec<_>>();
         let old = aliases(&st.attached);
-        if old != aliases(&next) {
-            let mut kept = next.clone();
+        let (now_i, after_queries) = (Instant::now(), Instant::now() + self.cfg.query.timeout.0);
+        if old != aliases(&kept) {
             let mut res = self.swap_views(aliases(&kept)).await;
             if let Err(e) = &res {
                 // One broken copy must not keep the views on stale or dropped ones: rebuild them
@@ -344,23 +441,20 @@ impl Node {
                     res = self.swap_views(vec![]).await;
                 }
             }
-            let (now_i, after_queries) = (Instant::now(), Instant::now() + self.cfg.query.timeout.0);
             if let Err(e) = res {
                 // The views still name the previous copies: keep those, give up the new ones.
                 st.retired.extend(next.into_iter().filter(|c| !old.contains(&c.alias)).map(|c| (c.alias, c.path, now_i)));
                 return Err(e.context("swapping the query views to the fleet's catalogs"));
             }
-            let in_views = aliases(&kept);
-            // Copies queries may still be reading go once no query from before the swap can run;
-            // copies attached by this refresh and left out were never read.
-            let gone: Vec<Attached> = st.attached.drain(..).filter(|c| !in_views.contains(&c.alias)).collect();
-            st.retired.extend(gone.into_iter().map(|c| (c.alias, c.path, after_queries)));
-            st.retired.extend(
-                next.into_iter().filter(|c| !in_views.contains(&c.alias) && !old.contains(&c.alias)).map(|c| (c.alias, c.path, now_i)),
-            );
-            next = kept;
         }
-        st.attached = next;
+        let in_views = aliases(&kept);
+        // Copies queries may still be reading go once no query from before the swap can run;
+        // copies attached by this refresh and left out were never read.
+        let gone: Vec<Attached> = st.attached.drain(..).filter(|c| !in_views.contains(&c.alias)).collect();
+        st.retired.extend(gone.into_iter().map(|c| (c.alias, c.path, after_queries)));
+        st.retired
+            .extend(next.into_iter().filter(|c| !in_views.contains(&c.alias) && !old.contains(&c.alias)).map(|c| (c.alias, c.path, now_i)));
+        st.attached = kept;
 
         let now_i = Instant::now();
         let (due, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut st.retired).into_iter().partition(|r| r.2 <= now_i);
@@ -387,26 +481,61 @@ impl Node {
             st.retired.extend(failed);
         }
 
-        // Only once the rows are visible, against a fresh clock (as for a late local sample).
+        // Only once the rows are visible, against a fresh clock (as for a late local sample). The
+        // copies now in the views are recorded as included by the tick that rewinds for them.
         let settled = now_ms() - self.cfg.materialize.settle.ms();
-        for (alias, t) in earliest {
-            if t <= settled && st.attached.iter().any(|c| c.alias == alias) {
-                self.mat.note_late(t);
-            }
+        let late =
+            earliest.iter().filter(|(alias, t)| *t <= settled && st.attached.iter().any(|c| &c.alias == alias)).map(|(_, t)| *t).min();
+        let changed: Vec<(String, Seen)> = st
+            .attached
+            .iter()
+            .filter(|c| st.seen.get(&c.m.node_id) != Some(&c.seen))
+            .map(|c| (c.m.node_id.clone(), c.seen.clone()))
+            .collect();
+        for (node, s) in &changed {
+            st.seen.insert(node.clone(), s.clone());
+        }
+        if late.is_some() || !changed.is_empty() {
+            self.mat.note_fleet(late, changed);
         }
         let oldest = st.attached.iter().map(|c| c.m.published_at_ms).min().unwrap_or(0);
         self.metrics.fleet_nodes.store(st.attached.len() as u64, Ordering::Relaxed);
         self.metrics.fleet_oldest_published_ms.store(oldest.max(0) as u64, Ordering::Relaxed);
-        Ok((st.attached.len(), left_out))
+        match list_failed {
+            Some(e) => Err(e),
+            None => Ok((st.attached.len(), left_out)),
+        }
     }
 
+    /// `mat.fleet_seen`: what the stored points include of each other node (see `materialize.rs`).
+    async fn load_seen(&self) -> Result<HashMap<String, Seen>> {
+        let conn = self.lake_conn()?;
+        tokio::task::spawn_blocking(move || -> Result<HashMap<String, Seen>> {
+            let mut s = conn.prepare("SELECT node_id, catalog, snapshot_id, published_at_ms, grace_ms FROM mat.fleet_seen")?;
+            let rows = s.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    Seen { catalog: r.get(1)?, snapshot_id: r.get(2)?, published_at_ms: r.get(3)?, grace_ms: r.get(4)? },
+                ))
+            })?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })
+        .await?
+    }
+
+    /// A manifest: at most `MAX_MANIFEST_BYTES`, of this format. What it holds is [`Rejected`];
+    /// a failed GET is a passing failure.
     async fn read_manifest(&self, key: &str) -> Result<Manifest> {
-        let b = self.shared.get(key).await?;
-        let head: Head = serde_json::from_slice(&b).context("parsing")?;
+        let (b, _) = self
+            .shared
+            .get_at_most(key, MAX_MANIFEST_BYTES)
+            .await?
+            .ok_or_else(|| rejected(format!("it is larger than {MAX_MANIFEST_BYTES} bytes")))?;
+        let head: Head = serde_json::from_slice(&b).map_err(|e| rejected(format!("parsing: {e}")))?;
         if head.format != FORMAT {
-            bail!("manifest format {} (this build reads format {FORMAT})", head.format);
+            return Err(rejected(format!("manifest format {} (this build reads format {FORMAT})", head.format)));
         }
-        serde_json::from_slice(&b).context("parsing")
+        serde_json::from_slice(&b).map_err(|e| rejected(format!("parsing: {e}")))
     }
 
     async fn swap_views(&self, aliases: Vec<String>) -> Result<()> {
@@ -421,36 +550,31 @@ impl Node {
         tokio::task::spawn_blocking(move || aliases.into_iter().filter(|a| probe(&conn, a).is_ok()).collect()).await.unwrap_or_default()
     }
 
-    /// Download a node's catalog copy, unpack it to `path`, check it and attach it read-only as
-    /// `alias`. Returns the earliest sample time of the rows it shows that a copy attached with
-    /// snapshot `since` did not (all rows when `None`).
-    async fn attach_copy(&self, m: &Manifest, alias: &str, path: &Path, since: Option<i64>) -> Result<Option<i64>> {
+    /// Download a node's catalog copy (by `deadline`), unpack it to `path`, check it and attach it
+    /// read-only as `alias`. Every failure once it is downloaded, but writing it to local disk, is
+    /// about what the copy holds: [`Rejected`].
+    async fn attach_copy(
+        &self,
+        m: &Manifest,
+        alias: &str,
+        path: &Path,
+        base: Option<Seen>,
+        deadline: tokio::time::Instant,
+    ) -> Result<Copied> {
         let max = self.cfg.fleet.max_copy_bytes.0;
-        let gz = self.shared.get_at_most(&m.catalog_key, max).await?.ok_or_else(|| too_big(max))?;
+        let got = tokio::time::timeout_at(deadline, self.shared.get_at_most(&m.catalog_key, max))
+            .await
+            .map_err(|_| anyhow!("downloading {} took past the refresh's time limit (fleet.refresh_interval)", m.catalog_key))??;
+        let (gz, _) = got.ok_or_else(|| too_big(max))?;
         let conn = self.lake_conn()?;
         let prefix = format!("{}/{}/{}/", self.shared.url_prefix, m.region, m.node_id);
         let (alias, path) = (alias.to_string(), path.to_path_buf());
-        tokio::task::spawn_blocking(move || -> Result<Option<i64>> {
-            let mut out = std::fs::File::create(&path).with_context(|| format!("writing {}", path.display()))?;
-            let n =
-                std::io::copy(&mut flate2::read::GzDecoder::new(&gz[..]).take(max + 1), &mut out).context("unpacking the catalog copy")?;
-            drop(out);
-            if n > max {
-                return Err(too_big(max));
-            }
-            // DuckLake reads the metadata database by table name: a view or generated column there
-            // would run whatever it says. Look at the file as a plain database first.
-            let raw = format!("{alias}_raw");
-            conn.execute_batch(&format!("ATTACH {} AS {raw} (TYPE duckdb, READ_ONLY)", sql_str(&path.display().to_string())))
-                .context("opening the catalog copy")?;
-            let checked = check_metadata(&conn, &raw);
-            conn.execute_batch(&format!("DETACH {raw}"))?;
-            checked?;
-            conn.execute_batch(&format!("ATTACH {} AS {alias} (READ_ONLY)", sql_str(&format!("ducklake:{}", path.display()))))
-                .context("attaching the catalog copy")?;
-            check_catalog(&conn, &alias, &prefix)?;
-            probe(&conn, &alias).map_err(|e| rejected(format!("{e:#}")))?;
-            earliest_sample(&conn, &alias, since)
+        let (published_at_ms, grace_ms) = (m.published_at_ms, m.snapshot_grace_ms.min(self.cfg.coordinator.snapshot_grace.ms()));
+        tokio::task::spawn_blocking(move || -> Result<Copied> {
+            unpack(&gz, &path, max)?;
+            inspect(&conn, &alias, &path, &prefix, base)
+                .map(|(earliest, catalog, snapshot_id)| Copied { earliest, seen: Seen { catalog, snapshot_id, published_at_ms, grace_ms } })
+                .map_err(|e| if is_rejected(&e) { e } else { rejected(format!("{e:#}")) })
         })
         .await?
     }
@@ -462,6 +586,57 @@ impl Node {
             t => (now - t).max(0) as f64 / 1000.0,
         }
     }
+}
+
+/// Gunzip `gz` to `path`, at most `max` bytes. A broken or oversized stream is [`Rejected`]; a
+/// failure to write the local file is not.
+fn unpack(gz: &[u8], path: &Path, max: u64) -> Result<()> {
+    let mut out = std::fs::File::create(path).with_context(|| format!("writing {}", path.display()))?;
+    let mut dec = flate2::read::GzDecoder::new(gz);
+    let (mut buf, mut n) = (vec![0u8; 1 << 16], 0u64);
+    loop {
+        let k = match dec.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(k) => k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(rejected(format!("unpacking the catalog copy: {e}"))),
+        };
+        n += k as u64;
+        if n > max {
+            return Err(too_big(max));
+        }
+        out.write_all(&buf[..k]).with_context(|| format!("writing {}", path.display()))?;
+    }
+}
+
+/// Check the unpacked copy at `path` and attach it as `alias`: the metadata database as a plain
+/// DuckDB file first (DuckLake reads it by table name: a view or generated column there would run
+/// whatever it says), then the DuckLake catalog. Returns the earliest sample time of the rows not
+/// in the copy `base` (all rows when `None` or another catalog), the publisher's catalog id and
+/// the copy's snapshot.
+fn inspect(conn: &Connection, alias: &str, path: &Path, prefix: &str, base: Option<Seen>) -> Result<(Option<i64>, String, i64)> {
+    let raw = format!("{alias}_raw");
+    conn.execute_batch(&format!("ATTACH {} AS {raw} (TYPE duckdb, READ_ONLY)", sql_str(&path.display().to_string())))
+        .context("opening the catalog copy")?;
+    let checked = check_metadata(conn, &raw);
+    conn.execute_batch(&format!("DETACH {raw}"))?;
+    checked?;
+    conn.execute_batch(&format!("ATTACH {} AS {alias} (READ_ONLY)", sql_str(&format!("ducklake:{}", path.display()))))
+        .context("attaching the catalog copy")?;
+    check_catalog(conn, alias, prefix)?;
+    probe(conn, alias)?;
+    let md = format!("__ducklake_metadata_{alias}");
+    let (catalog, snapshot): (Option<String>, i64) = conn.query_row(
+        &format!(
+            "SELECT (SELECT min(schema_uuid)::VARCHAR FROM {md}.ducklake_schema WHERE schema_name = 'main' AND end_snapshot IS NULL),
+                    (SELECT max(snapshot_id) FROM {md}.ducklake_snapshot)"
+        ),
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let catalog = catalog.unwrap_or_default();
+    let since = base.filter(|b| !catalog.is_empty() && b.catalog == catalog && snapshot >= b.snapshot_id).map(|b| b.snapshot_id);
+    Ok((earliest_sample(conn, alias, since)?, catalog, snapshot))
 }
 
 fn too_big(max: u64) -> anyhow::Error {
@@ -485,29 +660,54 @@ fn check_manifest(name: &str, m: &Manifest) -> Result<()> {
     Ok(())
 }
 
-/// The copy's metadata database (`db`, attached as a plain DuckDB file): nothing DuckDB would run
-/// when DuckLake reads it, and no DuckLake views or macros (a node's catalog has none).
+/// The copy's metadata database (`db`, attached as a plain DuckDB file): what DuckLake writes and
+/// nothing else. Only tables, all in `main` and named `ducklake_*`; no views, macros, sequences,
+/// types, indexes or generated columns (DuckDB would run them when DuckLake reads the catalog);
+/// every inlined-data table DuckLake is told about exists (it reads the name as a table, else as
+/// a file); and no DuckLake views or macros (a node's catalog has none).
 fn check_metadata(conn: &Connection, db: &str) -> Result<()> {
-    let (views, macros, generated): (i64, i64, i64) = conn.query_row(
-        "SELECT (SELECT count(*) FROM duckdb_views() WHERE database_name = $1 AND NOT internal),
-                (SELECT count(*) FROM duckdb_functions() WHERE database_name = $1 AND function_type IN ('macro', 'table_macro')),
-                (SELECT count(*) FROM duckdb_columns() WHERE database_name = $1 AND is_generated)",
+    let counts: Vec<(&str, i64)> = conn.query_row(
+        "SELECT (SELECT count(*) FROM duckdb_views() WHERE database_name = $1),
+                (SELECT count(*) FROM duckdb_functions() WHERE database_name = $1),
+                (SELECT count(*) FROM duckdb_sequences() WHERE database_name = $1),
+                (SELECT count(*) FROM (SELECT type_name, logical_type FROM duckdb_types() WHERE database_name = $1
+                    EXCEPT ALL SELECT type_name, logical_type FROM duckdb_types() WHERE database_name = 'system')),
+                (SELECT count(*) FROM duckdb_indexes() WHERE database_name = $1),
+                (SELECT count(*) FROM duckdb_columns() WHERE database_name = $1 AND is_generated),
+                (SELECT count(*) FROM duckdb_schemas() WHERE database_name = $1 AND schema_name <> 'main'),
+                (SELECT count(*) FROM duckdb_tables() WHERE database_name = $1 AND (schema_name <> 'main' OR NOT starts_with(table_name, 'ducklake_')))",
         [db],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        |r| {
+            Ok(vec![
+                ("views", r.get(0)?),
+                ("functions or macros", r.get(1)?),
+                ("sequences", r.get(2)?),
+                ("types", r.get(3)?),
+                ("indexes", r.get(4)?),
+                ("generated columns", r.get(5)?),
+                ("schemas other than main", r.get(6)?),
+                ("tables not named ducklake_* in main", r.get(7)?),
+            ])
+        },
     )?;
-    if views + macros + generated > 0 {
-        return Err(rejected(format!(
-            "its metadata database holds {views} views, {macros} macros and {generated} generated columns (DuckLake writes none)"
-        )));
+    let found: Vec<String> = counts.iter().filter(|(_, n)| *n > 0).map(|(what, n)| format!("{n} {what}")).collect();
+    if !found.is_empty() {
+        return Err(rejected(format!("its metadata database holds {} (DuckLake writes only its own tables)", found.join(", "))));
     }
-    let tables: Vec<String> = conn
-        .prepare(
-            "SELECT table_name FROM duckdb_tables() WHERE database_name = ? AND schema_name = 'main'
-             AND table_name IN ('ducklake_view', 'ducklake_macro')",
-        )?
+    let tables: BTreeSet<String> = conn
+        .prepare("SELECT table_name FROM duckdb_tables() WHERE database_name = ?")?
         .query_map([db], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    for t in tables {
+    if tables.contains("ducklake_inlined_data_tables") {
+        let named: Vec<String> = conn
+            .prepare(&format!("SELECT DISTINCT table_name FROM {db}.main.ducklake_inlined_data_tables"))?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        if let Some(t) = named.iter().find(|t| !tables.contains(*t)) {
+            return Err(rejected(format!("its catalog names the inlined-data table {t:?}, which it does not hold")));
+        }
+    }
+    for t in ["ducklake_view", "ducklake_macro"].into_iter().filter(|t| tables.contains(*t)) {
         // `t` is one of the two names above.
         let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {db}.main.{t}"), [], |r| r.get(0))?;
         if n > 0 {
@@ -562,8 +762,9 @@ fn probe(conn: &Connection, alias: &str) -> Result<()> {
 
 /// Earliest `timestamp_ms` of the metric samples in the copy `alias` from its file statistics:
 /// of the L0 files (fresh flushes) added after snapshot `since`, else of every current file. A
-/// file without statistics counts as the oldest possible. Compaction (L1) only rewrites rows of
-/// files already counted, so it is left out.
+/// file without statistics counts as older than everything (`i64::MIN`: the materialized store
+/// rewinds to its earliest step). Compaction (L1) only rewrites rows of files already counted, so
+/// it is left out.
 fn earliest_sample(conn: &Connection, alias: &str, since: Option<i64>) -> Result<Option<i64>> {
     let md = format!("__ducklake_metadata_{alias}");
     let files = match since {

@@ -59,7 +59,7 @@ coordinator:
   retention: 15d
   retention_interval: 1h
   # A DuckLake snapshot is expired (and the files only it references deleted) once a newer one
-  # has existed this long. Must be >= fleet.publish_interval + 2 x fleet.refresh_interval +
+  # has existed this long. Must be >= fleet.publish_interval + 3 x fleet.refresh_interval +
   # query.timeout, so no query on another node can still read a catalog copy that names them.
   snapshot_grace: 10m
 

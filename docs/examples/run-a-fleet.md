@@ -60,6 +60,9 @@ flowchart LR
    that changed into `<fleet.dir>/<node.id>/`, checks them (see
    [Copies are untrusted](#copies-are-untrusted)) and attaches them read-only. Then it swaps its
    query views in one transaction, so a running query sees either the old set or the new set.
+   A refresh gives up the listing and downloads it has not finished within
+   `fleet.refresh_interval`. When a manifest cannot be fetched, or the listing fails, the node
+   keeps the copies it has while they are fresh, and still drops the ones that are too old.
 4. **Query.** A query reads the node's own lake, the node's own hot tail, and the published
    tables of every other node. The data files are read straight from the bucket.
 
@@ -197,13 +200,20 @@ Rules for every node of the fleet:
   nodes read, so it must fit their timing too. Each manifest also carries the publisher's grace,
   and a reader uses the smaller of its own and the publisher's. The one exception: a node may set
   `fleet.publish_interval: 0s` to publish nothing, like the laptop above.
-- **Clocks synced with NTP.** A reader decides that a manifest is too old by comparing the time
-  the publisher wrote into it with its own clock.
+- **Clocks synced with NTP.** A reader decides that a manifest is too old by comparing its publish
+  time with its own clock. The publish time is the earlier of the time the publisher wrote into
+  the manifest and the time the bucket says it was written, so a publisher whose clock runs ahead
+  cannot make its copy look younger. A reader whose own clock runs behind still keeps copies too
+  long.
 - **A unique `node.id` across the whole fleet**, not only within a region: the manifest
   `_fleet/<id>.json` is named by the id alone. If two running processes use one id, the newest one
   wins. The older process finds the newer one's manifest at its next publish, stops publishing,
   logs `node.id "<id>" is used by another node too`, and counts `tiny_eye_fleet_errors_total`.
-  It stays silent even after the newer process stops, until it is restarted.
+  It stays silent after the newer process stops until that process's manifest has not been written
+  for `coordinator.snapshot_grace`; then it publishes again. This also covers a host whose clock
+  stepped back: its new process has a smaller start time than the one before. Two processes that
+  start together can both write their manifest once (each reads, then writes); the next publish
+  settles it.
   Fix the id at once: two nodes with the same id *and* region also share one prefix, and each
   checkpoints the other's flushes into its own catalog.
 - **Ids and regions are path segments.** Use letters, digits, `.`, `_` and `-`. `_fleet` is not
@@ -239,8 +249,11 @@ says.
 A [materialized panel](../deep-dive/materialized-panels.md) stores a step once it is
 `materialize.settle` old (5 minutes). When a refresh brings another node's rows for steps that are
 already stored (late data, a node that joins the fleet, or a node that comes back after a stop),
-the node recomputes those steps, so stored points do not miss them. A node joining (which includes
-every other node when this one restarts) recomputes all stored steps once. The reverse is not
+the node recomputes those steps, so stored points do not miss them. Only the files added since the
+copy the stored points already include count: a node that restarts with the same catalog, or this
+node restarting (it keeps which copy of each node its stored points include in
+`materialize.path`), recomputes nothing that is not new. A node seen for the first time, a new
+catalog, or a copy older than the grace recomputes all stored steps once. The reverse is not
 handled: when a node leaves the fleet, steps already stored keep its rows until retention drops them.
 :::
 
@@ -276,14 +289,20 @@ region of the node that received it. Filter or group by `region` in TQS.
 A node reads another node's catalog copy as untrusted input. It leaves a copy out of its answers
 when:
 
+- the manifest is not `_fleet/<node_id>.json` of the node it names, or is larger than 64 KiB;
 - the manifest's `catalog_key` is not under the publisher's own prefix `<region>/<id>/`;
-- the copy is larger than `fleet.max_copy_bytes` (256 MB) once decompressed;
-- the copy holds views or macros;
+- the copy is larger than `fleet.max_copy_bytes` (256 MB), compressed or once decompressed;
+- the copy is not a gzipped DuckDB file, or not a DuckLake catalog;
+- its metadata database holds anything but DuckLake's own tables (views, macros, sequences, types,
+  indexes, generated columns, other schemas or tables), or names an inlined-data table it does not
+  hold;
+- the catalog defines views or macros;
 - its tables or columns differ from this build's schema;
 - it names data files outside the publisher's prefix.
 
-A rejected copy is logged with the reason and counted in `tiny_eye_fleet_errors_total`. The rest
-of the fleet keeps answering. The same happens to a copy from a build with another table schema,
+A rejected copy is logged with the reason and counted in `tiny_eye_fleet_errors_total` once, and
+not downloaded again until its publisher publishes another snapshot. The node keeps that
+publisher's previous copy while it is fresh. The rest of the fleet keeps answering. The same happens to a copy from a build with another table schema,
 for example during a rolling upgrade that changes `schema/tables.yaml`: that node's data is
 missing from the others' answers until every node runs the same build.
 
@@ -302,10 +321,13 @@ What the bucket permissions must still guarantee is in [Security](../deep-dive/s
 | `fleet.max_copy_bytes` | `256MB` | A copy larger than this once decompressed is rejected |
 | `coordinator.snapshot_grace` | `10m` | How long an old catalog snapshot, and the files only it names, are kept after a newer one exists. A reader skips a manifest older than the smaller of its own grace and the publisher's |
 
-`coordinator.snapshot_grace` must be at least `fleet.publish_interval + 2 × fleet.refresh_interval
-+ query.timeout` (120 s with the defaults). That covers the oldest catalog copy a query on
-another node can still be reading, so no file it names is deleted under it. A smaller value stops
-the start with `coordinator.snapshot_grace (...) must be at least ...`.
+`coordinator.snapshot_grace` must be at least `fleet.publish_interval + 3 × fleet.refresh_interval
++ query.timeout` (150 s with the defaults). A reader drops a copy once it is older than the
+smaller grace minus `2 × fleet.refresh_interval + query.timeout`: a copy stays in its views until
+the next swap, at most one refresh interval plus one refresh later, and a query that started
+before that swap runs for up to `query.timeout`. So no file a query on another node can still be
+reading is deleted under it, and a node that keeps publishing is never dropped. A smaller value
+stops the start with `coordinator.snapshot_grace (...) must be at least ...`.
 
 Raise the grace when you raise the intervals, on every node. The full list of keys is in
 [Configuration](../deep-dive/configuration.md#fleet).
@@ -333,7 +355,7 @@ delete the prefix once you no longer need its data.
 | `tiny_eye_fleet_nodes` | Other nodes whose data this node's queries read. Lower than expected means a node stopped publishing, was skipped, or its copy was rejected |
 | `tiny_eye_fleet_oldest_copy_age_seconds` | Age of the oldest copy read. It should stay below `publish_interval + refresh_interval` plus a little |
 | `tiny_eye_fleet_publishes_total` | Should rise every `publish_interval` |
-| `tiny_eye_fleet_errors_total` | Failed publishes, failed refreshes and rejected copies. The log says which, and why |
+| `tiny_eye_fleet_errors_total` | Failed publishes, failed refreshes (a failed listing, a manifest that could not be fetched, a download past the refresh's time limit) and rejected manifests and copies. The log says which, and why |
 
 ## Limits
 
@@ -366,8 +388,12 @@ delete the prefix once you no longer need its data.
   that a node's answers over two nodes equal the answers of one node that received everything, that
   other nodes' rows show only after publish and refresh while its own show at once, that a node
   alone is unchanged, that retention on one node keeps another node's copy readable within the
-  grace (this fails with the old expiry rule), that stale manifests are skipped, the rule for
-  identical label sets, duplicate ids, and the DuckLake internal name.
+  grace (this fails with the old expiry rule), that stale manifests are skipped (also when the
+  listing fails, and by the bucket's time when the publisher's clock runs ahead), that each kind
+  of untrusted copy and oversized manifest is refused, that a manifest that cannot be fetched
+  keeps a fresh copy, that restarts of either node recompute no stored step that is not new, the
+  rule for identical label sets, duplicate ids (also a stopped process with a later start time),
+  and the DuckLake internal name.
 - `make fleet-poc` measured publish, refresh and query cost against a node holding everything,
   over MinIO with added latency: [fleet proof of concept](../deep-dive/evidence/fleet-poc.md).
   The proof of concept used a separate read-only viewer; the built fleet has no viewer, and every

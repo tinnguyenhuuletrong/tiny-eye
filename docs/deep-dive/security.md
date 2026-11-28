@@ -121,15 +121,17 @@ The nodes of a [fleet](../examples/run-a-fleet.md) never talk to each other; the
 
 A node that can write to another node's prefix can change what that node's copy says, so give each node a key scoped to its own prefix where the store allows it.
 
-A node treats every other node's catalog copy as untrusted input. It downloads the copy and rejects it when:
+A node treats every other node's manifest and catalog copy as untrusted input. It does not read a manifest larger than 64 KiB or one that does not name itself (`_fleet/<node_id>.json`). It downloads the copy and rejects it when:
 
 - the manifest's `catalog_key` is not under the publisher's own prefix;
-- the copy is larger than `fleet.max_copy_bytes` (256 MB by default) once decompressed;
-- the copy contains views or macros, so attaching it cannot run code in this node's queries;
+- the copy is larger than `fleet.max_copy_bytes` (256 MB by default), compressed or once decompressed;
+- the copy is not a gzipped DuckDB file or not a DuckLake catalog;
+- its metadata database, opened as a plain DuckDB file before DuckLake reads it, holds anything but tables named `ducklake_*` in `main`: no views, macros, sequences, types, indexes, generated columns or other schemas, so attaching it cannot run code in this node's queries. DuckLake reads every inlined-data table the catalog names as a table, else as a file pattern, so each one must exist;
+- the catalog defines views or macros;
 - its tables or columns differ from this build's schema;
-- it names data files outside the publisher's prefix, so one node cannot make another read a third node's files under its own name.
+- it names data files outside the publisher's prefix (`<storage.url>/<region>/<id>/`, with the trailing slash), so one node cannot make another read a third node's files under its own name.
 
-A rejected copy is left out of the answers, logged with the reason and counted in `tiny_eye_fleet_errors_total`; the rest of the fleet keeps answering. The manifests themselves are trusted for who published what and when. They are not signed, so a key that can write to `_fleet/` can hide another node or make it look stale.
+A rejected copy is left out of the answers, logged with the reason and counted in `tiny_eye_fleet_errors_total` once; it is not downloaded again for the same snapshot, and the publisher's previous copy is kept while it is fresh. The rest of the fleet keeps answering. The manifests themselves are trusted for who published what and when, except that a reader takes the earlier of the manifest's publish time and the bucket's last-modified time, so a manifest cannot make a copy look younger than the bucket saw it written. They are not signed, so a key that can write to `_fleet/` can hide another node or make it look stale.
 
 ## Error bodies
 
