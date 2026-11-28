@@ -31,7 +31,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2 # its own key (release build); saved from main only, where this runs
+      - uses: actions/cache@v4
+        with:
+          path: .tools
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
       - run: make tools # no UI build: the benchmarks don't serve it (build.rs embeds an empty UI)
       # Fails when a report records a broken equality; the artifact still keeps that report.
       - run: make bench-all
