@@ -148,9 +148,15 @@ Full reports: [local disk](evidence/bench-local.md), [MinIO](evidence/bench-s3.m
 | `tiny_eye_queries_total` | counter | | TQS queries run (valid documents). |
 | `tiny_eye_query_errors_total` | counter | | TQS queries that failed while running. |
 | `tiny_eye_query_milliseconds_total` | counter | | Time spent running queries. |
+| `tiny_eye_materialized_points_total` | counter | | Points stored for [materialized panels](materialized-panels.md). |
+| `tiny_eye_materialized_reads_total` | counter | | Queries answered from materialized panel points. |
+| `tiny_eye_materialized_trimmed_points_total` | counter | | Stored points dropped because a panel passed `materialize.max_points_per_panel`. |
+| `tiny_eye_materialized_stored_points` | gauge | | Points now stored for materialized panels. |
+| `tiny_eye_materialized_panels` | gauge | | Panels currently materialized. |
+| `tiny_eye_materialized_tick_milliseconds` | gauge | | Duration of the last materialization tick. |
 | `tiny_eye_hot_bytes` | gauge | | Bytes buffered in the ingest arena and hot tail. |
 | `tiny_eye_fleet_publishes_total` | counter | | Catalog copies published for the other nodes of the fleet. |
-| `tiny_eye_fleet_errors_total` | counter | | Failed fleet publishes, refreshes and catalog copy attaches. |
+| `tiny_eye_fleet_errors_total` | counter | | Failed fleet publishes, failed refreshes, and other nodes' catalog copies that were rejected or could not be attached. |
 | `tiny_eye_fleet_nodes` | gauge | | Other nodes sharing storage whose data this node's queries read. |
 | `tiny_eye_fleet_oldest_copy_age_seconds` | gauge | | Age of the oldest other-node catalog copy queries read (0 when alone). |
 
@@ -174,12 +180,13 @@ remote_write:
 
 Nodes that share one `storage.url` find each other there and answer queries over all their data ([Run a fleet](../examples/run-a-fleet.md) has the setup and the limits). For the operator:
 
-- **Give every node its own `node.id`** across the whole fleet, and set `node.region`. Keep `storage.url` (and the S3 settings) identical on every node, and `catalog.url`, `ingest.wal_dir`, `materialize.path` and `fleet.dir` local to each.
-- **Freshness.** Another node's rows show up here at most `ingest.flush_interval + coordinator.checkpoint_interval + fleet.publish_interval + fleet.refresh_interval` after they were acknowledged (about 2 minutes with the defaults). `freshness_s` in responses and `tiny_eye_fleet_oldest_copy_age_seconds` give the age of the oldest copy read.
-- **Watch** `tiny_eye_fleet_nodes` (a drop means a node stopped publishing or is older than the grace) and `tiny_eye_fleet_errors_total` (the log says what failed).
-- **Stopping a node.** Its last copy keeps answering on the others until its manifest is older than `coordinator.snapshot_grace` (10 minutes), then it drops out with a warning on each other node. Its manifest stays in `_fleet/`; delete `_fleet/<id>.json` to retire a node for good.
+- **Give every node its own `node.id`** across the whole fleet, and set `node.region` (neither may be `_fleet`). Keep `storage.url` (and the S3 settings) identical on every node, as an absolute path or `s3://` URL, and `catalog.url`, `ingest.wal_dir` and `materialize.path` local to each. Use a DuckDB file catalog: a `postgres:` catalog is refused unless both fleet intervals are `0s`.
+- **Use the same timing on every node:** `fleet.publish_interval`, `fleet.refresh_interval`, `fleet.max_copy_bytes`, `query.timeout` and `coordinator.snapshot_grace`. A node's grace protects the copies other nodes read. Keep the clocks synced with NTP: a reader compares a manifest's publish time with its own clock.
+- **Freshness.** Another node's rows show up here at most `ingest.flush_interval + coordinator.checkpoint_interval + fleet.publish_interval + fleet.refresh_interval` after they were acknowledged (up to about 2 minutes with the defaults). `freshness_s` in responses and `tiny_eye_fleet_oldest_copy_age_seconds` give the age of the oldest copy read.
+- **Watch** `tiny_eye_fleet_nodes` (a drop means a node stopped publishing, is older than the grace, or its copy was rejected) and `tiny_eye_fleet_errors_total` (failed publishes, failed refreshes and rejected copies; the log says which).
+- **Stopping a node.** Its last copy keeps answering on the others until its manifest is older than `coordinator.snapshot_grace` (10 minutes), then it drops out with a warning on each other node. Its manifest stays in `_fleet/`; delete `_fleet/<id>.json` to retire a node for good. No node runs retention on a retired node's prefix, so expire its objects with a bucket lifecycle rule on `<region>/<id>/`, or delete the prefix.
 - **Requests to the bucket.** Each publish is a GET of the node's own manifest (the duplicate-id check) and one or two PUTs (the copy only when the catalog changed). Each refresh is a LIST of `_fleet/`, one GET per manifest, and one GET per changed copy.
-- **Credentials.** Every node reads every other node's prefix, so it needs read access to the whole `storage.url`, write and delete access to its own prefix, and write access to `_fleet/`.
+- **Credentials.** Every node reads every other node's prefix, so it needs read access to the whole `storage.url`, write and delete access to its own prefix, and write access to `_fleet/`. A laptop node needs the same. Other nodes' catalog copies are checked before they are attached ([Security](security.md#nodes-of-a-fleet)).
 
 ## Shutdown and flush
 
@@ -209,9 +216,10 @@ The catalog references data files by URL, so the catalog and the objects must ma
 ## Upgrades
 
 - **DuckDB is pinned.** The `duckdb` crate is pinned to an exact version (DuckDB v2.0.1) and the extensions must match that version and platform. A DuckDB upgrade moves the crate, the extensions (`make tools` downloads the new version into a new versioned directory) and the DuckLake catalog format together; test it on a copy of the catalog first.
-- **Object layout.** Objects live under `<node.region>/<node.id>/` of `storage.url` since the fleet was added. Data written by earlier builds (objects at the root, envelopes under `commits/<region>/`) is not read and not migrated: start from an empty data directory.
+- **Object layout.** Objects live under `<node.region>/<node.id>/` of `storage.url` since the fleet was added. Data written by earlier builds (objects at the root, envelopes under `commits/<region>/`) is not read and not migrated, and a newer build refuses to start on a catalog written that way (see [Troubleshooting](#troubleshooting)). Start with an empty data directory, and keep the old build if you still need to read the old data. Changing `node.region` or `node.id` of an existing node has the same effect.
 - **Envelope format.** Envelopes carry `format: 1`. A binary refuses an envelope with another format and names both, so a newer envelope left in `commits/` stops checkpointing instead of being misread.
-- **Fleet manifest format.** Manifests carry `format: 1`. A node skips a manifest of another format with a warning, so during a rolling upgrade that changes it, nodes on different versions do not read each other.
+- **Fleet manifest format.** Manifests carry `format: 2`. A node skips a manifest of another format with a warning, so during a rolling upgrade that changes it, nodes on different versions do not read each other.
+- **Fleet and table schema.** A node leaves out another node's catalog copy whose tables or columns differ from its own schema (counted in `tiny_eye_fleet_errors_total`). During a rolling upgrade that changes `schema/tables.yaml`, each node answers over its own data and the nodes on the same build until every node is upgraded.
 - **Parquet schema version.** Data files carry `schema_version` (from `schema/tables.yaml`, currently 1) in their metadata. It is written but not yet checked on read.
 - **Log patterns.** `pattern_version` (currently 1) is stored next to every `pattern_hash`; changing the masking rules changes hashes, so patterns before and after an upgrade do not group together.
 - **Procedure.** Stop the old binary (it flushes and checkpoints), back up the catalog, start the new binary, check `/healthz` and the start logs.
@@ -233,9 +241,11 @@ The catalog references data files by URL, so the catalog and the objects must ma
 | Query answers `400` | Invalid TQS | Read `problems`; each has a code and path ([TQS reference](tqs-reference.md#problem-codes)) |
 | Logs show `checkpoint failed; will retry` with `has format N` | Envelope written by a different binary version | Run the matching binary, or move the envelope aside after checking it |
 | `kind: trace` lookups slow | No `time` range given | Pass `time` so fewer files are probed |
-| Start fails with `coordinator.snapshot_grace (...) must be at least ...` | The grace is shorter than `fleet.publish_interval + fleet.refresh_interval + query.timeout` | Raise `coordinator.snapshot_grace`, or lower the intervals |
+| Start fails with `the catalog ... was written for objects under ..., but this node writes under ...` | The catalog was written by a build before the fleet layout, or `node.region`/`node.id` changed since | Move `./data` (catalog, WAL and objects) aside and start empty, or set `node.region` and `node.id` back. Keep the old build to read the old data |
+| Start fails with `coordinator.snapshot_grace (...) must be at least ...` | The grace is shorter than `fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout` | Raise `coordinator.snapshot_grace`, or lower the intervals, on every node |
 | Start fails with `node.id "..." names an object storage prefix` | `node.id` or `node.region` has a character other than letters, digits, `.`, `_`, `-` | Rename it |
-| Logs show `node.id "..." is used by another node too` | Two running nodes share one `node.id` | Give each node its own id, then restart the one you renamed |
+| Logs show `node.id "..." is used by another node too` | Two running nodes share one `node.id`; the newer process won and this one stopped publishing | Give each node its own id, then restart the one you renamed |
+| `tiny_eye_fleet_errors_total` rises and logs say a copy was rejected | Another node's copy failed a check (key or files outside its prefix, too large, views or macros, or another table schema) | Check that node's build and config; during a rolling upgrade, finish it |
 | Logs show `skipping a fleet manifest older than coordinator.snapshot_grace` | That node stopped publishing more than the grace ago | Start it again, or delete its `_fleet/<id>.json` if it is retired |
 | Another node's data is missing or late | Not yet published and refreshed, or that node has `fleet.publish_interval: 0s` | Check `freshness_s`, `tiny_eye_fleet_nodes` and that node's `tiny_eye_fleet_publishes_total` |
 | `/` shows "The web UI is not built into this binary" | Binary built without `ui/dist` | Build the UI and the binary with `make build` (or `make ui`, then `cargo build --release`) |

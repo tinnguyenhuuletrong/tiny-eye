@@ -20,7 +20,7 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
   },
   {
     title: "Queryable once acknowledged",
-    text: "Queries read the lake and the in-memory hot tail together, each row counted once.",
+    text: "On the node that received them, rows are queryable at once: queries read the lake and the in-memory hot tail together, each row counted once.",
     anchor: "acknowledged-means-queryable",
   },
   {
@@ -40,7 +40,7 @@ const DIFFERENT: { title: string; text: string; anchor: string; planned?: boolea
   },
   {
     title: "A fleet without a coordinator",
-    text: "Nodes that share a bucket query each other's published catalogs; any node answers over all of them.",
+    text: "Nodes that share a bucket attach each other's published catalogs; any node answers over all their data, with other nodes' rows up to about 2 minutes behind.",
     anchor: "nodes-share-a-bucket-not-a-coordinator",
   },
 ];

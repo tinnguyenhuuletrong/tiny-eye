@@ -127,9 +127,9 @@ The rule used to be "expire snapshots older than 10 minutes". That is unsafe for
 The grace must cover the oldest reader:
 
 - a query on this node, at most `query.timeout` (30 s);
-- a query on another node that reads this node's published copy. That copy is at most `fleet.publish_interval + fleet.refresh_interval` old when it is attached, and a query on it can run `query.timeout` more.
+- a query on another node that reads this node's published copy. The check allows `fleet.publish_interval + 2 × fleet.refresh_interval` for a copy to be published, found by the other node and replaced there, and a query on it can run `query.timeout` more.
 
-So the configuration is refused unless `snapshot_grace >= fleet.publish_interval + fleet.refresh_interval + query.timeout` (90 s with the defaults; the default grace is 10 min). Other nodes also skip a manifest older than the grace, so they never attach a copy whose files may already be gone. `retention_on_one_node_keeps_copies_readable_within_the_grace` in `crates/engine/tests/fleet.rs` compacts one node while another reads its copy: within the grace the replaced L0 files are kept and the answers are unchanged, past it they are deleted and the stale manifest is skipped. With the old rule the test fails.
+So the configuration is refused unless `snapshot_grace >= fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout` (120 s with the defaults; the default grace is 10 min). The grace protects copies that other nodes read, so every node of a fleet should use the same grace, intervals and `query.timeout`. The publisher also writes its grace into the manifest (`snapshot_grace_ms`), and other nodes skip a manifest older than the smaller of that and their own grace, so they never attach a copy whose files may already be gone. That comparison uses the publisher's timestamp and the reader's clock, so keep the nodes' clocks synced with NTP. `retention_on_one_node_keeps_copies_readable_within_the_grace` in `crates/engine/tests/fleet.rs` compacts one node while another reads its copy: within the grace the replaced L0 files are kept and the answers are unchanged, past it they are deleted and the stale manifest is skipped. With the old rule the test fails.
 
 DuckLake deletes files it did not write, including files outside its `DATA_PATH` (E6, research finding 3). Retention therefore needs no object listing of its own. The rules that follow from this: never register an object twice, give the process delete rights on the bucket, and treat S3 lifecycle rules only as a backstop (the spec suggests retention plus 7 days) and as the cleaner for orphaned uploads.
 
@@ -146,7 +146,7 @@ Retention works at whole-file, whole-hour granularity, judged by the key's hour.
 | `coordinator.compaction_delay` | `10m` | An hour is compacted this long after it closes |
 | `coordinator.retention` | `15d` | Data older than this is dropped |
 | `coordinator.retention_interval` | `1h` | How often retention runs |
-| `coordinator.snapshot_grace` | `10m` | A snapshot is expired once a newer one has existed this long; at least `fleet.publish_interval + fleet.refresh_interval + query.timeout` |
+| `coordinator.snapshot_grace` | `10m` | A snapshot is expired once a newer one has existed this long; at least `fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout` |
 
 ## What the tests prove
 

@@ -30,7 +30,7 @@ CREATE OR REPLACE VIEW memory.main.<t> AS
 
 ### Other nodes of a fleet
 
-When other nodes share `storage.url` ([Run a fleet](../examples/run-a-fleet.md)), `Node::refresh_fleet` attaches their published catalog copies read-only under aliases `fleet_<n>`, and `create_views` adds one branch per copy:
+When other nodes share `storage.url` ([Run a fleet](../examples/run-a-fleet.md)), `Node::refresh_fleet` checks their published catalog copies as untrusted input ([Security](security.md#nodes-of-a-fleet)), attaches the ones that pass read-only under aliases `fleet_<n>`, and `create_views` adds one branch per copy:
 
 ```sql
   ... UNION ALL SELECT <columns> FROM fleet_1.<t>

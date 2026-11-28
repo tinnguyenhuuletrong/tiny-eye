@@ -101,8 +101,8 @@ after the catalog has them, then are released.
 
 Every query response carries `freshness_s`. On a single node it is `0`: everything acknowledged
 is visible. When several nodes share one bucket as a [fleet](../examples/run-a-fleet.md), a node
-also reads the other nodes' published data, and `freshness_s` is the age of the oldest copy it
-read.
+also reads the other nodes' published data, up to about 2 minutes behind, and `freshness_s` is
+the age of the oldest copy it read.
 
 ## Flush and checkpoint
 
@@ -128,7 +128,7 @@ The same `tiny-eye` binary has a few subcommands:
 | `tiny-eye schemas [--root .]` | Regenerates editor and agent grammars (`make schemas`). |
 
 There are no separate ingest, coordinator and query roles; any `--role` other than `all` is
-refused at start. To run several nodes, point them at one bucket: they form a
+refused at start with a message that only `--role all` exists. To run several nodes, point them at one bucket: they form a
 [fleet](../examples/run-a-fleet.md) and each answers queries over the data of all of them.
 
 ## Where things live in the repository

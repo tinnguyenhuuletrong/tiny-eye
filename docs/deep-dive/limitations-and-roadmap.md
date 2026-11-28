@@ -11,7 +11,7 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 ### M2: traces, logs, agents
 
 - `traces_index` (a per-trace summary table for faster trace search).
-- A read-only laptop / agent mode. A laptop can instead run a normal node in the [fleet](../examples/run-a-fleet.md) and read the published catalog copies; running it with a read-only storage key is not tested.
+- A read-only laptop / agent mode. A laptop can instead run a normal node in the [fleet](../examples/run-a-fleet.md) and read the published catalog copies. It is a full node: anything sent to it is written under its own prefix, and it needs read, write and delete access like any node. Running it with a read-only storage key is not tested.
 - MCP over streamable HTTP; only the stdio bridge (`tiny-eye mcp`) exists.
 - The MCP tools `get_trace_waterfall`, `search_logs`, `correlate_anomalies` and `save_panel`. The first two are covered by `run_tqs` with `kind: trace` and `kind: log_search`.
 - Span events and links are not stored.
@@ -20,12 +20,16 @@ tiny-eye implements the specification's milestone M1 (single-node metrics) and m
 
 The spec's cluster (separate roles, a leased coordinator per region, a hot-tail RPC) is not built. A **fleet** is built instead: every node is a full `--role all` node with its own catalog and object prefix, publishes a copy of its catalog to the shared bucket, and queries the copies of the others ([Run a fleet](../examples/run-a-fleet.md), proven by `crates/engine/tests/fleet.rs`). What that leaves out, on purpose or not yet:
 
-- **Other nodes' hot tails are not visible.** A node sees another node's rows only after they are flushed, checkpointed, published and refreshed: at most about 2 minutes with the defaults. There is no hot-tail RPC.
+- **Other nodes' hot tails are not visible.** A node sees another node's rows only after they are flushed, checkpointed, published and refreshed: up to about 2 minutes with the defaults. There is no hot-tail RPC.
 - **One bucket per fleet.** Every node shares one `storage.url`. Separate buckets per region (and their secrets) are not supported.
-- **No coordinator.** No roles, lease or fencing; nothing checks the fleet as a whole. Duplicate `node.id`s are detected only through the manifests, by the node whose manifest was overwritten.
+- **No coordinator.** No roles, lease or fencing; nothing checks the fleet as a whole. Duplicate `node.id`s are detected only through the manifests: the newest process wins, and the older one stops publishing and logs an error. A node with `fleet.publish_interval: 0s` writes no manifest, so a clash with its id is never detected.
+- **No deduplication across nodes.** A sample retried to two nodes of one region is kept twice; duplicates are removed only within one node's files.
+- **Mixed builds.** A catalog copy whose tables or columns differ from the reader's schema is left out of its answers, so during a rolling upgrade that changes the schema, nodes on different builds do not see each other's data.
+- **Local disk across hosts** works only with a shared mount at the same absolute path on every host: the copies name absolute file paths.
 - **No region label.** Senders must label their region or cluster on metrics, as with Prometheus `external_labels`.
 - **A stopped node drops out.** Its data leaves the others' answers once its manifest is older than `coordinator.snapshot_grace` (10 minutes); its files stay in the bucket.
-- `replicated` durability. A `postgres:` catalog URL is accepted, but a catalog shared by several nodes is not.
+- **Materialized panels keep a departed node's rows.** A node joining makes stored steps recompute; a node leaving does not, so steps already stored keep its rows until retention drops them.
+- `replicated` durability. A `postgres:` catalog URL is accepted only on a node alone (both `fleet.*_interval` set to `0s`); a catalog shared by several nodes is not built.
 - OTLP over gRPC and Loki protobuf push (only OTLP/HTTP and Loki JSON push exist).
 - mTLS between nodes (nodes do not talk to each other; they only share the bucket).
 
@@ -64,7 +68,7 @@ Limits of phase 1, by design:
 - **Shapes.** Timeseries metric queries whose points depend only on their own timestamp: not
   `table`, `fill: zero`, `top` ranked over the range, `$__range`/`$__interval`, or spans/logs
   measures.
-- **Node-local.** The store belongs to one node. In a fleet a node's panels include other nodes' rows, but a late sample is noticed only by the node that ingests it; keep `materialize.settle` longer than the fleet's lag (the start warns otherwise).
+- **Node-local.** The store belongs to one node. In a fleet a node's panels include other nodes' rows, and stored steps are recomputed when another node's late rows, a joining node or a returning node become visible.
 
 Not built from section 9.1: the mergeable `view_partials` state fed from flush envelopes, which
 would add spans and logs measures and percentiles merged across regions (log-bucket histograms,
@@ -76,7 +80,6 @@ From `README.md` and the code:
 
 - **Response fields.** `freshness_s` is the age of the oldest other-node catalog copy read (0 on a node alone), not the spec's "seconds since the newest visible row"; `partial_regions` is always empty; `bytes_scanned` is missing; `elapsed_ms` and `rows` are additions.
 - **Result labels** are parsed from the series key, so a label value containing `,` is split ambiguously (the `key` is exact).
-- **OTLP points** flagged "no recorded value" are stored as values.
 - **`kind: trace` without `time`** probes every span file; pass a time range (the spec assumes one).
 - **Duplicates.** Samples with the same series and timestamp (a retried request) are removed at flush and compaction (`unique` in `schema/tables.yaml`); two copies can coexist briefly in the hot tail.
 - **Error text.** `500` responses carry the engine's error text; front the API with a proxy before exposing it.

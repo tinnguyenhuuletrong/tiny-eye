@@ -442,7 +442,7 @@ Pass a `time` range with `kind: trace`. Without it, the lookup probes every span
 `output` is the name of the query or formula that produced the series. Hidden queries produce no series. Steps without a value have no point (they are gaps, not `null`).
 
 :::note Implementation differs from the spec
-The spec's response also lists `bytes_scanned`; it is not implemented. `elapsed_ms` and `rows` are additions. `partial_regions` is always empty, also when a fleet node skips another node whose manifest is too old.
+The spec's response also lists `bytes_scanned`; it is not implemented. `elapsed_ms` and `rows` are additions. `partial_regions` is always empty, also when a fleet node skips another node whose manifest is too old or whose catalog copy it rejected.
 :::
 
 An invalid document returns `400` with `{"valid": false, "problems": [...]}`. A query that fails while running (for example the timeout) returns `500` with a plain-text message. `POST /api/v1/validate` always returns `200` with `{"valid": ..., "problems": [...]}`.

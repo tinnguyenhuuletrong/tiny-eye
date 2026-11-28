@@ -156,7 +156,7 @@ data/
   wal/                      write-ahead log segments (durability: wal)
   catalog.ducklake          DuckLake catalog (a DuckDB file) and its .wal
   materialized.duckdb       points of materialized panels (derived, safe to delete)
-  fleet/node-0/             other nodes' catalog copies, when nodes share storage (emptied at start)
+  fleet/node-0/             other nodes' catalog copies (fleet_<n>.ducklake), when nodes share storage (emptied at start)
   objects/                  the object store root (storage.url)
     local/node-0/           this node's own prefix: <node.region>/<node.id>/
       metrics_series/tenant=default/date=2026-11-21/hour=00/l0-<ulid>-node-0.parquet
@@ -176,8 +176,16 @@ The full key layout is in [Storage format](../deep-dive/storage-format.md).
 
 :::warning[Layout changed]
 Builds before the fleet wrote objects at the root of `storage.url` and envelopes under
-`commits/<region>/`. Data written by those builds is not read and is not migrated. Start from an
-empty `./data`.
+`commits/<region>/`. A newer build does not read or migrate that data: it refuses to start on a
+catalog written that way, with
+
+```text
+the catalog <catalog.url> was written for objects under <old path>, but this node writes under <new path> (node.region/node.id changed, or data from a build before the fleet layout). Start with an empty data directory (move ./data aside), or set node.region and node.id back to the values that wrote it.
+```
+
+Move `./data` aside and start again. Keep the old build if you still need to read the old data.
+Changing `node.region` or `node.id` of an existing node stops the start the same way, because its
+prefix moves.
 :::
 
 `make clean` removes build output, `./data` and `.state`.

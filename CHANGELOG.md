@@ -76,23 +76,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). There are
 - Fleet: nodes that share `storage.url` find each other there and answer queries over all their
   data. Each node publishes a gzipped copy of its catalog (`fleet.publish_interval`) with a manifest
   `_fleet/<node.id>.json`, and attaches the other nodes' copies read-only (`fleet.refresh_interval`);
-  a node alone works as before. Self-metrics `tiny_eye_fleet_nodes`,
-  `tiny_eye_fleet_oldest_copy_age_seconds`, `tiny_eye_fleet_publishes_total` and
-  `tiny_eye_fleet_errors_total`; a second process using the same `node.id` is reported; the start
-  warns when `materialize.settle` is shorter than the worst-case lag of another node's rows.
+  a node alone answers as before. Another node's rows show up to about 2 minutes after they are
+  acknowledged. Self-metrics `tiny_eye_fleet_nodes`, `tiny_eye_fleet_oldest_copy_age_seconds`,
+  `tiny_eye_fleet_publishes_total` and `tiny_eye_fleet_errors_total` (failed publishes, failed
+  refreshes and rejected copies). When two processes use the same `node.id`, the newest wins and
+  the older stops publishing. Other nodes' catalog copies are untrusted: a copy is rejected when
+  its key or data files are outside the publisher's prefix, it is larger than
+  `fleet.max_copy_bytes` (new, default 256MB) decompressed, it holds views or macros, or its
+  tables differ from this build's schema. Manifests (format 2) carry the publisher's
+  `snapshot_grace_ms`, and readers use the smaller grace. Materialized panels recompute stored
+  steps when rows from another node become visible late. A `postgres:` catalog is refused with
+  non-zero fleet intervals; `_fleet` is not allowed as `node.id` or `node.region`.
   Guide: "Run a fleet" (`docs/examples/run-a-fleet.md`).
 
 ### Changed
 
 - Breaking: every node writes its objects under `<node.region>/<node.id>/` of `storage.url`
   (`local/node-0/` by default) and envelopes as `commits/<epoch>-<seq>.json` there. Data written by
-  earlier builds is not read and not migrated: start from an empty data directory. `node.id` and
-  `node.region` must be letters, digits, `.`, `_` or `-`; an empty value falls back to the default.
+  earlier builds is not read and not migrated: the node refuses to start on a catalog written by
+  an earlier build (or after `node.region`/`node.id` changed) and says so. Start with an empty data
+  directory, and keep the old build to read the old data. `node.id` and `node.region` must be
+  letters, digits, `.`, `_` or `-`; an empty value falls back to the default.
 - `freshness_s` in query responses is the age of the oldest other-node catalog copy the query read
   (still 0 on a node alone; it was always 0).
 - Retention expires a catalog snapshot once a newer one has existed for `coordinator.snapshot_grace`
   (default 10m, was a fixed 10 minutes after the snapshot was created), validated to cover
-  `fleet.publish_interval + fleet.refresh_interval + query.timeout`.
+  `fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout`. `0s` is accepted only for
+  the two fleet intervals.
+- `--role` other than `all` says that only `--role all` exists and that several nodes run as a
+  fleet.
 
 ### Fixed
 

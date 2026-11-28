@@ -406,7 +406,7 @@ The coordinator exports the snapshot every 5 min (default) E9: 1. Flush inlined 
 
 Measured: attach 44 ms, trace lookup 28 ms, writes refused E9. This depends on DuckLake internals, so it is gated by E9 in CI on every DuckLake upgrade. Freshness is export interval + flush interval, with no hot tail [→ Q19](#questions).
 
-*2026-11-28: superseded by the fleet. Every node exports its catalog every `fleet.publish_interval` (30 s) with `COPY FROM DATABASE` of DuckLake's metadata database into a fresh DuckDB file (tested with the DuckDB-file catalog), gzipped (about 50 KB), and every node, a laptop included, attaches the others' copies read-only every `fleet.refresh_interval`. Retention keeps a superseded snapshot for `coordinator.snapshot_grace` (≥ publish + refresh + query timeout), so no attached copy names a deleted file. The CI gate is `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs`. See {G}.*
+*2026-11-28: superseded by the fleet. Every node exports its catalog every `fleet.publish_interval` (30 s) with `COPY FROM DATABASE` of DuckLake's metadata database into a fresh DuckDB file (tested with the DuckDB-file catalog), gzipped (about 43 to 74 KB for 6 hours of data at the proof of concept's scale; it grows with the number of files), and every node, a laptop included, attaches the others' copies read-only every `fleet.refresh_interval`. Retention keeps a superseded snapshot for `coordinator.snapshot_grace` (≥ publish + 2 × refresh + query timeout), so no attached copy names a deleted file. The CI gate is `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs`. See `docs/examples/run-a-fleet.md`.*
 
 ---
 

@@ -11,7 +11,7 @@ tiny-eye keeps data in four places:
 | Object storage (`storage.url`: a local directory or `s3://bucket/prefix`) | Under the node's prefix `<region>/<id>/`: Parquet data files (L0 from flushes, L1 from compaction), commit envelopes and the published catalog copy. At the root: one fleet manifest per node | Data files: until retention. Envelopes: until the next checkpoint applies them. Catalog copy and manifest: replaced at every publish |
 | DuckLake catalog (`catalog.url`: a DuckDB file or `postgres:<conninfo>`) | Table definitions, the list of registered files with their column statistics, snapshots, and the `applied_envelopes` table | Permanent. A snapshot is expired by retention once a newer one has existed for `coordinator.snapshot_grace` (10 min) |
 | Local WAL directory (`ingest.wal_dir`, `durability: wal` only) | One segment file per flush sequence | Until that sequence's envelope is in object storage |
-| Local fleet directory (`fleet.dir`) | Downloaded catalog copies of the other nodes sharing `storage.url` | Until replaced; emptied at start |
+| Local fleet directory (`<fleet.dir>/<node.id>/`) | Downloaded catalog copies of the other nodes sharing `storage.url`, as `fleet_<n>.ducklake` | Until replaced; emptied at start |
 
 The in-memory DuckDB database holding the hot tables is not storage. It is rebuilt empty on every start and refilled from the WAL. See [Write path](write-path.md).
 
@@ -113,10 +113,10 @@ _fleet/<id>.json                                                                
 - DuckLake never parses the hierarchy (E3). It serves humans, lifecycle backstops and audits.
 - `lake/` is the `DATA_PATH` passed to `ATTACH 'ducklake:...'`. tiny-eye writes no files there. All our files are registered from their own keys with `ducklake_add_data_files`, and DuckLake later deletes them anyway (E6).
 - The envelope key is deterministic per (node, epoch, sequence): the node is in the prefix, the epoch and sequence in the name. The zero padding makes lexical order equal numeric order. [Write path](write-path.md) explains why it is deterministic.
-- `node.id` and `node.region` are checked at start to be single path segments (letters, digits, `.`, `_`, `-`).
+- `node.id` and `node.region` are checked at start to be single path segments (letters, digits, `.`, `_`, `-`), and neither may be `_fleet`.
 
 :::warning[Layout changed]
-Before the fleet, objects were written at the root of `storage.url` and envelopes as `commits/<region>/<node>-<epoch>-<seq>.json`. Data written that way is not read and not migrated.
+Before the fleet, objects were written at the root of `storage.url` and envelopes as `commits/<region>/<node>-<epoch>-<seq>.json`. That data is not read and not migrated. A newer build refuses to start on a catalog whose files are not under the node's prefix: `the catalog <catalog.url> was written for objects under <old path>, but this node writes under <new path> (...)`. Start with an empty data directory and keep the old build to read the old data. Changing `node.region` or `node.id` of an existing node moves its prefix and stops the start the same way.
 :::
 
 On S3 the client is built with `S3ConditionalPut::ETagMatch`, so `PutMode::Create` becomes `If-None-Match: *` (E1). On local disk `LocalFileSystem` gives the same create-only semantics. `Store::put_new` returns `true` if it created the object and `false` if the object already existed, and treats `AlreadyExists` and `Precondition` alike.
@@ -138,20 +138,24 @@ An envelope is the only thing that makes a flush's files visible once applied (s
 Every `fleet.publish_interval`, a node publishes its catalog for the other nodes sharing `storage.url` ([Run a fleet](../examples/run-a-fleet.md)). Under the catalog lock, so it never overlaps a checkpoint, it copies the DuckLake metadata database into a fresh DuckDB file (`COPY FROM DATABASE`), gzips it to `<region>/<id>/_fleet/catalog.ducklake.gz`, and then writes the manifest `_fleet/<id>.json` (`fleet::Manifest`):
 
 ```json
-{ "format": 1, "node_id": "eu-1", "region": "eu", "epoch": 1764300000000, "snapshot_id": 42,
-  "published_at_ms": 1764300030000, "catalog_key": "eu/eu-1/_fleet/catalog.ducklake.gz" }
+{ "format": 2, "node_id": "eu-1", "region": "eu", "epoch": 1764300000000, "snapshot_id": 42,
+  "published_at_ms": 1764300030000, "snapshot_grace_ms": 600000,
+  "catalog_key": "eu/eu-1/_fleet/catalog.ducklake.gz" }
 ```
 
 | Field | Meaning |
 | :--- | :--- |
-| `format` | Version of the manifest and the copy. A node skips a manifest of another format with a warning |
+| `format` | Version of the manifest and the copy (2). A node skips a manifest of another format with a warning |
 | `node_id`, `region` | The publisher. A node skips its own manifest |
-| `epoch` | Start time (ms) of the publishing process. Another epoch under one's own id means two processes use the same `node.id` |
+| `epoch` | Start time (ms) of the publishing process. A newer epoch under one's own id means a newer process uses the same `node.id`: the older process stops publishing |
 | `snapshot_id` | The publisher's catalog snapshot the copy holds. The copy is uploaded again only when it changed; the manifest is rewritten at every publish |
-| `published_at_ms` | When the manifest was written. Readers skip a manifest older than `coordinator.snapshot_grace`; `freshness_s` is computed from it |
+| `published_at_ms` | When the manifest was written, by the publisher's clock. `freshness_s` is computed from it |
+| `snapshot_grace_ms` | The publisher's `coordinator.snapshot_grace`. A reader skips a manifest older than the smaller of this and its own grace |
 | `catalog_key` | Key of the gzipped copy, relative to `storage.url` |
 
-The copy is mostly empty DuckDB blocks: the proof of concept measured a 5.3 MB file that gzips to 43 to 74 KB as the catalog grows ([fleet proof of concept](evidence/fleet-poc.md)). The copy is made from DuckLake's metadata database by its internal name, `__ducklake_metadata_lake`. `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs` fails if a DuckDB or DuckLake upgrade renames it (spec question Q19).
+The copy is mostly empty DuckDB blocks: the proof of concept measured a 5.3 MB file that gzips to 43 to 74 KB for 6 hours of data at its scale, growing with the number of files in the catalog ([fleet proof of concept](evidence/fleet-poc.md)). The copy is made from DuckLake's metadata database by its internal name, `__ducklake_metadata_lake`. `ducklake_metadata_database_keeps_its_name` in `crates/engine/tests/fleet.rs` fails if a DuckDB or DuckLake upgrade renames it (spec question Q19).
+
+A reader downloads a changed copy to `<fleet.dir>/<node.id>/fleet_<n>.ducklake` and treats it as untrusted. It rejects the copy when `catalog_key` is not under the publisher's prefix, the copy is larger than `fleet.max_copy_bytes` (256 MB) decompressed, it holds views or macros, its tables or columns differ from this build's schema, or it names data files outside the publisher's prefix. A rejected copy is left out of answers and counted in `tiny_eye_fleet_errors_total` ([Run a fleet](../examples/run-a-fleet.md#copies-are-untrusted)).
 
 ## Catalog tables
 

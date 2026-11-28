@@ -68,7 +68,8 @@ The answer is the same as the raw query's. Details:
   See [Materialized panels](#materialized-panels) above.
 - **A fleet without a coordinator.** Point several nodes (one per region, or one on your laptop)
   at the same bucket. Each publishes a small copy of its catalog there and queries the others'
-  copies, so any node answers over all their data. A node alone needs no setup.
+  copies, so any node answers over all their data, with other nodes' rows up to about 2 minutes
+  behind. A node alone needs no setup.
   See [Run a fleet](docs/examples/run-a-fleet.md).
 
 ## Quick start
@@ -152,11 +153,13 @@ retention; TQS 3 with Prometheus staleness semantics; YAML dashboards with save 
 materialized panels; the web UI; MCP; bearer-token scopes; self-metrics; a fleet of nodes sharing
 one bucket and querying each other's data.
 
-**Not built yet:** the spec's cluster roles (separate ingest and query nodes, a leased
-coordinator, other nodes' hot tails visible at once; the fleet sees another node's rows about
-2 minutes after it acknowledged them), separate buckets per region, OTLP gRPC, Loki protobuf push,
-alerting, a Grafana data source, native histograms, span events and links. Full list:
+**Not built yet:** separate buckets per region, OTLP gRPC, Loki protobuf push, alerting, a
+Grafana data source, native histograms, span events and links. Full list:
 [Limitations and roadmap](docs/deep-dive/limitations-and-roadmap.md).
+
+**Replaced by the fleet:** the spec's cluster roles (separate ingest/query nodes, leased
+coordinator, hot-tail RPC); another node's rows show up to about 2 minutes after they are
+acknowledged.
 
 ## Evidence
 

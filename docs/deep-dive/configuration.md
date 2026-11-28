@@ -27,8 +27,10 @@ Every section refuses unknown keys, so a typo never silently becomes a default:
 
 After parsing, these checks run:
 
-- `node.id` and `node.region` name an object-storage prefix, so they may hold only letters, digits, `.`, `_` and `-` (and may not be `.` or `..`). An empty or null value falls back to the default (`node-0`, `local`), so it never makes an empty path segment.
-- `coordinator.snapshot_grace` must be at least `fleet.publish_interval + fleet.refresh_interval + query.timeout` (see [`fleet`](#fleet)).
+- `node.id` and `node.region` name an object-storage prefix, so they may hold only letters, digits, `.`, `_` and `-` (and may not be `.`, `..` or `_fleet`). An empty or null value falls back to the default (`node-0`, `local`), so it never makes an empty path segment.
+- `coordinator.snapshot_grace` must be at least `fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout` (see [`fleet`](#fleet)).
+- A `postgres:` `catalog.url` is refused unless `fleet.publish_interval` and `fleet.refresh_interval` are both `0s`: a fleet node keeps its catalog in a DuckDB file.
+- `0s` is accepted only for `fleet.publish_interval` and `fleet.refresh_interval`.
 - `query.workers` and `duckdb.threads` must be greater than 0, and so must `ingest.flush_bytes` and `ingest.row_group_rows`.
 
 One more check only warns. When the node reads other nodes' data (`fleet.refresh_interval` is not `0s`) and `materialize.settle` is shorter than `ingest.flush_interval + coordinator.checkpoint_interval + fleet.publish_interval + fleet.refresh_interval`, the start logs a warning: materialized panels may store steps before every node's rows for them have arrived.
@@ -38,9 +40,9 @@ One more check only warns. When the node reads other nodes' data (`fleet.refresh
 | Kind | Grammar | Examples |
 | :--- | :--- | :--- |
 | Size | whole number followed by `B`, `KB`, `MB` or `GB` (powers of 1024) | `512KB`, `64MB`, `1GB` |
-| Duration | whole number followed by `ms`, `s`, `m`, `h`, `d` or `w` | `250ms`, `60s`, `10m`, `15d`, `0s` |
+| Duration | whole number followed by `ms`, `s`, `m`, `h`, `d` or `w` | `250ms`, `60s`, `10m`, `15d` |
 
-Durations use the same grammar as TQS durations, plus zero (`0s`), which the `fleet` intervals read as "never". Fractions and combined units (`1h30m`) are not accepted. `duckdb.memory_limit` is passed to DuckDB as text (for example `4GB`).
+Durations use the same grammar as TQS durations. Zero (`0s`) is accepted only for `fleet.publish_interval` and `fleet.refresh_interval`, which read it as "never". Fractions and combined units (`1h30m`) are not accepted. `duckdb.memory_limit` is passed to DuckDB as text (for example `4GB`).
 
 ## Keys
 
@@ -75,7 +77,7 @@ The S3 keys apply only when `storage.url` starts with `s3://`. DuckDB reads S3 o
 
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
-| `catalog.url` | string | `./data/catalog.ducklake` | This node's DuckLake catalog: a DuckDB file path or `postgres:<libpq conninfo>`. The parent directory of a file path is created. Every node has its own catalog, also in a fleet. |
+| `catalog.url` | string | `./data/catalog.ducklake` | This node's DuckLake catalog: a DuckDB file path or `postgres:<libpq conninfo>`. The parent directory of a file path is created. Every node has its own catalog, also in a fleet. A `postgres:` catalog cannot be used in a fleet: it is refused unless both `fleet.*_interval` are `0s`. |
 
 ### `duckdb`
 
@@ -108,25 +110,22 @@ The S3 keys apply only when `storage.url` starts with `s3://`. DuckDB reads S3 o
 | `coordinator.compaction_delay` | duration | `10m` | Compact an hour this long after it closes. |
 | `coordinator.retention` | duration | `15d` | Data older than this is deleted. |
 | `coordinator.retention_interval` | duration | `1h` | How often retention runs. |
-| `coordinator.snapshot_grace` | duration | `10m` | A catalog snapshot is expired, and the files only it names are deleted, once a newer snapshot has existed this long. Must be at least `fleet.publish_interval + fleet.refresh_interval + query.timeout`. Other nodes skip a manifest older than this. |
+| `coordinator.snapshot_grace` | duration | `10m` | A catalog snapshot is expired, and the files only it names are deleted, once a newer snapshot has existed this long. Must be at least `fleet.publish_interval + 2 × fleet.refresh_interval + query.timeout`. Published in the manifest; other nodes skip a manifest older than the smaller of this and their own grace. Use the same value on every node of a fleet. |
 
 ### `fleet`
 
-Nodes that share `storage.url` find each other there and answer queries over all their data. A node alone finds only itself and works as before. See [Run a fleet](../examples/run-a-fleet.md).
+Nodes that share `storage.url` find each other there and answer queries over all their data. A node alone answers exactly as before (it still publishes a small copy every 30 s; set both `fleet.*_interval` to `0s` to turn that off). See [Run a fleet](../examples/run-a-fleet.md).
 
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
 | `fleet.publish_interval` | duration | `30s` | Publish a copy of this node's catalog (`<region>/<id>/_fleet/catalog.ducklake.gz` and the manifest `_fleet/<id>.json`) this often. `0s` = never: other nodes do not see this node. |
 | `fleet.refresh_interval` | duration | `30s` | Look for the other nodes' copies this often, download the changed ones and query them with this node's data. `0s` = never. |
-| `fleet.dir` | path | `./data/fleet` | Local directory for downloaded copies, one subdirectory per node id, emptied at start. |
+| `fleet.dir` | path | `./data/fleet` | Local directory for downloaded copies. A node keeps them in `<fleet.dir>/<node.id>/` (its own id) as `fleet_<n>.ducklake`, and empties that directory at start. |
+| `fleet.max_copy_bytes` | size | `256MB` | Another node's catalog copy larger than this once decompressed is rejected (see [Copies are untrusted](../examples/run-a-fleet.md#copies-are-untrusted)). |
 
-`coordinator.snapshot_grace` must cover `publish_interval + refresh_interval + query.timeout` (90 s with the defaults), otherwise the start fails:
+**Use the same `fleet.publish_interval`, `fleet.refresh_interval`, `fleet.max_copy_bytes`, `query.timeout` and `coordinator.snapshot_grace` on every node.** A node's grace protects the copies the other nodes read, so it must fit their timing too. Each manifest carries the publisher's grace, and a reader uses the smaller of its own and the publisher's. A node may still set `fleet.publish_interval: 0s` to publish nothing. Keep the nodes' clocks synced with NTP: a reader compares the publish time in a manifest with its own clock.
 
-```text
-coordinator.snapshot_grace (1m) must be at least fleet.publish_interval + fleet.refresh_interval + query.timeout (30s + 30s + 30s = 90s): another node may still be reading a catalog copy that names the files older snapshots referenced
-```
-
-With both intervals at `0s`, only `query.timeout` counts.
+`coordinator.snapshot_grace` must cover `publish_interval + 2 × refresh_interval + query.timeout` (120 s with the defaults), otherwise the start fails with `coordinator.snapshot_grace (...) must be at least ...`. With both intervals at `0s`, only `query.timeout` counts.
 
 ### `query`
 
