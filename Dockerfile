@@ -39,7 +39,7 @@ ARG DUCKDB_VERSION=v2.0.1
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN plat="linux_$(dpkg --print-architecture)" && mkdir -p "/ext/${DUCKDB_VERSION}/${plat}" && \
     for e in ducklake httpfs icu postgres_scanner; do \
-      curl -sSfL "http://extensions.duckdb.org/${DUCKDB_VERSION}/${plat}/${e}.duckdb_extension.gz" | gunzip > "/ext/${DUCKDB_VERSION}/${plat}/${e}.duckdb_extension"; \
+      curl -sSfL "https://extensions.duckdb.org/${DUCKDB_VERSION}/${plat}/${e}.duckdb_extension.gz" | gunzip > "/ext/${DUCKDB_VERSION}/${plat}/${e}.duckdb_extension"; \
     done
 
 FROM debian:bookworm-slim

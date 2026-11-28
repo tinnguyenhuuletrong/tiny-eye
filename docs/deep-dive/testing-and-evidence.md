@@ -113,7 +113,7 @@ The workflow needs two things from the repository:
 
 ## What CI runs
 
-`.github/workflows/ci.yml` runs on pull requests and pushes to `main`, on Ubuntu with stable Rust (a newer push to a pull request cancels its older run; only `main` saves the Rust build cache, which pull requests restore): `make tools`, `make lint` (rustfmt check, clippy with warnings as errors), `make test`, `make conformance`. `make check` runs `lint`, `test` and `conformance` locally. The benchmarks don't run on pushes or pull requests; the separate `bench` workflow runs them weekly (see [Where the benchmarks run](#where-the-benchmarks-run-make-bench-all)).
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`, on Ubuntu with stable Rust (a newer push to a pull request cancels its older run; only `main` saves the Rust build cache, which pull requests restore): `make tools`, `make ui`, `make lint` (rustfmt check, clippy with warnings as errors), `make examples-lint`, `make test`, `make conformance`, and in a second job `make docs`. `make check` runs the same steps locally: `ui`, `lint`, `examples-lint`, `test`, `conformance` and `docs`. The benchmarks don't run on pushes or pull requests; the separate `bench` workflow runs them weekly (see [Where the benchmarks run](#where-the-benchmarks-run-make-bench-all)).
 
 ## Latest results
 
