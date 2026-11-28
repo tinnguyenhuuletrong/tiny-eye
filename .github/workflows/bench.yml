@@ -7,7 +7,7 @@ name: bench
 # "local machine". See docs/deep-dive/testing-and-evidence.md, "Where the benchmarks run".
 #
 # Needs: Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests",
-# and no required reviews or status checks on main (a PR opened with GITHUB_TOKEN starts no CI).
+# and no required reviews or status checks on main (ci.yml skips PRs that only change reports).
 on:
   schedule:
     - cron: "0 3 * * 1" # Mondays 03:00 UTC
