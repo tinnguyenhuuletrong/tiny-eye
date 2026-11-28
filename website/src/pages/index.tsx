@@ -229,7 +229,7 @@ export default function Home(): ReactNode {
             <CopyButton text={tryIt} />
           </div>
           <nav className={styles.ctaLinks}>
-            <Link to="/docs/intro">Docs</Link>
+            <Link to="/docs">Docs</Link>
             <Link href={repoUrl}>GitHub</Link>
             <Link to="/docs/category/guides">Examples</Link>
           </nav>

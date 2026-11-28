@@ -17,9 +17,9 @@ run against S3.
 | --- | --- |
 | Rust, via [rustup](https://rustup.rs) | Builds the binary. `rust-toolchain.toml` pins the exact version, and `rustup install` (no arguments, run inside the repo) installs it. |
 | A C/C++ compiler | The `duckdb` crate compiles DuckDB from source. The first build takes several minutes. |
-| `curl`, `tar`, `gunzip` | `make tools` downloads pinned binaries. |
+| `curl`, `tar`, `gunzip` | `make ext` and `make tools` download pinned binaries. |
 | Node.js 20+ and npm | Builds the web UI, which `make build` and `make run` embed. Also needed for the docs site. The examples (demo shop, machine agent) need [Bun](https://bun.sh) 1.x instead. Not needed if you build with `cargo` directly. |
-| Docker (optional) | For the container image (`make docker`), MinIO (`make s3-up`) and the demo load test (`make demo-load`). |
+| Docker (optional) | Only for the container image (`make docker`), MinIO for the S3 benchmarks (`make s3-up`) and the demo load test (`make demo-load`). |
 
 ## Install
 
@@ -29,12 +29,13 @@ run against S3.
 ```bash
 git clone https://github.com/tinnguyenhuuletrong/tiny-eye.git
 cd tiny-eye
-make tools    # once: pinned DuckDB extensions + Prometheus into .tools/
+make ext      # once: pinned DuckDB extensions into .tools/ (make tools adds Prometheus, for the tests)
 make build    # web UI (ui/dist), then the release binary: target/release/tiny-eye
 ```
 
-`make build` first runs `make ui` (`npm ci` and `npm run build` in `ui/`, output in `ui/dist`),
-then `cargo build --release --bin tiny-eye`. The build embeds `ui/dist` into the binary, so the
+`make build` first runs `make ui` (`npm run build` in `ui/`, output in `ui/dist`), then
+`cargo build --release --bin tiny-eye`. Both rebuild only what changed: the UI when a file in
+`ui/` or `api/openapi.yaml` changed (`npm ci` only when `ui/package-lock.json` changed). The build embeds `ui/dist` into the binary, so the
 binary is all you need to deploy. DuckDB must be a release build in every profile (its debug
 build aborts when release-built extensions free memory), which `Cargo.toml` already arranges.
 
@@ -138,8 +139,8 @@ TINY_EYE__STORAGE__S3__ENDPOINT=http://127.0.0.1:19000   # storage.s3.endpoint
 ```
 
 Values are parsed as YAML, so numbers and booleans keep their type. An unknown key stops the
-start with an error naming it. The effective configuration is logged at start with secrets
-redacted. Every key is described in [Configuration](../deep-dive/configuration.md).
+start with an error naming it. `tiny-eye config` prints the effective configuration with secrets
+redacted (a starting node logs it at `debug` level). Every key is described in [Configuration](../deep-dive/configuration.md).
 
 :::tip[Editor support]
 Editors autocomplete and validate config files through the

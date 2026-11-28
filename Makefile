@@ -15,24 +15,31 @@ export TINY_EYE_DUCKDB_EXT := $(TOOLS)/duckdb_ext
 
 .PHONY: help
 help: ## List targets
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 ## ---- setup
-.PHONY: tools
-tools: $(TOOLS)/prometheus $(TOOLS)/duckdb_ext/$(DUCKDB_VER)/$(DUCK_PLAT)/ducklake.duckdb_extension ## Download pinned Prometheus + DuckDB extensions into .tools/
+# run, demo and machine need only the DuckDB extensions (ext); the test suites also start the
+# pinned Prometheus (tools). Both are files: once downloaded, nothing is fetched again.
+EXT := $(TOOLS)/duckdb_ext/$(DUCKDB_VER)/$(DUCK_PLAT)/ducklake.duckdb_extension
+.PHONY: tools ext
+tools: ext $(TOOLS)/prometheus ## Download the pinned DuckDB extensions + Prometheus (for the tests) into .tools/
 	@echo "tools ready in $(TOOLS)"
+
+ext: $(EXT) ## Download only the pinned DuckDB extensions into .tools/ (all a node needs to run)
 
 $(TOOLS)/prometheus:
 	mkdir -p $(TOOLS) && cd $(TOOLS) && \
 	curl -sSfL -o prom.tgz https://github.com/prometheus/prometheus/releases/download/v$(PROM_VER)/prometheus-$(PROM_VER).$(OS)-$(ARCH).tar.gz && \
 	tar xzf prom.tgz && cp prometheus-$(PROM_VER).$(OS)-$(ARCH)/{prometheus,promtool} . && rm -rf prom.tgz prometheus-$(PROM_VER).*
 
-$(TOOLS)/duckdb_ext/$(DUCKDB_VER)/$(DUCK_PLAT)/ducklake.duckdb_extension:
-	mkdir -p $(dir $@) && for e in ducklake httpfs icu postgres_scanner; do \
-	  curl -sSfL http://extensions.duckdb.org/$(DUCKDB_VER)/$(DUCK_PLAT)/$$e.duckdb_extension.gz | gunzip > $(dir $@)$$e.duckdb_extension; done
+# ducklake comes last: its file (the target) exists only once all four are in place.
+$(EXT):
+	set -o pipefail; mkdir -p $(dir $@) && for e in httpfs icu postgres_scanner ducklake; do \
+	  curl -sSfL https://extensions.duckdb.org/$(DUCKDB_VER)/$(DUCK_PLAT)/$$e.duckdb_extension.gz | gunzip > $(dir $@)$$e.part && \
+	  mv $(dir $@)$$e.part $(dir $@)$$e.duckdb_extension || exit 1; done
 
 .PHONY: hooks
-hooks: ## Install the git pre-commit hook (fmt + clippy)
+hooks: ## Install the git pre-commit hook (fmt + the same clippy as make lint, sharing its build cache)
 	git config core.hooksPath .githooks
 
 ## ---- develop
@@ -41,13 +48,23 @@ build: ui ## Release build of the tiny-eye binary, web UI included
 	cargo build --release --bin tiny-eye
 
 .PHONY: run
-run: tools build ## Run a single node with config/dev.yaml (local disk); UI at http://127.0.0.1:7070
+run: ext build ## Run a single node with config/dev.yaml (local disk); UI at http://127.0.0.1:7070
 	./target/release/tiny-eye --config config/dev.yaml
 
 ## ---- web UI (ui/) and docs site (website/)
+# ui/dist is rebuilt only when a UI source, the lockfile or api/openapi.yaml changed; npm ci runs
+# only when node_modules is missing or older than the lockfile. An unchanged ui/dist keeps its
+# timestamps, so cargo does not rebuild the server to embed it again.
+UI_SRC := $(filter-out ui/src/api.gen.ts,$(shell find ui/src -type f)) ui/index.html ui/package.json ui/tsconfig.json ui/vite.config.ts api/openapi.yaml
 .PHONY: ui ui-dev docs docs-dev
-ui: ## Build the web UI into ui/dist (embedded by the next cargo build); API types generated from api/openapi.yaml
-	cd ui && npm ci --no-audit --no-fund && npm run build
+ui: ui/dist/index.html ## Build the web UI into ui/dist (embedded by the next cargo build); API types generated from api/openapi.yaml
+
+ui/node_modules/.package-lock.json: ui/package-lock.json
+	cd ui && npm ci --no-audit --no-fund
+	touch $@
+
+ui/dist/index.html: ui/node_modules/.package-lock.json $(UI_SRC)
+	cd ui && npm run build
 
 ui-dev: ## UI dev server on :5173 with hot reload, proxying the API to a running node (make run)
 	cd ui && npm install --no-audit --no-fund && npm run dev
@@ -103,8 +120,11 @@ s3-up: ## Start MinIO (S3) on :19000 with bucket tiny-eye, for S3-mode benchmark
 s3-down: ## Stop MinIO and drop its volume
 	$(COMPOSE) down -v
 
+# The same steps as .github/workflows/ci.yml, in its order: ui (Node.js), lint (rustfmt, clippy),
+# examples-lint (Bun), test (unit + integration tests, including e2e against Prometheus and the
+# check that generated files are up to date), conformance, and docs (Node.js; fails on broken links).
 .PHONY: check
-check: lint examples-lint ui test conformance ## Everything CI runs (test includes e2e vs Prometheus and the schema sync check)
+check: ui lint examples-lint test conformance docs ## Everything CI runs: ui, lint, examples-lint, test, conformance, docs (needs Node.js and Bun)
 
 ## ---- container
 .PHONY: docker
@@ -113,7 +133,7 @@ docker: ## Build the container image tiny-eye:dev (UI + binary + pinned DuckDB e
 
 ## ---- demo (examples/demo/README.md)
 .PHONY: demo demo-app demo-load machine machine-agent machine-hog
-demo: tools build ## Run tiny-eye with the demo config (dashboards from examples/demo); UI at http://127.0.0.1:7070
+demo: ext build ## Run tiny-eye with the demo config (dashboards from examples/demo); UI at http://127.0.0.1:7070
 	./target/release/tiny-eye --config examples/demo/tiny-eye.yaml
 
 demo-app: ## Run the demo shop: shop-api :3000 + payments :3001 (Bun, OpenTelemetry)
@@ -127,7 +147,7 @@ demo-load: ## k6 load against the demo shop via Docker (DURATION=10m for longer)
 	docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:3000 \
 	  -e DURATION=$(or $(DURATION),3m) grafana/k6:1.4.2 run - < examples/demo/k6/load.js
 
-machine: tools build ## Run tiny-eye for the machine example (examples/machine): UI at http://127.0.0.1:7070
+machine: ext build ## Run tiny-eye for the machine example (examples/machine): UI at http://127.0.0.1:7070
 	./target/release/tiny-eye --config examples/machine/tiny-eye.yaml
 
 machine-agent: ## Send this computer's CPU, memory, network, disk and top processes to tiny-eye (Bun, no runtime deps)
@@ -152,7 +172,7 @@ bench-all: ## Every benchmark, one after the other; what .github/workflows/bench
 	$(MAKE) fleet-poc
 
 .PHONY: fleet-poc
-fleet-poc: tools s3-up ## Share-nothing nodes + read-only viewer over published catalogs (MinIO); writes docs/deep-dive/evidence/fleet-poc.md
+fleet-poc: tools s3-up ## Fleet proof of concept: nodes sharing one bucket (MinIO) query each other's data; writes docs/deep-dive/evidence/fleet-poc.md
 	cargo run --release -p server --bin tiny-eye-fleet -- --s3 http://127.0.0.1:19000 --out docs/deep-dive/evidence/fleet-poc.md
 
 .PHONY: clean

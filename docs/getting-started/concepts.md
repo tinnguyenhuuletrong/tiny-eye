@@ -116,7 +116,7 @@ is `compaction_delay` old, and **retention** (15 days by default) deletes old fi
 DuckLake. Details: [Write path](../deep-dive/write-path.md) and
 [Catalog and maintenance](../deep-dive/catalog-and-maintenance.md).
 
-## One binary, several roles
+## One binary, a few subcommands
 
 The same `tiny-eye` binary has a few subcommands:
 
@@ -126,6 +126,7 @@ The same `tiny-eye` binary has a few subcommands:
 | `tiny-eye mcp --url http://127.0.0.1:7070 [--token-env VAR]` | Runs the MCP stdio bridge for AI agents against a running node. |
 | `tiny-eye config [--config file.yaml]` | Prints the effective configuration, secrets redacted. |
 | `tiny-eye schemas [--root .]` | Regenerates editor and agent grammars (`make schemas`). |
+| `tiny-eye --help`, `tiny-eye --version` | Prints this list, or the version. An unknown flag or command is an error that points here. |
 
 There are no separate ingest, coordinator and query roles; any `--role` other than `all` is
 refused at start with a message that only `--role all` exists. To run several nodes, point them at one bucket: they form a

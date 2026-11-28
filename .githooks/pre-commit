@@ -3,4 +3,4 @@
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo fmt --all -- --check || { echo "run: make fmt"; exit 1; }
-cargo clippy --workspace --all-targets --quiet -- -D warnings
+cargo clippy --workspace --all-targets --features tqs/mutants --quiet -- -D warnings  # same features as make lint: one build cache

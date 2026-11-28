@@ -15,8 +15,8 @@ You need:
 Then, once:
 
 ```bash
-make tools   # pinned Prometheus 3.16 + DuckDB extensions into .tools/
-make hooks   # optional: pre-commit hook running fmt + clippy
+make tools   # pinned DuckDB extensions + Prometheus 3.16 (for the tests) into .tools/
+make hooks   # optional: pre-commit hook running fmt + clippy (the same clippy as make lint)
 ```
 
 `make help` lists every target.
@@ -28,11 +28,23 @@ make fmt lint test   # format, clippy with -D warnings, unit + integration tests
 make run             # single node on 127.0.0.1:7070 with config/dev.yaml
 ```
 
+`make run` rebuilds only what changed: the web UI when a file in `ui/` or `api/openapi.yaml`
+changed (`npm ci` only when `ui/package-lock.json` changed), and the binary when Rust code
+changed. With nothing changed it starts in a few seconds. It fetches only the DuckDB extensions
+(`make ext`); the test targets also fetch Prometheus (`make tools`).
+
 Before opening a pull request, run everything CI runs:
 
 ```bash
-make check   # lint + test (incl. e2e vs Prometheus and the schema sync check) + conformance
+make check
 ```
+
+It runs the same steps as `.github/workflows/ci.yml`, in order: `ui` (build the web UI, needs
+Node.js), `lint` (rustfmt check, clippy with `-D warnings`), `examples-lint` (Biome and `tsc`
+on the TypeScript examples, needs Bun), `test` (unit and integration tests, including the
+end-to-end comparison with Prometheus and the check that generated files are up to date),
+`conformance` (TQS against Prometheus, point by point), and `docs` (builds the documentation
+site, needs Node.js, fails on broken links).
 
 ## Principles
 

@@ -490,7 +490,7 @@ impl Config {
         Ok(())
     }
 
-    /// The effective config as YAML with secrets redacted (printed at start, SPEC §13).
+    /// The effective config as YAML with secrets redacted (`tiny-eye config`; logged at debug on start).
     pub fn redacted_yaml(&self) -> String {
         let mut c = self.clone();
         for s in [&mut c.storage.s3.access_key_id, &mut c.storage.s3.secret_access_key] {

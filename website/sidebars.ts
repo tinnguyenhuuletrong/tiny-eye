@@ -36,7 +36,7 @@ const sidebars: SidebarsConfig = {
         doc("examples/run-a-fleet", "Run a fleet"),
       ],
     ),
-    group("Concepts", "concepts", "How tiny-eye works inside, for engineers: every mechanism, why it is built that way, and what proves it.", [
+    group("How it works", "how-it-works", "How tiny-eye works inside, for engineers: every mechanism, why it is built that way, and what proves it.", [
       doc("deep-dive/architecture"),
       doc("deep-dive/storage-format"),
       doc("deep-dive/write-path"),

@@ -82,13 +82,13 @@ Response `200`: `QueryResponse`.
 | `freshness_s` | number | Age in seconds of the oldest catalog copy of another node sharing storage that the query read (`0` when the node is alone; its own rows are visible once acknowledged) |
 | `partial_regions` | string[] | Always empty |
 | `series` | `Series[]` | `timeseries` / `table` kinds: `{output, key, labels, points}`, `points` are `[epoch_ms, value]` |
-| `rows` | object[] | List kinds: each row maps column to text |
+| `rows` | object[] | List kinds: each row maps column to text. Every value is a string, numbers too (`"duration_ms": "812.500"`); convert where you compute, for example `tonumber` in jq |
 | `rows_total` | integer | Points (series kinds) or rows (list kinds) |
 | `truncated` | boolean | List kinds: the row count reached `limit` |
 | `elapsed_ms` | number | Server-side time |
 | `materialized` | object, optional | Present when stored points of a [materialized panel](../deep-dive/materialized-panels.md) answered: `panel`, `resolution_ms`, `stored_points`, `computed_steps`. The series are then on the step-aligned grid. |
 
-Response `400`: `ProblemResponse`, `{"valid": false, "problems": [{"code", "path", "message"}]}` with every problem. Response `500`: plain text, for example a timeout.
+Response `400`: `ProblemResponse`, `{"valid": false, "problems": [{"code", "path", "message"}]}` with every problem. `path` points at the value in the document, for example `queries[0].fn.op` for an unknown function. A body that is not JSON at all gives one `schema` problem at `$` with the parse error's line and column. Response `500`: plain text, for example a timeout.
 
 ```bash
 curl -s http://127.0.0.1:7070/api/v1/query \
@@ -113,6 +113,9 @@ curl -s http://127.0.0.1:7070/api/v1/query -H 'Content-Type: application/json' \
   -d '{"tqs":"3","id":"errors","kind":"log_search","time":{"from":"-15m"},
        "search":{"logs":[{"field":"severity_number","op":">=","value":17}]},"limit":20}'
 ```
+
+Each row is an object of strings, whatever the column's type: `{"ts_ms": "1762743600000", "service_name": "api", "severity_text": "ERROR", "body": "...", "trace_id": "..."}`.
+Convert numbers yourself before comparing or adding them.
 
 ### `POST /api/v1/validate`
 

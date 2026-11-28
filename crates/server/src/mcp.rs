@@ -70,7 +70,9 @@ fn handle(agent: &ureq::Agent, base: &str, token: Option<&str>, msg: &Value) -> 
                     .send(args.to_string()),
                 (_, None) => agent.post(&url).header("Content-Type", "application/json").send(args.to_string()),
             };
-            let mut resp = resp?;
+            // Statuses come back as responses (http_status_as_error is off): an error here is the
+            // connection itself, most often a node that is not running.
+            let mut resp = resp.map_err(|e| anyhow::anyhow!("cannot reach tiny-eye at {base}: is it running (make run)? ({e})"))?;
             let status = resp.status().as_u16();
             let body = resp.body_mut().read_to_string()?;
             Ok(json!({
@@ -80,5 +82,19 @@ fn handle(agent: &ureq::Agent, base: &str, token: Option<&str>, msg: &Value) -> 
             }))
         }
         m => anyhow::bail!("method {m:?} not supported"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_node_that_is_down_is_named_with_what_to_do() {
+        let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+        let call = json!({"method": "tools/call", "params": {"name": MCP_TOOLS[0].name, "arguments": {}}});
+        // Port 1 on loopback: nothing listens, the connection is refused at once.
+        let err = format!("{:#}", handle(&agent, "http://127.0.0.1:1", None, &call).expect_err("no node"));
+        assert!(err.starts_with("cannot reach tiny-eye at http://127.0.0.1:1: is it running (make run)?"), "{err}");
     }
 }

@@ -74,7 +74,7 @@ The answer is the same as the raw query's. Details:
 
 ## Quick start
 
-Needs Rust stable, a C/C++ compiler, Node.js 20+ (web UI), Bun 1.x (the examples) and Docker (for the k6 load generator).
+Needs Rust through [rustup](https://rustup.rs) (the repository pins the version; `rustup install` installs it), a C/C++ compiler, Node.js 20+ (web UI), Bun 1.x (the examples) and Docker (only for `make demo-load` and the S3 benchmarks).
 
 ```bash
 git clone https://github.com/tinnguyenhuuletrong/tiny-eye && cd tiny-eye
@@ -142,7 +142,7 @@ The full docs are at **[tinnguyenhuuletrong.github.io/tiny-eye](https://tinnguye
 | --- | --- |
 | Get started | [Quickstart](docs/getting-started/quickstart.md) · [Installation](docs/getting-started/installation.mdx) · [Concepts](docs/getting-started/concepts.md) |
 | Guides | [Demo shop](docs/examples/demo-shop.md) · [Sending data](docs/examples/sending-data.md) · [Query cookbook](docs/examples/query-cookbook.md) · [Dashboards as code](docs/examples/dashboards-as-code.md) · [AI agents (MCP)](docs/examples/ai-agents-mcp.md) · [Run a fleet](docs/examples/run-a-fleet.md) |
-| Concepts | [Architecture](docs/deep-dive/architecture.md) · [Write path](docs/deep-dive/write-path.md) · [Storage format](docs/deep-dive/storage-format.md) · [Query engine](docs/deep-dive/query-engine.md) · [Materialized panels](docs/deep-dive/materialized-panels.md) · [TQS reference](docs/deep-dive/tqs-reference.md) · [Configuration](docs/deep-dive/configuration.md) · [Operations](docs/deep-dive/operations.md) · [Security](docs/deep-dive/security.md) |
+| How it works | [Architecture](docs/deep-dive/architecture.md) · [Write path](docs/deep-dive/write-path.md) · [Storage format](docs/deep-dive/storage-format.md) · [Query engine](docs/deep-dive/query-engine.md) · [Materialized panels](docs/deep-dive/materialized-panels.md) · [TQS reference](docs/deep-dive/tqs-reference.md) · [Configuration](docs/deep-dive/configuration.md) · [Operations](docs/deep-dive/operations.md) · [Security](docs/deep-dive/security.md) |
 | Reference | [HTTP API](docs/reference/http-api.md) · [MCP tools](docs/reference/mcp-tools.md) · [Editor grammars](docs/reference/editor-grammars.md) |
 
 ## Status
@@ -182,9 +182,9 @@ reports; each new report opens with a run block (date, commit, machine, link to 
 
 ```bash
 make tools     # once: pinned DuckDB extensions + Prometheus (for the tests) into .tools/
-make run       # build the UI and the binary, serve 127.0.0.1:7070 with config/dev.yaml
+make run       # build the UI and the binary (only what changed), serve 127.0.0.1:7070 with config/dev.yaml
 make fmt lint test
-make check     # everything CI runs: lint, UI build, tests, end-to-end, conformance
+make check     # everything CI runs: UI build, lint, examples lint, tests (incl. end-to-end), conformance, docs
 make bench-all # every benchmark (needs Docker for MinIO); reports into docs/deep-dive/evidence/
 make help      # every target
 ```

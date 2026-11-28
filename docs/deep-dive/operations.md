@@ -22,8 +22,9 @@ Command line:
 | `tiny-eye config [--config <file>]` | Print the effective configuration (secrets redacted) and exit. |
 | `tiny-eye mcp --url <node> [--token-env VAR]` | Run the stdio MCP bridge against a running node. |
 | `tiny-eye schemas [--root .]` | Write the generated grammars (developers). |
+| `tiny-eye --help` / `--version` | Print the usage or the version. An unknown flag or command is refused with a pointer to `--help`, so a typo never starts a node with the defaults. |
 
-Logs go to stderr; set the level with `RUST_LOG` (default `info`). At start the node logs the effective configuration, replays any WAL left from a previous run, and logs `serving` with the listen address.
+Logs go to stderr; set the level with `RUST_LOG` (default `info`). At start the node replays any WAL left from a previous run, logs `serving` with the listen address, and prints a short block that starts with `tiny-eye <version> is ready` and lists the addresses to use. The effective configuration is logged at `debug` (`RUST_LOG=debug`); `tiny-eye config` prints it without starting. On Ctrl-C or SIGTERM it logs `shutting down`, flushes and checkpoints, and ends with a `stopped:` line.
 
 ### Required files and directories
 
@@ -233,6 +234,8 @@ The catalog references data files by URL, so the catalog and the objects must ma
 | Start fails with `unknown key` or `invalid configuration` | Typo in the config file or a `TINY_EYE__` variable | Fix the key; check with `tiny-eye config` |
 | Start fails with `<file> does not validate` | A dashboard YAML is invalid | Fix the listed problems; validate with the dashboard schema in your editor |
 | Start fails with `binding 127.0.0.1:7070` | Port in use | Change `server.listen` |
+| Start fails with `binding 127.0.0.1:7070 (is another tiny-eye running?)` or `another process (...) already uses <file>` | A second node on the same machine uses the same port or the same files | Stop the first one, or start the second from its own working directory (or give it its own `node.id`, `server.listen`, `catalog.url`, `ingest.wal_dir` and `materialize.path`); to share data, run them as a [fleet](../examples/run-a-fleet.md) |
+| `tiny-eye mcp` tools answer `cannot reach tiny-eye at <url>` | The node is not running, or `--url` points elsewhere | Start the node (`make run`) or fix `--url` |
 | Ingest answers `429` | Arena full: flushes are slow or failing | Check logs for `flush failed`, object-store reachability, `tiny_eye_hot_bytes`; raise `arena_limit` only with RAM to match |
 | Samples missing, `rejected_rows_total{reason="out_of_bounds"}` rising | Clock skew or backfill older than `max_sample_age` | Fix clocks; raise `ingest.max_sample_age` for backfills |
 | `401 missing or unknown bearer token` | No token, or a token not in `auth.tokens` | Check `Authorization: Bearer` and the token's environment variable |
