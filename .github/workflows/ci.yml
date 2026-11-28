@@ -1,10 +1,13 @@
 name: ci
 # Pushes to main and pull requests. A branch push without a pull request runs nothing (one run
 # per change, not two); start it by hand with workflow_dispatch if needed.
+# Pull requests that only change benchmark reports (the bench workflow's own PRs) run nothing:
+# GitHub holds runs on a PR opened by github-actions[bot] for approval, which then expires red.
 on:
   push:
     branches: [main]
   pull_request:
+    paths-ignore: ["docs/deep-dive/evidence/**"]
   workflow_dispatch:
 
 # A new push to a pull request cancels its run still in progress; runs on main always finish.

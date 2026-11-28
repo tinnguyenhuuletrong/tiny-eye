@@ -94,7 +94,7 @@ A run on GitHub Actions replaces `local machine` with the runner image and a lin
 The workflow needs two things from the repository:
 
 - **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or opening the pull request fails.
-- `main` must accept that pull request without required reviews or status checks. A pull request opened by the workflow starts no CI, so a required check would never report and the merge step would fail.
+- `main` must accept that pull request without required reviews or status checks. `ci.yml` skips pull requests that only change `docs/deep-dive/evidence/` (GitHub would otherwise hold that run for approval, because the workflow's bot opened the pull request), so a required check would never report and the merge step would fail.
 
 ## What CI runs
 
